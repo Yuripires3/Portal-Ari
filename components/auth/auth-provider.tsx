@@ -7,12 +7,12 @@ import { useRouter, usePathname } from "next/navigation"
 
 interface User {
   id: string
-  cnpj: string
-  username: string
-  role: "admin" | "partner"
-  name: string
+  cpf: string
+  usuario_login: string
+  role: "admin" | "user"
+  nome: string
   email: string
-  partner_id?: string
+  area: string | null
 }
 
 interface AuthContextType {
@@ -59,33 +59,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const isAdminRoute = pathname?.startsWith("/admin")
     const isPartnerRoute = pathname?.startsWith("/partner")
     const isLoginRoute = pathname === "/login"
+    const isRegisterRoute = pathname === "/register"
     const isPublicRoute = pathname === "/"
 
     if (!user && (isAdminRoute || isPartnerRoute)) {
       // Not logged in, trying to access protected route
-      console.log("[v0] Not authenticated, redirecting to login")
+      console.log("[Auth] Not authenticated, redirecting to login")
       router.push("/login")
-    } else if (user && isLoginRoute) {
-      // Already logged in, redirect to appropriate dashboard
-      const redirectPath = user.role === "admin" ? "/admin" : "/partner"
-      console.log("[v0] Already authenticated, redirecting to:", redirectPath)
-      router.push(redirectPath)
-    } else if (user && isAdminRoute && user.role !== "admin") {
-      // Partner trying to access admin area
-      console.log("[v0] Partner trying to access admin area, redirecting")
-      router.push("/partner")
-    } else if (user && isPartnerRoute && user.role !== "partner") {
-      // Admin trying to access partner area
-      console.log("[v0] Admin trying to access partner area, redirecting")
+    } else if (user && (isLoginRoute || isRegisterRoute)) {
+      // Already logged in, redirect to admin dashboard
+      console.log("[Auth] Already authenticated, redirecting to admin")
       router.push("/admin")
     }
+    // Removed the role-based redirects to prevent loops
   }, [user, isLoading, pathname, router])
 
-  const logout = () => {
-    localStorage.removeItem("user")
-    localStorage.removeItem("token")
-    setUser(null)
-    router.push("/login")
+  const logout = async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" })
+    } catch (err) {
+      // ignore network errors on logout
+    } finally {
+      localStorage.removeItem("user")
+      localStorage.removeItem("token")
+      setUser(null)
+      router.push("/login")
+    }
   }
 
   return <AuthContext.Provider value={{ user, isLoading, logout }}>{children}</AuthContext.Provider>

@@ -1,130 +1,115 @@
-# Commission Platform Backend
+# Payment and Commission Platform
 
-Backend API para plataforma de gestão de comissões e bonificações B2B.
+Plataforma de gestão de bonificações e comissões B2B.
 
 ## Tecnologias
 
-- **FastAPI** - Framework web moderno e rápido
-- **SQLAlchemy** - ORM para banco de dados
-- **PostgreSQL** - Banco de dados relacional
-- **Celery** - Processamento assíncrono de tarefas
-- **Redis** - Cache e broker para Celery
-- **Alembic** - Migrações de banco de dados
+- **Next.js 16** - Framework React com App Router
+- **TypeScript** - Tipagem estática
+- **MySQL** - Banco de dados relacional
 - **JWT** - Autenticação via tokens
-- **Pydantic** - Validação de dados
+- **Tailwind CSS** - Estilização
+- **shadcn/ui** - Componentes de UI
 
 ## Estrutura do Projeto
 
-\`\`\`
+```
 .
 ├── app/
-│   ├── api/
-│   │   └── v1/
-│   │       ├── endpoints/      # Endpoints da API
-│   │       └── router.py       # Router principal
-│   ├── core/
-│   │   ├── config.py          # Configurações
-│   │   ├── database.py        # Conexão com banco
-│   │   ├── security.py        # Autenticação e segurança
-│   │   └── exceptions.py      # Exceções customizadas
-│   ├── models/                # Modelos SQLAlchemy
-│   ├── schemas/               # Schemas Pydantic
-│   ├── services/              # Lógica de negócio
-│   └── tasks/                 # Tarefas Celery
-├── alembic/                   # Migrações de banco
-├── main.py                    # Ponto de entrada
-├── requirements.txt           # Dependências
-└── .env.example              # Exemplo de variáveis de ambiente
-\`\`\`
+│   ├── api/                    # API Routes do Next.js
+│   │   ├── auth/               # Rotas de autenticação
+│   │   └── bonificacoes/       # Rotas de bonificações
+│   ├── admin/                  # Dashboard, bonificações e relatórios
+│   ├── login/                  # Página de login
+│   ├── register/               # Página de cadastro
+│   └── layout.tsx              # Layout principal
+├── components/
+│   ├── admin/                  # Componentes admin
+│   ├── auth/                   # Componentes de autenticação
+│   └── ui/                     # Componentes UI (shadcn)
+├── lib/                        # Utilitários e helpers
+├── utils/                      # Funções utilitárias
+└── public/                     # Arquivos estáticos
+```
 
 ## Instalação
 
 1. Clone o repositório
-2. Crie um ambiente virtual:
-\`\`\`bash
-python -m venv venv
-source venv/bin/activate  # Linux/Mac
-venv\Scripts\activate     # Windows
-\`\`\`
 
-3. Instale as dependências:
-\`\`\`bash
-pip install -r requirements.txt
-\`\`\`
+2. Instale as dependências:
+```bash
+npm install
+```
 
-4. Configure as variáveis de ambiente:
-\`\`\`bash
-cp .env.example .env
-# Edite o arquivo .env com suas configurações
-\`\`\`
+3. Configure as variáveis de ambiente:
+Crie um arquivo `.env.local` com:
+```env
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=seu_usuario
+DB_PASSWORD=sua_senha
+DB_NAME=nome_do_banco
+JWT_SECRET=seu-secret-key-aqui
+```
 
-5. Execute as migrações:
-\`\`\`bash
-alembic upgrade head
-\`\`\`
+4. Inicie o servidor de desenvolvimento:
+```bash
+npm run dev
+```
 
-6. Inicie o servidor:
-\`\`\`bash
-python main.py
-\`\`\`
+A aplicação estará disponível em: http://localhost:3000
 
-## Executando com Docker
+## Estrutura de Rotas
 
-\`\`\`bash
-docker-compose up -d
-\`\`\`
+### Frontend
+- `/` - Redireciona para login
+- `/login` - Página de login
+- (Cadastro público removido) cadastro é feito pelo admin
+- `/admin` - Dashboard administrativo
+- `/admin/bonificacoes/cadastro-de-regras` - Cadastro de regras de bonificação
+- `/admin/bonificacoes/visualizar-regras` - Visualização e filtros de regras
+- `/admin/relatorios` - Relatórios
 
-## Documentação da API
-
-Acesse a documentação interativa em:
-- Swagger UI: http://localhost:8000/api/docs
-- ReDoc: http://localhost:8000/api/redoc
+- ### API Routes
+- `POST /api/admin/users` - Criar usuário (somente admin)
+- `POST /api/auth/login` - Login (email ou usuário)
+- `GET /api/auth/logout` - Logout
+- `GET /api/auth/me` - Dados do usuário atual
+- `GET /api/bonificacoes/regras` - Listar regras de bonificação
+- `POST /api/bonificacoes/regras` - Criar regra de bonificação
+- `PUT /api/bonificacoes/regras/[id]` - Atualizar regra
+- `DELETE /api/bonificacoes/regras/[id]` - Deletar regra
 
 ## Principais Funcionalidades
 
 ### Autenticação
-- Login com CNPJ + usuário + senha
-- Suporte a MFA (SMS/WhatsApp/Email/App)
-- JWT tokens (access + refresh)
-- Perfis: Admin, Partner, Financial, Audit
+- Login por email ou usuário + senha
+- JWT tokens para sessão
+- Perfil: Admin (usuário comum acessa as mesmas páginas padrões)
 
-### Gestão de Comissões
-- Cadastro de produtos e regras de comissão
-- Cálculo automático (fixo, percentual, híbrido)
-- Simulador de comissões
-- Ajustes manuais com auditoria
+### Gestão de Bonificações
+- Cadastro de regras de bonificação
+- Visualização e busca de regras
+- Filtros por operadora, produto, faixa, etc.
+- Paginação e ordenação
 
-### Upload e Processamento
-- Upload de faturas (CSV, XLSX, PDF)
-- Processamento assíncrono com Celery
-- Validação e conciliação automática
-- OCR para PDFs
+### Dashboard
+- Métricas e gráficos
+- Visualização de comissões
+- Relatórios
 
-### Pagamentos
-- Integração PIX
-- Geração de remessa bancária
-- Comprovantes automáticos
-- Agenda de pagamentos
+## Scripts Disponíveis
 
-### Relatórios
-- Dashboard com métricas
-- Exportação (CSV, XLSX, PDF)
-- Analytics e BI
+- `npm run dev` - Inicia servidor de desenvolvimento
+- `npm run build` - Build para produção
+- `npm start` - Inicia servidor de produção
+- `npm run lint` - Executa linter
 
-### Auditoria
-- Log completo de ações
-- Trilha de alterações
-- Conformidade LGPD
+## Variáveis de Ambiente
 
-## Próximos Passos
-
-- [ ] Implementar processamento de arquivos (CSV/XLSX/PDF)
-- [ ] Integrar OCR para PDFs
-- [ ] Implementar integração PIX
-- [ ] Adicionar notificações (Email/WhatsApp)
-- [ ] Implementar upload para S3
-- [ ] Adicionar testes unitários e de integração
-- [ ] Implementar cache com Redis
-- [ ] Adicionar rate limiting
-- [ ] Implementar webhooks
-- [ ] Criar dashboard administrativo
+- `DB_HOST` - Host do banco MySQL
+- `DB_PORT` - Porta do banco (padrão: 3306)
+- `DB_USER` - Usuário do banco
+- `DB_PASSWORD` - Senha do banco
+- `DB_NAME` - Nome do banco de dados
+- `JWT_SECRET` - Secret key para JWT tokens

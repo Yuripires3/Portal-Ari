@@ -2,12 +2,12 @@ import { jwtVerify } from "jose"
 
 export interface User {
   id: string
-  cnpj: string
-  username: string
-  role: "admin" | "partner"
-  name: string
+  cpf: string
+  usuario_login: string
+  role: "admin" | "user"
+  nome: string
   email: string
-  partner_id?: string
+  area: string | null
 }
 
 export async function verifyToken(token: string): Promise<User | null> {
@@ -18,14 +18,15 @@ export async function verifyToken(token: string): Promise<User | null> {
 
     return {
       id: payload.userId as string,
-      role: payload.role as "admin" | "partner",
-      cnpj: payload.cnpj as string,
-      username: "",
-      name: "",
-      email: "",
+      role: (payload.role as "admin" | "user") || "user",
+      cpf: payload.cpf as string,
+      usuario_login: payload.usuario_login as string,
+      nome: payload.nome as string,
+      email: payload.email as string,
+      area: (payload.area as string | null) || null,
     }
   } catch (error) {
-    console.error("[v0] Token verification failed:", error)
+    console.error("[Auth] Token verification failed:", error)
     return null
   }
 }

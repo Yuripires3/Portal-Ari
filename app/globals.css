@@ -1,3 +1,80 @@
+:root {
+  /* Branding QV - Light */
+  --color-primary: #0f2c50; /* Azul escuro */
+  --color-primary-hover: #384c6d; /* Azul claro (hover) */
+  --color-accent: #f58220; /* Laranja */
+  --color-success: #00a2a5; /* Verde */
+  --color-purple: #482c59; /* Roxo auxiliar */
+  --color-neutral-700: #58595b; /* Cinza escuro */
+  --color-neutral-300: #bcbec0; /* Cinza claro */
+
+  /* shadcn/ui semantic tokens (no HSL wrapper to keep hex precision) */
+  --background: #ffffff; /* Light por padrão */
+  --foreground: #0b0d12;
+  --card: #ffffff;
+  --card-foreground: #0b0d12;
+  --popover: #ffffff;
+  --popover-foreground: #0b0d12;
+  --primary: var(--color-primary);
+  --primary-foreground: #ffffff;
+  --secondary: #f3f5f8;
+  --secondary-foreground: #0b0d12;
+  --muted: #f3f5f8;
+  --muted-foreground: var(--color-neutral-700);
+  --accent: var(--color-accent);
+  --accent-foreground: #1b1002;
+  --destructive: #c0362c;
+  --destructive-foreground: #fff8f8;
+  --success: var(--color-success);
+  --success-foreground: #011415;
+  --border: #e0e3e8;
+  --input: #e0e3e8;
+  --ring: var(--color-primary-hover);
+}
+
+.dark {
+  /* Branding QV - Dark */
+  --color-primary: #0f2c50;
+  --color-primary-hover: #184286;
+  --color-accent: #f58220;
+  --color-success: #00a2a5;
+  --color-purple: #482c59;
+  --color-neutral-700: #58595b;
+  --color-neutral-300: #bcbec0;
+
+  --background: #0b0d12;
+  --foreground: #e8eaf0;
+  --card: #0f1218;
+  --card-foreground: #e8eaf0;
+  --popover: #0f1218;
+  --popover-foreground: #e8eaf0;
+  --primary: var(--color-primary);
+  --primary-foreground: #ffffff;
+  --secondary: #121723;
+  --secondary-foreground: #e8eaf0;
+  --muted: #121723;
+  --muted-foreground: #aab0b8;
+  --accent: var(--color-accent);
+  --accent-foreground: #1b1002;
+  --destructive: #c0362c;
+  --destructive-foreground: #fff8f8;
+  --success: var(--color-success);
+  --success-foreground: #011415;
+  --border: #1f2735;
+  --input: #1f2735;
+  --ring: var(--color-primary-hover);
+}
+
+/* Utility mapping to Tailwind tokens when using 'bg-[var(--primary)]' not desired */
+.brand-gradient-primary {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-hover) 100%);
+}
+
+/* Improve focus visibility */
+:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -30,14 +107,15 @@
   --chart-4: oklch(0.65 0.2 45);
   --chart-5: oklch(0.5 0.18 200);
   --radius: 0.5rem;
-  --sidebar: oklch(0.98 0.002 264);
-  --sidebar-foreground: oklch(0.15 0.01 264);
-  --sidebar-primary: oklch(0.45 0.15 264);
-  --sidebar-primary-foreground: oklch(0.98 0.002 264);
-  --sidebar-accent: oklch(0.92 0.01 264);
-  --sidebar-accent-foreground: oklch(0.15 0.01 264);
-  --sidebar-border: oklch(0.9 0.005 264);
-  --sidebar-ring: oklch(0.45 0.15 264);
+  /* Sidebar (branding) */
+  --sidebar: #193353; /* Azul escuro */
+  --sidebar-foreground: #ffffff;
+  --sidebar-primary: #385789; /* hover/ativo */
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #184286; /* hover */
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #aeb4bd33; /* 20% */
+  --sidebar-ring: #184286;
   --success: oklch(0.55 0.18 162);
   --success-foreground: oklch(0.98 0.002 264);
   --warning: oklch(0.65 0.2 45);
@@ -70,14 +148,14 @@
   --chart-3: oklch(0.6 0.15 300);
   --chart-4: oklch(0.65 0.2 45);
   --chart-5: oklch(0.5 0.18 200);
-  --sidebar: oklch(0.1 0.01 264);
-  --sidebar-foreground: oklch(0.95 0.005 264);
-  --sidebar-primary: oklch(0.55 0.18 264);
-  --sidebar-primary-foreground: oklch(0.98 0.002 264);
-  --sidebar-accent: oklch(0.18 0.01 264);
-  --sidebar-accent-foreground: oklch(0.95 0.005 264);
-  --sidebar-border: oklch(0.22 0.01 264);
-  --sidebar-ring: oklch(0.55 0.18 264);
+  --sidebar: #011939;
+  --sidebar-foreground: #e8eaf0;
+  --sidebar-primary: #184286;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #184286;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #18428666;
+  --sidebar-ring: #184286;
   --success: oklch(0.55 0.18 162);
   --success-foreground: oklch(0.98 0.002 264);
   --warning: oklch(0.65 0.2 45);
@@ -135,5 +213,39 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Tabela: cabeçalho com Azul Claro; linhas hover suave */
+  [data-slot="table-header"] tr {
+    background: var(--color-primary);
+    color: #ffffff;
+  }
+  /* Garantir branco no cabeçalho mesmo com classes utilitárias */
+  [data-slot="table-header"] [data-slot="table-head"],
+  thead[data-slot="table-header"] th[data-slot="table-head"] {
+    color: #ffffff !important;
+  }
+  /* Não alterar cor ao passar o mouse no cabeçalho */
+  [data-slot="table-header"] tr:hover,
+  thead[data-slot="table-header"] tr:hover {
+    background: var(--color-primary) !important;
+  }
+  [data-slot="table-header"] [data-slot="table-head"]:hover,
+  thead[data-slot="table-header"] th[data-slot="table-head"]:hover {
+    color: #ffffff !important;
+  }
+  [data-slot="table-row"]:hover {
+    background: #1529480d; /* 5% azul claro */
+  }
+  /* Sidebar branding */
+  [data-slot="sidebar-inner"],
+  [data-slot="sidebar"]:not([data-mobile="true"]) [data-slot="sidebar-inner"] {
+    background: var(--color-sidebar);
+    color: var(--color-sidebar-foreground);
+  }
+  [data-slot="sidebar-group-label"],
+  [data-slot="sidebar-menu-button"],
+  [data-slot="sidebar-menu-sub-button"] {
+    --sidebar-accent: var(--color-sidebar-primary);
+    --sidebar-accent-foreground: #ffffff;
   }
 }

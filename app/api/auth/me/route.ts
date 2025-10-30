@@ -3,7 +3,7 @@ import { jwtVerify } from "jose"
 
 export async function GET(request: NextRequest) {
   try {
-    const token = request.cookies.get("token")?.value
+    const token = request.cookies.get("token")?.value || request.headers.get("authorization")?.replace("Bearer ", "")
 
     if (!token) {
       return NextResponse.json({ error: "Não autenticado" }, { status: 401 })
@@ -17,15 +17,15 @@ export async function GET(request: NextRequest) {
       user: {
         id: payload.userId,
         role: payload.role,
-        cnpj: payload.cnpj,
-        username: payload.username,
-        name: payload.name,
+        cpf: payload.cpf,
+        usuario_login: payload.usuario_login,
+        nome: payload.nome,
         email: payload.email,
-        partner_id: payload.partner_id,
+        area: payload.area,
       },
     })
   } catch (error) {
-    console.error("[v0] Auth verification error:", error)
+    console.error("[Auth] Token verification error:", error)
     return NextResponse.json({ error: "Token inválido" }, { status: 401 })
   }
 }

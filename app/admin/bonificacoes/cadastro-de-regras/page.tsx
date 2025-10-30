@@ -1,14 +1,16 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useToast } from "@/hooks/use-toast"
+import { RegrasTable } from "../visualizar-regras/_components/RegrasTable"
+import { Plus, X } from "lucide-react"
 
-const OPERADORAS = [
+export const OPERADORAS = [
   "UNIMED RIO",
   "UNIMED NOVA IGUAÇÚ",
   "UNIMED LESTE FLUMINENSE",
@@ -53,6 +55,47 @@ const PARCELAS = ["1ª Parcela","2ª Parcela","Única"]
 export default function BonificacoesPage() {
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
+  const [showForm, setShowForm] = useState(false)
+  const [operadoraQuery, setOperadoraQuery] = useState("")
+  const [operadoraFocused, setOperadoraFocused] = useState(false)
+  const normalize = (s: string) => s
+    .normalize("NFD")
+    .replace(/\p{Diacritic}+/gu, "")
+    .toLowerCase()
+
+  const sortAlpha = (list: string[]) =>
+    [...list].sort((a, b) => normalize(String(a)).localeCompare(normalize(String(b))))
+  const distinctClean = (values: any[]) => {
+    const cleaned = values
+      .filter((v) => v !== null && v !== undefined)
+      .map((v) => String(v).trim())
+      .filter((v) => v.length > 0)
+    const set = new Set<string>()
+    cleaned.forEach((v) => set.add(v))
+    return Array.from(set)
+  }
+  const sortAlphaDesc = (list: string[]) =>
+    sortAlpha(list).reverse()
+
+  const [options, setOptions] = useState({
+    tiposFaixa: sortAlpha(TIPOS_FAIXA as string[]),
+    produtos: sortAlpha(PRODUTOS as string[]),
+    pagamentoPor: sortAlpha(PAGAMENTO_POR as string[]),
+    tipoBeneficiario: sortAlphaDesc(TIPO_BENEFICIARIO as string[]),
+    parcelas: sortAlpha(PARCELAS as string[]),
+    planos: [] as string[],
+  })
+  const [planoQuery, setPlanoQuery] = useState("")
+  const [planoFocused, setPlanoFocused] = useState(false)
+  const [produtoQuery, setProdutoQuery] = useState("")
+  const [produtoFocused, setProdutoFocused] = useState(false)
+
+  // Lote (upload/import)
+  const [batchRows, setBatchRows] = useState<any[]>([])
+  const [batchColumns, setBatchColumns] = useState<string[]>([])
+  const [batchLoading, setBatchLoading] = useState(false)
+  const [batchMessage, setBatchMessage] = useState<string>("")
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [formData, setFormData] = useState({
     vigencia: "",
     operadora: "",
@@ -71,13 +114,404 @@ export default function BonificacoesPage() {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
+  // Carrega listas globais (produtos e parcelas) ao montar a página
+  useEffect(() => {
+    // chamar sem filtros para preencher selects globais
+    refreshDependentOptions()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Helpers para importação em lote
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result || ""))
+      reader.onerror = reject
+      reader.readAsText(file)
+    })
+  }
+
+  // Tenta obter a lib XLSX localmente; se falhar, carrega via CDN no navegador
+  const getXLSX = async (): Promise<any> => {
+    try {
+      // @ts-ignore
+      const mod = (await import("xlsx")).default || (await import("xlsx"))
+      return mod
+    } catch {
+      // Fallback: carregar via CDN (browser only)
+      return await new Promise((resolve, reject) => {
+        if (typeof window === 'undefined') return reject(new Error('No window'))
+        // @ts-ignore
+        if (window.XLSX) {
+          // @ts-ignore
+          return resolve(window.XLSX)
+        }
+        const script = document.createElement('script')
+        script.src = 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js'
+        script.async = true
+        script.onload = () => {
+          try {
+            // @ts-ignore
+            const XLSX = window.XLSX
+            if (XLSX) resolve(XLSX)
+            else reject(new Error('XLSX not available'))
+          } catch (e) { reject(e as any) }
+        }
+        script.onerror = () => reject(new Error('Failed to load XLSX from CDN'))
+        document.body.appendChild(script)
+      })
+    }
+  }
+
+  const normalizeHeader = (key: string) => {
+    const k = key.trim().toLowerCase().replace(/\s+/g, "_")
+    const map: Record<string, string> = {
+      vigencia: "vigencia",
+      data_vigencia: "vigencia",
+      operadora: "operadora",
+      entidade: "entidade",
+      plano: "plano",
+      bonificacao_corretor: "bonificacaoCorretor",
+      bonificacao_corretor_rs: "bonificacaoCorretor",
+      bonificacao_supervisor: "bonificacaoSupervisor",
+      bonificacao_supervisor_rs: "bonificacaoSupervisor",
+      parcela: "parcela",
+      tipo_faixa: "tipoFaixa",
+      faixa: "tipoFaixa",
+      pagamento_por: "pagamentoPor",
+      pagamento: "pagamentoPor",
+      tipo_beneficiario: "tipoBeneficiario",
+      beneficiario: "tipoBeneficiario",
+      produto: "produto",
+    }
+    return map[k] || key
+  }
+
+  const parseCSV = (text: string): { columns: string[]; rows: any[] } => {
+    const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0)
+    if (lines.length === 0) return { columns: [], rows: [] }
+    const headers = lines[0].split(",").map((h) => h.trim())
+    const columns = headers.map((h) => normalizeHeader(h))
+    const rows = lines.slice(1).map((line) => {
+      const parts = line.split(",")
+      const obj: any = {}
+      parts.forEach((v, i) => {
+        obj[columns[i] || headers[i] || `col_${i}`] = v.trim()
+      })
+      return obj
+    })
+    return { columns, rows }
+  }
+
+  // Normalização e confronto com o "banco" (listas conhecidas)
+  const normalizeText = (s: string) =>
+    (s || "")
+      .normalize("NFD")
+      .replace(/\p{Diacritic}+/gu, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+
+  const levenshtein = (a: string, b: string) => {
+    const m = a.length, n = b.length
+    const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+    for (let i = 0; i <= m; i++) dp[i][0] = i
+    for (let j = 0; j <= n; j++) dp[0][j] = j
+    for (let i = 1; i <= m; i++) {
+      for (let j = 1; j <= n; j++) {
+        const cost = a[i - 1] === b[j - 1] ? 0 : 1
+        dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost)
+      }
+    }
+    return dp[m][n]
+  }
+
+  const findSimilar = (value: string, candidates: string[]): string => {
+    const v = normalizeText(value)
+    if (!v) return value
+    const normalizedMap = candidates.map((c) => ({ raw: c, norm: normalizeText(c) }))
+    // 1) Igualdade exata normalizada
+    const exact = normalizedMap.find((c) => c.norm === v)
+    if (exact) return exact.raw
+    // 2) Começa com
+    const starts = normalizedMap.find((c) => c.norm.startsWith(v))
+    if (starts) return starts.raw
+    // 3) Contém
+    const contains = normalizedMap.find((c) => c.norm.includes(v))
+    if (contains) return contains.raw
+    // 4) Menor distância de edição
+    let best = normalizedMap[0]?.raw || value
+    let bestDist = Infinity
+    for (const c of normalizedMap) {
+      const d = levenshtein(v, c.norm)
+      if (d < bestDist) {
+        bestDist = d
+        best = c.raw
+      }
+    }
+    return best
+  }
+
+  const harmonizeRowWithOptions = (row: any): any => {
+    const next: any = { ...row }
+    // Datas (vigencia): normalizar para YYYY-MM-DD
+    const normalizeDate = (val: any): string => {
+      if (val === null || val === undefined) return ""
+      // Excel serial number
+      if (typeof val === 'number' && !Number.isNaN(val)) {
+        // Excel counts from 1899-12-30 (taking into account 1900 leap bug simplificado)
+        const epoch = new Date(Date.UTC(1899, 11, 30))
+        const ms = epoch.getTime() + Math.round(val) * 24 * 60 * 60 * 1000
+        const d = new Date(ms)
+        if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+      }
+      let s = String(val).trim()
+      // Remover sinais/formatos estranhos ex.: "+045658-01"
+      if (/^[+\-]/.test(s)) s = s.replace(/^([+\-])/, "")
+      if (!s) return ""
+      // YYYY-MM-DD
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+      // DD/MM/YYYY or DD-MM-YYYY
+      const m1 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)
+      if (m1) {
+        const dd = String(m1[1]).padStart(2, '0')
+        const mm = String(m1[2]).padStart(2, '0')
+        const yyyy = m1[3]
+        return `${yyyy}-${mm}-${dd}`
+      }
+      // MM/DD/YYYY (se vier)
+      const m2 = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)
+      if (m2) {
+        const mm = String(m2[1]).padStart(2, '0')
+        const dd = String(m2[2]).padStart(2, '0')
+        const yyyy = m2[3]
+        return `${yyyy}-${mm}-${dd}`
+      }
+      // Somente dígitos (pode ser DDMMAAAA, AAAAMMDD, ou um serial do Excel misturado)
+      const onlyDigits = s.replace(/\D+/g, "")
+      // Se parecer com um serial do Excel (5 ou 6 dígitos) dentro do texto
+      if (onlyDigits.length >= 5 && onlyDigits.length <= 6) {
+        const serial = parseInt(onlyDigits.slice(0, 6), 10)
+        if (!Number.isNaN(serial)) {
+          const epoch = new Date(Date.UTC(1899, 11, 30))
+          const ms = epoch.getTime() + Math.round(serial) * 24 * 60 * 60 * 1000
+          const d = new Date(ms)
+          if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+        }
+      }
+      // 8 dígitos: tentar AAAAMMDD ou DDMMAAAA
+      if (onlyDigits.length === 8) {
+        const yyyy = onlyDigits.slice(0, 4)
+        const mm = onlyDigits.slice(4, 6)
+        const dd = onlyDigits.slice(6, 8)
+        if (parseInt(yyyy, 10) >= 1900) {
+          return `${yyyy}-${mm}-${dd}`
+        } else {
+          const d2 = onlyDigits.slice(0, 2)
+          const m2 = onlyDigits.slice(2, 4)
+          const y2 = onlyDigits.slice(4, 8)
+          return `${y2}-${m2}-${d2}`
+        }
+      }
+      // Fallback: tentar Date.parse
+      const d = new Date(s)
+      if (!Number.isNaN(d.getTime())) return d.toISOString().slice(0, 10)
+      return s
+    }
+    // Operadora via constante local
+    if (next.operadora) next.operadora = findSimilar(next.operadora, OPERADORAS)
+    // Produto, Parcela, Tipo Faixa, Pagamento por, Tipo Beneficiário via options atuais
+    if (next.produto && options.produtos?.length) next.produto = findSimilar(next.produto, options.produtos)
+    if (next.parcela && options.parcelas?.length) next.parcela = findSimilar(next.parcela, options.parcelas)
+    if (next.tipoFaixa && options.tiposFaixa?.length) next.tipoFaixa = findSimilar(next.tipoFaixa, options.tiposFaixa)
+    if (next.pagamentoPor && options.pagamentoPor?.length) next.pagamentoPor = findSimilar(next.pagamentoPor, options.pagamentoPor)
+    if (next.tipoBeneficiario && options.tipoBeneficiario?.length) next.tipoBeneficiario = findSimilar(next.tipoBeneficiario, options.tipoBeneficiario)
+    // Plano: quando já houver operadora escolhida no formulário, mantemos livre;
+    // em lote, tentamos harmonizar minimamente se tivermos uma lista
+    if (next.plano && options.planos?.length) next.plano = findSimilar(next.plano, options.planos)
+    // Monetários: trocar ponto por vírgula na pré-visualização para padronizar
+    if (next.bonificacaoCorretor) next.bonificacaoCorretor = String(next.bonificacaoCorretor).replace(".", ",")
+    if (next.bonificacaoSupervisor) next.bonificacaoSupervisor = String(next.bonificacaoSupervisor).replace(".", ",")
+    // Data
+    if (next.vigencia) next.vigencia = normalizeDate(next.vigencia)
+    return next
+  }
+
+  const handleFileUpload = async (file: File) => {
+    try {
+      setBatchLoading(true)
+      setBatchMessage("")
+      let parsed: { columns: string[]; rows: any[] } = { columns: [], rows: [] }
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        const text = await readFileAsText(file)
+        parsed = parseCSV(text)
+      } else if (file.name.toLowerCase().endsWith(".xlsx")) {
+        try {
+          const XLSX: any = await getXLSX()
+          const data = await file.arrayBuffer()
+          const wb = XLSX.read(data, { type: "array" })
+          const ws = wb.Sheets[wb.SheetNames[0]]
+          const json = XLSX.utils.sheet_to_json(ws, { defval: "" }) as any[]
+          const columns = json.length > 0 ? Object.keys(json[0]).map((h) => normalizeHeader(h)) : []
+          const rows = json.map((row) => {
+            const obj: any = {}
+            Object.entries(row).forEach(([k, v]) => {
+              obj[normalizeHeader(String(k))] = String(v ?? "").trim()
+            })
+            return obj
+          })
+          parsed = { columns, rows }
+        } catch (err) {
+          setBatchMessage("Para arquivos XLSX, é necessário o pacote 'xlsx'. Use CSV ou instale a dependência.")
+          setBatchLoading(false)
+          return
+        }
+      } else {
+        setBatchMessage("Formato não suportado. Envie CSV ou XLSX.")
+        setBatchLoading(false)
+        return
+      }
+
+      // Garantir colunas padrão na visualização
+      const defaultOrder = [
+        "vigencia",
+        "operadora",
+        "entidade",
+        "plano",
+        "bonificacaoCorretor",
+        "bonificacaoSupervisor",
+        "parcela",
+        "tipoFaixa",
+        "pagamentoPor",
+        "tipoBeneficiario",
+        "produto",
+      ]
+      const columnsSet = new Set<string>([...parsed.columns, ...defaultOrder])
+      const columns = defaultOrder.filter((c) => columnsSet.has(c))
+      setBatchColumns(columns)
+
+      // Validação básica de obrigatórios
+      const missing: string[] = []
+      ;["vigencia", "operadora", "entidade", "plano"].forEach((key) => {
+        if (!columns.includes(key)) missing.push(key)
+      })
+      if (missing.length > 0) {
+        setBatchMessage(`Colunas obrigatórias ausentes: ${missing.join(", ")}.`)
+      }
+      // Normalizar monetários e datas minimamente
+      const normRows = parsed.rows.map((r) => harmonizeRowWithOptions({
+        ...r,
+        bonificacaoCorretor: r.bonificacaoCorretor ?? "",
+        bonificacaoSupervisor: r.bonificacaoSupervisor ?? "",
+      }))
+      setBatchRows(normRows)
+    } finally {
+      setBatchLoading(false)
+    }
+  }
+
+  const updateBatchCell = (rowIdx: number, key: string, value: string) => {
+    setBatchRows((prev) => {
+      const next = [...prev]
+      next[rowIdx] = { ...next[rowIdx], [key]: value }
+      return next
+    })
+  }
+
+  const registerBatch = async () => {
+    if (batchRows.length === 0) return
+    setBatchLoading(true)
+    setBatchMessage("")
+    let ok = 0
+    let fail = 0
+    for (const row of batchRows) {
+      try {
+        const payload = {
+          vigencia: row.vigencia || "",
+          operadora: row.operadora || "",
+          entidade: row.entidade || "",
+          plano: row.plano || "",
+          bonificacaoCorretor: row.bonificacaoCorretor ? String(row.bonificacaoCorretor).replace(".", ",") : "",
+          bonificacaoSupervisor: row.bonificacaoSupervisor ? String(row.bonificacaoSupervisor).replace(".", ",") : "",
+          parcela: row.parcela || "",
+          tipoFaixa: row.tipoFaixa || "",
+          pagamentoPor: row.pagamentoPor || "",
+          tipoBeneficiario: row.tipoBeneficiario || "",
+          produto: row.produto || "",
+        }
+        const res = await fetch('/api/bonificacoes/regras', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        if (!res.ok) throw new Error("HTTP " + res.status)
+        ok++
+      } catch (e) {
+        fail++
+      }
+    }
+    const summaryMsg = `Registro em lote concluído: ${ok} sucesso(s), ${fail} falha(s).`
+    setBatchMessage(summaryMsg)
+    try { toast({ title: "Concluído", description: summaryMsg }) } catch {}
+    // Limpar preview e manter apenas o aviso
+    setBatchRows([])
+    setBatchColumns([])
+    try { fileInputRef.current && (fileInputRef.current.value = "") } catch {}
+    setBatchLoading(false)
+    // Atualizar a página de gerenciamento (forçar reload para atualizar a listagem)
+    try {
+      setTimeout(() => {
+        if (typeof window !== 'undefined') {
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+          window.location.reload()
+        }
+      }, 1200)
+    } catch {}
+  }
+
+  const downloadTemplate = async () => {
+    const headers = [
+      "vigencia",
+      "operadora",
+      "entidade",
+      "plano",
+      "bonificacaoCorretor",
+      "bonificacaoSupervisor",
+      "parcela",
+      "tipoFaixa",
+      "pagamentoPor",
+      "tipoBeneficiario",
+      "produto",
+    ]
+    try {
+      const XLSX: any = await getXLSX()
+      const ws = XLSX.utils.aoa_to_sheet([headers])
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, "Modelo")
+      const wbout = XLSX.write(wb, { bookType: "xlsx", type: "array" })
+      const blob = new Blob([wbout], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement("a")
+      a.href = url
+      a.download = "modelo_regras.xlsx"
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setBatchMessage("Não foi possível gerar o XLSX (falha ao carregar a biblioteca). Tente novamente.")
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setLoading(true)
 
     try {
       // Validação
-      if (!formData.vigencia || !formData.operadora || !formData.entidade || !formData.plano) {
+      const planoValue = (formData.plano || planoQuery).trim()
+      if (!formData.vigencia || !formData.operadora || !formData.entidade || !planoValue) {
         toast({
           title: "Erro de validação",
           description: "Preencha todos os campos obrigatórios",
@@ -92,7 +526,7 @@ export default function BonificacoesPage() {
         vigencia: formData.vigencia,
         operadora: formData.operadora,
         entidade: formData.entidade,
-        plano: formData.plano,
+        plano: (formData.plano || planoQuery).trim(),
         // Converter valores monetários: ponto para vírgula
         bonificacaoCorretor: formData.bonificacaoCorretor ? formData.bonificacaoCorretor.replace('.', ',') : "",
         bonificacaoSupervisor: formData.bonificacaoSupervisor ? formData.bonificacaoSupervisor.replace('.', ',') : "",
@@ -147,6 +581,8 @@ export default function BonificacoesPage() {
         tipoBeneficiario: "",
         produto: ""
       })
+      setPlanoQuery("")
+      setProdutoQuery("")
 
     } catch (error) {
       console.error("Erro ao registrar:", error)
@@ -160,81 +596,284 @@ export default function BonificacoesPage() {
     }
   }
 
+  // Sugestões de operadora baseadas no que está sendo digitado
+  // normalize already defined above
+
+  const operadoraSuggestions = operadoraQuery.trim()
+    ? OPERADORAS.filter(op => {
+        const q = normalize(operadoraQuery)
+        const n = normalize(op)
+        return n.startsWith(q) || n.split(/\s+/).some(w => w.startsWith(q))
+      })
+    : []
+
+  // Atualiza opções dependentes consultando a API, agregando todas as páginas
+  const refreshDependentOptions = async (partial?: Partial<typeof formData>) => {
+    const current = { ...formData, ...(partial || {}) }
+
+    const buildParams = () => {
+      const p = new URLSearchParams()
+      if (current.operadora) p.append("operadora", current.operadora)
+      if (current.tipoFaixa) p.append("tipo_faixa", current.tipoFaixa)
+      if (current.produto) p.append("produto", current.produto)
+      if (current.pagamentoPor) p.append("pagamento_por", current.pagamentoPor)
+      if (current.tipoBeneficiario) p.append("tipo_beneficiario", current.tipoBeneficiario)
+      if (current.parcela) p.append("parcela", current.parcela)
+      return p
+    }
+
+    const fetchAll = async (params: URLSearchParams) => {
+      params.set("page", "1")
+      params.set("pageSize", "500")
+      params.set("sort", "registro")
+      params.set("order", "desc")
+      const first = await fetch(`/api/bonificacoes/regras?${params.toString()}`)
+      if (!first.ok) throw new Error(`HTTP ${first.status}`)
+      const firstJson = await first.json()
+      let rows: any[] = firstJson?.data || []
+      const totalPages = firstJson?.pagination?.totalPages || 1
+      if (totalPages > 1) {
+        const rest = await Promise.all(
+          Array.from({ length: totalPages - 1 }, (_, i) => i + 2).map(async (pg) => {
+            const p2 = new URLSearchParams(params)
+            p2.set("page", String(pg))
+            try {
+              const r = await fetch(`/api/bonificacoes/regras?${p2.toString()}`)
+              return await r.json()
+            } catch {
+              return { data: [] }
+            }
+          })
+        )
+        rest.forEach((r: any) => { if (r?.data?.length) rows = rows.concat(r.data) })
+      }
+      return rows
+    }
+
+    try {
+      // Buscar listas dependentes com filtros atuais
+      const rowsAll = await fetchAll(buildParams())
+
+      // Para planos, usar SOMENTE a operadora (todas as páginas)
+      let planos: string[] = []
+      if (current.operadora) {
+        const pPlan = new URLSearchParams()
+        pPlan.append("operadora", current.operadora)
+        const rowsPlan = await fetchAll(pPlan)
+        planos = Array.from(new Set(rowsPlan.map((r: any) => r.plano).filter(Boolean)))
+          .sort((a, b) => String(a).localeCompare(String(b)))
+      }
+
+      const uniq = (arr: any[]) => distinctClean(arr) as string[]
+
+      // Produtos e Parcelas: sempre a lista completa do banco
+      const allRows = await fetchAll(new URLSearchParams())
+      const allProdutos = uniq(allRows.map((r: any) => r.produto ?? r.Produto))
+      // Garantir que "PME" apareça mesmo que não exista no banco
+      const produtosUnion = uniq([...allProdutos, "PME"]) 
+      const allParcelas = uniq(allRows.map((r: any) => r.parcela ?? r.Parcela))
+
+      setOptions({
+        // Tipos de Faixa e Pagamento por: listas globais (todas as páginas, sem filtros)
+        tiposFaixa: sortAlpha(uniq(allRows.map((r: any) => r.tipo_faixa ?? r.tipoFaixa))),
+        produtos: sortAlpha(produtosUnion.length ? produtosUnion : PRODUTOS),
+        pagamentoPor: sortAlpha(uniq(allRows.map((r: any) => r.pagamento_por ?? r.pagamentoPor))),
+        tipoBeneficiario: sortAlphaDesc(uniq(rowsAll.map(r => r.tipo_beneficiario)).length ? uniq(rowsAll.map(r => r.tipo_beneficiario)) : TIPO_BENEFICIARIO),
+        parcelas: sortAlpha(allParcelas.length ? allParcelas : PARCELAS),
+        planos: sortAlpha(planos),
+      })
+    } catch {
+      setOptions({
+        tiposFaixa: sortAlpha(TIPOS_FAIXA),
+        produtos: sortAlpha(PRODUTOS),
+        pagamentoPor: sortAlpha(PAGAMENTO_POR),
+        tipoBeneficiario: sortAlphaDesc(TIPO_BENEFICIARIO),
+        parcelas: sortAlpha(PARCELAS),
+        planos: [],
+      })
+    }
+  }
+
   return (
-    <div className="p-6 space-y-6 max-w-5xl mx-auto">
-      <div>
-        <h1 className="text-3xl font-bold">Cadastro de Bonificação</h1>
-        <p className="text-muted-foreground mt-1">
-          Cadastro e gerenciamento de regras de bonificação para corretores e supervisores
-        </p>
+    <div className="p-6 space-y-6 max-w-[1800px] mx-auto">
+      <div className="flex justify-end">
+        <Button variant={showForm ? "outline" : "default"} onClick={() => setShowForm(v => !v)}>
+          {showForm ? (
+            <>
+              <X className="h-4 w-4 mr-2" /> Cancelar
+            </>
+          ) : (
+            <>
+              <Plus className="h-4 w-4 mr-2" /> Cadastrar nova regra
+            </>
+          )}
+        </Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Regras de Bonificações</CardTitle>
-          <CardDescription>
-            Preencha os campos abaixo para registrar uma nova regra
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {/* Vigência */}
-            <div className="space-y-2">
-              <Label htmlFor="vigencia">Vigência *</Label>
-              <Input
-                id="vigencia"
-                type="date"
-                value={formData.vigencia}
-                onChange={(e) => handleChange("vigencia", e.target.value)}
-                required
-              />
-            </div>
-
-            {/* Operadora */}
-            <div className="space-y-2">
-              <Label htmlFor="operadora">Operadora *</Label>
-              <Select 
-                value={formData.operadora} 
-                onValueChange={(value: string) => handleChange("operadora", value)}
-                required
-              >
-                <SelectTrigger id="operadora">
-                  <SelectValue placeholder="Selecione a operadora" />
-                </SelectTrigger>
-                <SelectContent>
-                  {OPERADORAS.map((operadora) => (
-                    <SelectItem key={operadora} value={operadora}>
-                      {operadora}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Grid: Entidade e Plano */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="entidade">Entidade *</Label>
-                <Input
-                  id="entidade"
-                  value={formData.entidade}
-                  onChange={(e) => handleChange("entidade", e.target.value)}
-                  required
-                />
+      {showForm && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Nova regra</CardTitle>
+            <CardDescription>Preencha os campos abaixo para registrar uma nova regra</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form onSubmit={handleSubmit} className="space-y-8">
+            {/* Seção: Dados da Regra */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Dados da regra</h3>
+                <p className="text-xs text-muted-foreground">Defina vigência, operadora, entidade e plano</p>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="plano">Plano *</Label>
-                <Input
-                  id="plano"
-                  value={formData.plano}
-                  onChange={(e) => handleChange("plano", e.target.value)}
-                  required
-                />
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                {/* Vigência */}
+                <div className="space-y-2">
+                  <Label htmlFor="vigencia">Vigência *</Label>
+                  <Input
+                    id="vigencia"
+                    type="date"
+                    value={formData.vigencia}
+                    onChange={(e) => handleChange("vigencia", e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* Operadora (Autocomplete) */}
+                <div className="space-y-2">
+                  <Label htmlFor="operadora">Operadora *</Label>
+                  <div className="relative">
+                    <Input
+                      id="operadora"
+                      value={formData.operadora || operadoraQuery}
+                      onFocus={() => setOperadoraFocused(true)}
+                      onBlur={() => setTimeout(() => setOperadoraFocused(false), 150)}
+                      onChange={(e) => {
+                        setOperadoraQuery(e.target.value)
+                        handleChange("operadora", "")
+                        handleChange("plano", "")
+                        refreshDependentOptions({ operadora: "" })
+                      }}
+                      placeholder="Digite para buscar operadora"
+                      required
+                    />
+                    {(formData.operadora || operadoraQuery) && (
+                      <button
+                        type="button"
+                        aria-label="Limpar operadora"
+                        onClick={() => {
+                          setOperadoraQuery("")
+                          handleChange("operadora", "")
+                          handleChange("plano", "")
+                          setOperadoraFocused(true)
+                          refreshDependentOptions({ operadora: "" })
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        ×
+                      </button>
+                    )}
+                    {operadoraFocused && operadoraSuggestions.length > 0 && (
+                      <div className="absolute z-10 mt-1 w-full max-h-56 overflow-auto rounded-md border bg-popover text-popover-foreground shadow">
+                        {operadoraSuggestions.map(op => (
+                          <button
+                            key={op}
+                            type="button"
+                            onClick={() => {
+                              handleChange("operadora", op)
+                              setOperadoraQuery(op)
+                              setOperadoraFocused(false)
+                              refreshDependentOptions({ operadora: op })
+                            }}
+                            className="block w-full text-left px-3 py-2 hover:bg-accent hover:text-accent-foreground"
+                          >
+                            {op}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">Escolha a operadora para habilitar os demais campos</p>
+                </div>
+
+                {/* Entidade */}
+                <div className="space-y-2">
+                  <Label htmlFor="entidade">Entidade *</Label>
+                  <Input
+                    id="entidade"
+                    value={formData.entidade}
+                    onChange={(e) => handleChange("entidade", e.target.value)}
+                    required
+                  />
+                </div>
+
+                {/* Plano */}
+                <div className="space-y-2">
+                    <Label htmlFor="plano">Plano *</Label>
+                  <div className="relative">
+                    <Input
+                      id="plano"
+                      value={formData.plano || planoQuery}
+                      onFocus={() => setPlanoFocused(true)}
+                      onBlur={() => setTimeout(() => setPlanoFocused(false), 150)}
+                      onChange={(e) => {
+                        setPlanoQuery(e.target.value)
+                        handleChange("plano", "")
+                      }}
+                      placeholder={!formData.operadora ? "Selecione a operadora" : "Digite para buscar plano"}
+                      required
+                      disabled={!formData.operadora}
+                    />
+                    {(formData.plano || planoQuery) && (
+                      <button
+                        type="button"
+                        aria-label="Limpar plano"
+                        onClick={() => {
+                          setPlanoQuery("")
+                          handleChange("plano", "")
+                          setPlanoFocused(true)
+                        }}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        ×
+                      </button>
+                    )}
+                    {planoFocused && formData.operadora && planoQuery.trim() && (() => {
+                      const q = normalize(planoQuery)
+                      const list = (options.planos || [])
+                        .filter(p => {
+                          const n = normalize(p)
+                          return n.startsWith(q) || n.split(/\s+/).some(w => w.startsWith(q))
+                        })
+                      return list.length > 0 ? (
+                        <div className="absolute z-10 mt-1 w-full max-h-56 overflow-auto rounded-md border bg-popover text-popover-foreground shadow">
+                          {list.map(p => (
+                            <button
+                              key={p}
+                              type="button"
+                              onClick={() => {
+                                handleChange("plano", p)
+                                setPlanoQuery(p)
+                                setPlanoFocused(false)
+                              }}
+                              className="block w-full text-left px-3 py-2 hover:bg-accent hover:text-accent-foreground"
+                            >
+                              {p}
+                            </button>
+                          ))}
+                        </div>
+                      ) : null
+                    })()}
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* Grid: Bonificações */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Seção: Valores de Bonificação */}
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Valores de bonificação</h3>
+                <p className="text-xs text-muted-foreground">Informe valores em reais (R$)</p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="bonificacaoCorretor">Bonificação Corretor (R$)</Label>
                 <Input
@@ -244,7 +883,8 @@ export default function BonificacoesPage() {
                   min="0"
                   value={formData.bonificacaoCorretor}
                   onChange={(e) => handleChange("bonificacaoCorretor", e.target.value)}
-                  placeholder="0.00"
+                  placeholder="0,00"
+                  inputMode="decimal"
                 />
               </div>
               <div className="space-y-2">
@@ -256,64 +896,98 @@ export default function BonificacoesPage() {
                   min="0"
                   value={formData.bonificacaoSupervisor}
                   onChange={(e) => handleChange("bonificacaoSupervisor", e.target.value)}
-                  placeholder="0.00"
+                  placeholder="0,00"
+                  inputMode="decimal"
                 />
+              </div>
               </div>
             </div>
 
-            {/* Parcela */}
-            <div className="space-y-2">
-              <Label htmlFor="parcela">Parcela</Label>
-              <Select 
-                value={formData.parcela} 
-                onValueChange={(value: string) => handleChange("parcela", value)}
-              >
-                <SelectTrigger id="parcela">
-                  <SelectValue placeholder="Selecione a parcela" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PARCELAS.map((parcela) => (
-                    <SelectItem key={parcela} value={parcela}>
-                      {parcela}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Parcela, Tipo de Faixa e Produto (modelo anterior) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="parcela">Parcela</Label>
+                <Select 
+                  value={formData.parcela} 
+                  onValueChange={async (value: string) => {
+                    handleChange("parcela", value)
+                    await refreshDependentOptions({ parcela: value })
+                  }}
+                >
+                  <SelectTrigger id="parcela">
+                    <SelectValue placeholder="Selecione a parcela" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {options.parcelas.map((parcela) => (
+                      <SelectItem key={parcela} value={parcela}>
+                        {parcela}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="tipoFaixa">Tipo de Faixa</Label>
+                <Select 
+                  value={formData.tipoFaixa} 
+                  onValueChange={async (value: string) => {
+                    handleChange("tipoFaixa", value)
+                    await refreshDependentOptions({ tipoFaixa: value })
+                  }}
+                >
+                  <SelectTrigger id="tipoFaixa">
+                    <SelectValue placeholder="Selecione o tipo de faixa" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {options.tiposFaixa.map((faixa) => (
+                      <SelectItem key={faixa} value={faixa}>
+                        {faixa}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="produto">Produto</Label>
+                <Select 
+                  value={formData.produto} 
+                  onValueChange={async (value: string) => {
+                    handleChange("produto", value)
+                    await refreshDependentOptions({ produto: value })
+                  }}
+                >
+                  <SelectTrigger id="produto">
+                    <SelectValue placeholder="Selecione o produto" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {options.produtos.map((produto) => (
+                      <SelectItem key={produto} value={produto}>
+                        {produto}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
-            {/* Tipo de Faixa */}
-            <div className="space-y-2">
-              <Label htmlFor="tipoFaixa">Tipo de Faixa</Label>
-              <Select 
-                value={formData.tipoFaixa} 
-                onValueChange={(value: string) => handleChange("tipoFaixa", value)}
-              >
-                <SelectTrigger id="tipoFaixa">
-                  <SelectValue placeholder="Selecione o tipo de faixa" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TIPOS_FAIXA.map((faixa) => (
-                    <SelectItem key={faixa} value={faixa}>
-                      {faixa}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Grid: Pagamento por e Tipo de Beneficiário */}
+            {/* Grid: Pagamento por e Tipo de Beneficiário (dependentes) */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="pagamentoPor">Pagamento por</Label>
                 <Select 
                   value={formData.pagamentoPor} 
-                  onValueChange={(value: string) => handleChange("pagamentoPor", value)}
+                  onValueChange={async (value: string) => {
+                    handleChange("pagamentoPor", value)
+                    await refreshDependentOptions({ pagamentoPor: value })
+                  }}
                 >
                   <SelectTrigger id="pagamentoPor">
                     <SelectValue placeholder="Selecione o tipo de pagamento" />
                   </SelectTrigger>
                   <SelectContent>
-                    {PAGAMENTO_POR.map((pagamento) => (
+                    {options.pagamentoPor.map((pagamento) => (
                       <SelectItem key={pagamento} value={pagamento}>
                         {pagamento}
                       </SelectItem>
@@ -325,13 +999,16 @@ export default function BonificacoesPage() {
                 <Label htmlFor="tipoBeneficiario">Tipo de Beneficiário</Label>
                 <Select 
                   value={formData.tipoBeneficiario} 
-                  onValueChange={(value: string) => handleChange("tipoBeneficiario", value)}
+                  onValueChange={async (value: string) => {
+                    handleChange("tipoBeneficiario", value)
+                    await refreshDependentOptions({ tipoBeneficiario: value })
+                  }}
                 >
                   <SelectTrigger id="tipoBeneficiario">
                     <SelectValue placeholder="Selecione o tipo de beneficiário" />
                   </SelectTrigger>
                   <SelectContent>
-                    {TIPO_BENEFICIARIO.map((tipo) => (
+                    {options.tipoBeneficiario.map((tipo) => (
                       <SelectItem key={tipo} value={tipo}>
                         {tipo}
                       </SelectItem>
@@ -341,57 +1018,128 @@ export default function BonificacoesPage() {
               </div>
             </div>
 
-            {/* Produto */}
-            <div className="space-y-2">
-              <Label htmlFor="produto">Produto</Label>
-              <Select 
-                value={formData.produto} 
-                onValueChange={(value: string) => handleChange("produto", value)}
-              >
-                <SelectTrigger id="produto">
-                  <SelectValue placeholder="Selecione o produto" />
-                </SelectTrigger>
-                <SelectContent>
-                  {PRODUTOS.map((produto) => (
-                    <SelectItem key={produto} value={produto}>
-                      {produto}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+            {/* Importação em lote (dentro do formulário) */}
+            <div className="space-y-3 pt-6 border-t">
+              <div>
+                <h3 className="text-sm font-medium text-foreground">Importar regras em lote</h3>
+                <p className="text-xs text-muted-foreground">Envie CSV/XLSX no modelo. Revise/edite abaixo e clique em Registrar regras.</p>
+              </div>
+              <div className="flex items-center gap-3 flex-wrap">
+                <input
+                  ref={fileInputRef}
+                  className="hidden"
+                  type="file"
+                  accept=".csv, .xlsx"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) void handleFileUpload(f)
+                  }}
+                />
+                <Button type="button" variant="secondary" onClick={() => fileInputRef.current?.click()}>
+                  Selecionar arquivo
+                </Button>
+                <Button type="button" variant="outline" onClick={downloadTemplate}>
+                  Baixar modelo XLSX
+                </Button>
+                {batchLoading && <span className="text-sm text-muted-foreground">Carregando...</span>}
+                {batchMessage && <span className="text-sm">{batchMessage}</span>}
+              </div>
+
+              {batchRows.length > 0 && (
+                <div className="space-y-3">
+                  <div className="overflow-x-auto border rounded-md">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-muted">
+                          {batchColumns.map((c) => (
+                            <th key={c} className="px-3 py-2 text-left whitespace-nowrap">{c}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {batchRows.map((row, idx) => (
+                          <tr key={idx} className="border-t">
+                            {batchColumns.map((c) => (
+                              <td key={c} className="px-3 py-1 min-w-[160px]">
+                                <Input
+                                  value={row[c] ?? ''}
+                                  onChange={(e) => updateBatchCell(idx, c, e.target.value)}
+                                />
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="outline" type="button" onClick={() => { setBatchRows([]); setBatchColumns([]); setBatchMessage("") }}>Limpar tabela</Button>
+                    <Button type="button" onClick={registerBatch} disabled={batchLoading}>Registrar regras</Button>
+                  </div>
+                </div>
+              )}
             </div>
 
-            {/* Botão Submit */}
-            <div className="flex justify-end space-x-4 pt-4 border-t">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  setFormData({
-                    vigencia: "",
-                    operadora: "",
-                    entidade: "",
-                    plano: "",
-                    bonificacaoCorretor: "",
-                    bonificacaoSupervisor: "",
-                    parcela: "",
-                    tipoFaixa: "",
-                    pagamentoPor: "",
-                    tipoBeneficiario: "",
-                    produto: ""
-                  })
-                }}
-                disabled={loading}
-              >
-                Limpar
-              </Button>
-              <Button type="submit" disabled={loading}>
-                {loading ? "Registrando..." : "Registrar"}
-              </Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
+              {/* Botões do formulário (ocultos quando preview em lote está visível) */}
+              {batchRows.length === 0 && (
+                <div className="flex justify-end space-x-4 pt-4 border-t">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setFormData({
+                        vigencia: "",
+                        operadora: "",
+                        entidade: "",
+                        plano: "",
+                        bonificacaoCorretor: "",
+                        bonificacaoSupervisor: "",
+                        parcela: "",
+                        tipoFaixa: "",
+                        pagamentoPor: "",
+                        tipoBeneficiario: "",
+                        produto: ""
+                      })
+                      setPlanoQuery("")
+                      setPlanoFocused(false)
+                      setOperadoraQuery("")
+                      setOperadoraFocused(false)
+                      setOptions({
+                        tiposFaixa: TIPOS_FAIXA,
+                        produtos: PRODUTOS,
+                        pagamentoPor: PAGAMENTO_POR,
+                        tipoBeneficiario: TIPO_BENEFICIARIO,
+                        parcelas: PARCELAS,
+                        planos: [],
+                      })
+                      setProdutoQuery("")
+                      setProdutoFocused(false)
+                    }}
+                    disabled={loading}
+                  >
+                    Limpar
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={loading}
+                    onClick={() => {
+                      // Após salvar, atualizar opções conforme filtros atuais (se salvar com sucesso, o toast/limpeza já ocorre)
+                      setTimeout(() => refreshDependentOptions(), 0)
+                    }}
+                  >
+                    {loading ? "Registrando..." : "Registrar"}
+                  </Button>
+                </div>
+              )}
+            </form>
+          </CardContent>
+        </Card>
+      )}
+
+      <div>
+        <h2 className="text-2xl font-semibold">Gerenciamento de Regras</h2>
+      </div>
+      <RegrasTable />
     </div>
   )
 }

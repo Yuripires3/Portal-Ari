@@ -1,38 +1,28 @@
 # Credenciais de Teste
 
-## Acesso Administrativo
+## Acesso Administrativo (Admin)
 
-**CNPJ:** 12.345.678/0001-90  
-**Usuário:** admin  
-**Senha:** Admin@123
+**Email:** ti@qvsaude.com.br  
+**Usuário (login):** admin  
+**Senha:** Qv@2025 (hash armazenado no banco)
 
-**Perfil:** Administrador do sistema com acesso total
-
----
-
-## Acesso Parceiro 1 (Gold)
-
-**CNPJ:** 98.765.432/0001-10  
-**Usuário:** parceiro1  
-**Senha:** Admin@123
-
-**Perfil:** Parceiro Gold - João Silva  
-**Empresa:** Empresa Parceira 1 LTDA  
-**Comissões aprovadas:** R$ 3.227,50  
-**Comissões pendentes:** R$ 4.330,00
+Perfil: Administrador do sistema com acesso total.
 
 ---
 
-## Acesso Parceiro 2 (Standard)
+## Usuário de Teste (padrão)
 
-**CNPJ:** 11.222.333/0001-44  
-**Usuário:** parceiro2  
-**Senha:** Admin@123
+Exemplo de cadastro para testes via `/register`:
 
-**Perfil:** Parceiro Standard - Maria Santos  
-**Empresa:** Empresa Parceira 2 LTDA  
-**Comissões aprovadas:** R$ 1.200,00  
-**Comissões pendentes:** R$ 512,00
+- Email: joao@example.com  
+- Usuário (login): joao.silva  
+- CPF: 123.456.789-00  
+- Área: Financeiro  
+- Senha: Senha@123  
+
+---
+
+Após cadastro, faça login com email ou usuário + senha.
 
 ---
 
@@ -55,25 +45,17 @@
 
 ---
 
-## Como Executar os Scripts
+## Como iniciar o Admin
 
-1. Execute o script de criação de tabelas:
-   \`\`\`bash
-   # O script 01_create_tables.sql será executado automaticamente
-   \`\`\`
-
-2. Execute o script de seed:
-   \`\`\`bash
-   # O script 02_seed_test_data.sql será executado automaticamente
-   \`\`\`
-
-3. Acesse o sistema com qualquer uma das credenciais acima
+1) Chame o seed uma vez:
+```bash
+curl http://localhost:3000/api/auth/seed
+```
+2) Faça login com as credenciais de admin acima.
 
 ---
 
 ## Observações
 
-- Todos os usuários de teste usam a mesma senha: **Admin@123**
-- A senha está hasheada no banco usando bcrypt
+- Senhas são armazenadas com hash (bcrypt)
 - Os dados são apenas para demonstração e testes
-- O CNPJ deve ser digitado com ou sem formatação (ambos funcionam)
