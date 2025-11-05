@@ -6,7 +6,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "eslint .",
-    "start": "node -e \"process.env.HOSTNAME='0.0.0.0'; process.env.HOST='0.0.0.0'; try { require('./server.js'); } catch(e) { require('.next/standalone/server.js'); }\""
+    "start": "node .next/standalone/server.js"
   },
   "dependencies": {
     "@radix-ui/react-accordion": "1.2.2",

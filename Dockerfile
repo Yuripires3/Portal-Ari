@@ -43,7 +43,7 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/static ./.next/static
 
-# Copiar script de inicialização e package.json customizado
+# Copiar script de inicialização e package.json customizado (DEPOIS do standalone para sobrescrever)
 COPY server-start.js ./
 COPY package-standalone.json ./package.json
 
