@@ -43,8 +43,12 @@ COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/.next/static ./.next/static
 
+# Copiar script de inicialização
+COPY server-start.js ./
+
 # Ajustar permissões
-RUN chown -R nextjs:nodejs /app
+RUN chown -R nextjs:nodejs /app && \
+    chmod +x server-start.js
 
 USER nextjs
 
@@ -58,7 +62,6 @@ ENV HOST "0.0.0.0"
 HEALTHCHECK --interval=30s --timeout=3s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:3005/api/health || exit 1
 
-# Iniciar aplicação usando standalone output
-# O server.js está na raiz porque copiamos .next/standalone para ./
-CMD ["node", "server.js"]
+# Iniciar aplicação usando script wrapper que força hostname a 0.0.0.0
+CMD ["node", "server-start.js"]
 
