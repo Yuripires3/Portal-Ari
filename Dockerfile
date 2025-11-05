@@ -56,7 +56,6 @@ USER nextjs
 EXPOSE 3005
 
 ENV PORT 3005
-ENV HOSTNAME "0.0.0.0"
 ENV HOST "0.0.0.0"
 
 # Health check - verifica se a aplicação está respondendo

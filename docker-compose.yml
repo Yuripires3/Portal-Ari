@@ -14,7 +14,6 @@ services:
       # Variáveis de ambiente da aplicação
       - NODE_ENV=production
       - PORT=3005
-      - HOSTNAME=0.0.0.0
       - HOST=0.0.0.0
       - NEXT_TELEMETRY_DISABLED=1
       
