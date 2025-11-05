@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: payment-and-commission-platform
+    restart: unless-stopped
+    ports:
+      - "3005:3005"
+    environment:
+      # Variáveis de ambiente da aplicação
+      - NODE_ENV=production
+      - PORT=3005
+      - HOSTNAME=0.0.0.0
+      - HOST=0.0.0.0
+      - NEXT_TELEMETRY_DISABLED=1
+      
+      # Variáveis de ambiente do banco de dados
+      # ATENÇÃO: Configure essas variáveis no arquivo .env ou no Coolify
+      - DB_HOST=${DB_HOST:-192.168.1.193}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-Indicadores}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME:-indicadores}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3005/api/health"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 40s
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
