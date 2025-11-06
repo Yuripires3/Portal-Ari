@@ -25,11 +25,9 @@ services:
       - NEXT_USE_TURBOPACK=0
 
       # Banco de dados
-      # Servidor MySQL: sql (192.168.1.193:3306)
-      # IMPORTANTE: Se o servidor MySQL está em outra rede privada, configure DB_HOST no Coolify
-      # Opções:
-      # - Se na mesma rede privada: use "sql" ou "192.168.1.193"
-      # - Se precisa de acesso externo: configure IP público ou hostname no Coolify
+      # Servidor MySQL: IP público 201.76.177.134:3306
+      # Hostname interno: sql (192.168.1.193)
+      # O Coolify pode sobrescrever DB_HOST se necessário
       - DB_HOST=${DB_HOST:-201.76.177.134}
       - DB_PORT=${DB_PORT:-3306}
       - DB_USER=${DB_USER:-Indicadores}
