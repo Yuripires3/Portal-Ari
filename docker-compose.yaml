@@ -16,7 +16,7 @@ services:
     # O Coolify detecta automaticamente a porta mapeada
     # Para usar porta 3005, altere para: "3005:3005" e ajuste PORT=3005 abaixo
     ports:
-      - "3000:3000"
+      - "3005:3005"
     
     # Não definir hostname explicitamente - deixa o Docker gerar automaticamente
     # Isso evita que o hostname do container apareça nos logs do Next.js
@@ -28,7 +28,7 @@ services:
       # PORT: Use 3000 ou 3005 conforme disponibilidade
       # O Coolify pode sobrescrever isso via variáveis de ambiente
       # IMPORTANTE: A porta aqui deve corresponder ao mapeamento acima
-      - PORT=${PORT:-3000}
+      - PORT=${PORT:-3005}
       # HOST=0.0.0.0 faz o servidor escutar em todas as interfaces
       # CRÍTICO: Sem isso, o servidor só escuta em localhost e não é acessível externamente
       - HOST=0.0.0.0
@@ -56,7 +56,7 @@ services:
     # IMPORTANTE: A porta deve corresponder à PORT definida nas variáveis de ambiente
     # Se usar PORT=3005, altere para "http://localhost:3005/api/health"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3005/api/health"]
       interval: 15s
       timeout: 5s
       retries: 5
