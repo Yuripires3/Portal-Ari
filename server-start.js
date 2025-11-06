@@ -2,7 +2,44 @@
 
 const os = require('os');
 
-// Função para obter o IP real da máquina (prioriza IPs não-internos)
+// Função para resolver a URL pública base da aplicação
+// Prioriza: NEXT_PUBLIC_SITE_URL > PUBLIC_HOST > IP detectado automaticamente
+function resolvePublicBaseUrl() {
+  const port = process.env.PORT || '3005';
+  
+  // 1. Tentar NEXT_PUBLIC_SITE_URL (padrão Next.js)
+  if (process.env.NEXT_PUBLIC_SITE_URL) {
+    let url = process.env.NEXT_PUBLIC_SITE_URL.trim();
+    // Se não tiver protocolo, adicionar http://
+    if (!url.match(/^https?:\/\//)) {
+      url = `http://${url}`;
+    }
+    // Garantir que não termina com /
+    return url.replace(/\/$/, '');
+  }
+  
+  // 2. Tentar PUBLIC_HOST
+  if (process.env.PUBLIC_HOST) {
+    let host = process.env.PUBLIC_HOST.trim();
+    // Se não tiver protocolo, adicionar http://
+    if (!host.match(/^https?:\/\//)) {
+      host = `http://${host}`;
+    }
+    // Garantir que não termina com /
+    return host.replace(/\/$/, '');
+  }
+  
+  // 3. Fallback: detectar IP automaticamente
+  const detectedIP = getLocalIP();
+  if (detectedIP && detectedIP !== '0.0.0.0') {
+    return `http://${detectedIP}:${port}`;
+  }
+  
+  // 4. Último fallback
+  return `http://0.0.0.0:${port}`;
+}
+
+// Função para obter o IP real da máquina (para fallback)
 function getLocalIP() {
   const interfaces = os.networkInterfaces();
   const ips = [];
@@ -28,85 +65,56 @@ function getLocalIP() {
     return ips[0];
   }
   
-  // Fallback para 0.0.0.0
-  return '0.0.0.0';
+  // Fallback para null (será tratado em resolvePublicBaseUrl)
+  return null;
 }
 
-// Forçar o hostname a 0.0.0.0 antes de iniciar o servidor (para escutar em todas as interfaces)
+// Configurar variáveis de ambiente para o servidor escutar corretamente
 const listenHost = '0.0.0.0';
-process.env.HOSTNAME = listenHost;
-process.env.HOST = listenHost;
+process.env.HOST = process.env.HOST || listenHost;
+process.env.HOSTNAME = process.env.HOSTNAME || listenHost;
 process.env.PORT = process.env.PORT || '3005';
 
-// Obter IP real para exibição
-const displayIP = getLocalIP();
+// Resolver URL pública base
+const publicBaseUrl = resolvePublicBaseUrl();
 
-// PATCH CRÍTICO: Substituir os.hostname() para SEMPRE retornar o IP real
-// Isso faz o Next.js usar o IP ao invés do hostname do container
-const originalHostname = os.hostname;
-Object.defineProperty(os, 'hostname', {
-  value: function() {
-    return displayIP;
-  },
-  writable: false,
-  configurable: false
-});
-
-// Também patchear require('os').hostname() caso seja chamado de forma diferente
-// Limpar cache do módulo os para forçar recarregamento com nosso patch
-delete require.cache[require.resolve('os')];
-const patchedOs = require('os');
-Object.defineProperty(patchedOs, 'hostname', {
-  value: function() {
-    return displayIP;
-  },
-  writable: false,
-  configurable: false
-});
-
-// Garantir que o módulo original também seja patcheado
-if (originalHostname) {
-  Object.defineProperty(originalHostname, 'toString', {
-    value: function() {
-      return displayIP;
-    }
-  });
+// Definir variáveis de ambiente para o Next.js usar
+if (!process.env.NEXT_PUBLIC_SITE_URL && !process.env.PUBLIC_HOST) {
+  // Se não foi definido, definir automaticamente
+  process.env.NEXT_PUBLIC_SITE_URL = publicBaseUrl;
 }
 
-// Função para substituir QUALQUER hostname pelo IP real
-function replaceHostname(message) {
+// Função para substituir URLs nos logs usando a URL pública resolvida
+function replaceUrlsInLogs(message) {
   if (typeof message === 'string') {
-    // Substituir hostname do container - padrões específicos
-    // Padrão 1: http://c4f743f0f07c:3005 (12 caracteres hex)
-    // Padrão 2: http://304c227fc8ae:3005 (12 caracteres hex)
-    // Padrão 3: Qualquer hex de 8-12 caracteres
-    // Padrão 4: Qualquer string alfanumérica que não seja IP válido
-    return message
-      // Padrão específico: http://hostname:port (ex: http://c4f743f0f07c:3005)
-      .replace(/http:\/\/([a-f0-9]{8,12}):(\d+)/gi, `http://${displayIP}:$2`)
-      .replace(/http:\/\/([a-f0-9]{8,12})/gi, `http://${displayIP}`)
-      // Padrão genérico: qualquer hex seguido de porta
-      .replace(/http:\/\/[a-f0-9]+:\d+/gi, `http://${displayIP}:${process.env.PORT}`)
-      .replace(/http:\/\/[a-f0-9]+/gi, `http://${displayIP}`)
-      // Padrão genérico: qualquer string que não seja IP válido após http://
-      .replace(/http:\/\/(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([a-zA-Z0-9-]+):(\d+)/g, `http://${displayIP}:$2`)
-      .replace(/http:\/\/(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([a-zA-Z0-9-]+)/g, `http://${displayIP}`)
-      // Padrão adicional: capturar hostname sozinho (sem http://)
-      .replace(/([a-f0-9]{8,12}):(\d+)/gi, `${displayIP}:$2`);
+    // Extrair apenas o host:port da URL pública
+    const publicUrlMatch = publicBaseUrl.match(/https?:\/\/([^\/]+)/);
+    const publicHost = publicUrlMatch ? publicUrlMatch[1] : null;
+    
+    if (publicHost) {
+      // Substituir hostname do container por host público
+      // Padrão: http://container-hostname:port -> http://public-host:port
+      return message
+        // Substituir qualquer hostname hex (container ID) pelo host público
+        .replace(/http:\/\/([a-f0-9]{8,12}):(\d+)/gi, `http://${publicHost}`)
+        .replace(/http:\/\/([a-f0-9]{8,12})/gi, `http://${publicHost}`)
+        // Substituir qualquer hostname alfanumérico que não seja IP válido
+        .replace(/http:\/\/(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([a-zA-Z0-9-]+):(\d+)/g, `http://${publicHost}`)
+        .replace(/http:\/\/(?!\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})([a-zA-Z0-9-]+)/g, `http://${publicHost}`);
+    }
   }
   return message;
 }
 
 // Interceptar process.stdout.write (usado pelo Next.js para logs)
-// IMPORTANTE: Fazer isso ANTES de carregar o Next.js
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 process.stdout.write = function(chunk, encoding, callback) {
   if (typeof chunk === 'string') {
-    chunk = replaceHostname(chunk);
+    chunk = replaceUrlsInLogs(chunk);
     return originalStdoutWrite(chunk, encoding, callback);
   } else if (Buffer.isBuffer(chunk)) {
     const str = chunk.toString('utf8');
-    const replaced = replaceHostname(str);
+    const replaced = replaceUrlsInLogs(str);
     if (str !== replaced) {
       chunk = Buffer.from(replaced, 'utf8');
     }
@@ -119,11 +127,11 @@ process.stdout.write = function(chunk, encoding, callback) {
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
 process.stderr.write = function(chunk, encoding, callback) {
   if (typeof chunk === 'string') {
-    chunk = replaceHostname(chunk);
+    chunk = replaceUrlsInLogs(chunk);
     return originalStderrWrite(chunk, encoding, callback);
   } else if (Buffer.isBuffer(chunk)) {
     const str = chunk.toString('utf8');
-    const replaced = replaceHostname(str);
+    const replaced = replaceUrlsInLogs(str);
     if (str !== replaced) {
       chunk = Buffer.from(replaced, 'utf8');
     }
@@ -132,33 +140,44 @@ process.stderr.write = function(chunk, encoding, callback) {
   return originalStderrWrite(chunk, encoding, callback);
 };
 
-// Interceptar métodos de console também (para garantir)
+// Interceptar métodos de console
 const originalLog = console.log;
 const originalInfo = console.info;
 
 console.log = function(...args) {
   const modifiedArgs = args.map(arg => 
-    typeof arg === 'string' ? replaceHostname(arg) : arg
+    typeof arg === 'string' ? replaceUrlsInLogs(arg) : arg
   );
   originalLog.apply(console, modifiedArgs);
 };
 
 console.info = function(...args) {
   const modifiedArgs = args.map(arg => 
-    typeof arg === 'string' ? replaceHostname(arg) : arg
+    typeof arg === 'string' ? replaceUrlsInLogs(arg) : arg
   );
   originalInfo.apply(console, modifiedArgs);
 };
 
-// Log de inicialização para debug
-console.log(`🚀 Starting server with IP: ${displayIP}, listening on: ${listenHost}:${process.env.PORT}`);
-console.log(`📡 os.hostname() will return: ${os.hostname()}`);
+// Sanity check e log de inicialização
+const port = process.env.PORT || '3005';
+const host = process.env.HOST || '0.0.0.0';
 
-// PATCH FINAL: Interceptar qualquer acesso ao hostname antes do Next.js carregar
-// Isso garante que mesmo que o Next.js tenha uma referência antiga, ela será substituída
-const originalHostnameValue = os.hostname();
-if (originalHostnameValue !== displayIP) {
-  console.log(`⚠️  Original hostname was: ${originalHostnameValue}, now patched to: ${displayIP}`);
+if (process.env.PUBLIC_HOST || process.env.NEXT_PUBLIC_SITE_URL) {
+  console.log(`✅ Ready on ${publicBaseUrl}`);
+  console.log(`📡 Server listening on ${host}:${port}`);
+  console.log(`🌐 Public URL: ${publicBaseUrl}`);
+} else {
+  const detectedIP = getLocalIP();
+  if (detectedIP && detectedIP !== '0.0.0.0') {
+    console.log(`⚠️  PUBLIC_HOST or NEXT_PUBLIC_SITE_URL not set, using detected IP: ${publicBaseUrl}`);
+    console.log(`📡 Server listening on ${host}:${port}`);
+    console.log(`💡 To set a custom public URL, define PUBLIC_HOST or NEXT_PUBLIC_SITE_URL environment variable`);
+  } else {
+    console.log(`⚠️  PUBLIC_HOST or NEXT_PUBLIC_SITE_URL not set and could not detect IP`);
+    console.log(`📡 Server listening on ${host}:${port}`);
+    console.log(`💡 Please define PUBLIC_HOST or NEXT_PUBLIC_SITE_URL environment variable`);
+    console.log(`   Example: PUBLIC_HOST=192.168.1.100:${port} or NEXT_PUBLIC_SITE_URL=http://192.168.1.100:${port}`);
+  }
 }
 
 // Iniciar o servidor standalone
@@ -176,6 +195,3 @@ try {
     process.exit(1);
   }
 }
-
-
-

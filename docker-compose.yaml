@@ -33,6 +33,15 @@ services:
       # CRÍTICO: Sem isso, o servidor só escuta em localhost e não é acessível externamente
       - HOST=0.0.0.0
       - HOSTNAME=0.0.0.0
+      # PUBLIC_HOST: URL pública da aplicação (IP:porta ou domínio)
+      # O server-start.js usa isso para mostrar a URL correta nos logs
+      # Formato: IP:porta (ex: 192.168.1.100:3005) ou URL completa (ex: http://192.168.1.100:3005)
+      # Se não definido, o script tentará detectar automaticamente o IP
+      # No Coolify, defina esta variável com o IP do servidor: PUBLIC_HOST=192.168.X.X:3005
+      - PUBLIC_HOST=${PUBLIC_HOST:-}
+      # NEXT_PUBLIC_SITE_URL: Alternativa ao PUBLIC_HOST (padrão Next.js)
+      # Se ambos estiverem definidos, NEXT_PUBLIC_SITE_URL tem prioridade
+      - NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL:-}
       - NEXT_TELEMETRY_DISABLED=1
       # Desabilitar Turbopack (se necessário em runtime também)
       - NEXT_USE_TURBOPACK=0
@@ -63,8 +72,8 @@ services:
       start_period: 20s
     
     # Comando para iniciar o servidor Next.js standalone
-    # O server-start.js força o hostname a 0.0.0.0 e mostra IP real nos logs
-    # CRÍTICO: Este script patcheia os.hostname() para retornar IP real
+    # O server-start.js usa PUBLIC_HOST ou NEXT_PUBLIC_SITE_URL para mostrar URL correta nos logs
+    # IMPORTANTE: Não tenta mais patchear os.hostname() (incompatível com Node 20)
     command: node server-start.js
     
     # Labels para o Coolify (opcional, mas ajuda na identificação)
