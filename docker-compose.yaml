@@ -6,14 +6,17 @@ services:
       context: .
       dockerfile: Dockerfile
       # Não usar args aqui - segredos devem estar apenas em runtime
+    
     container_name: payment-and-commission-platform
     restart: always
     
-    # Mapeamento de portas: expõe a porta 3005 do container para o host
+    # Mapeamento de portas: expõe a porta do container para o host
     # Formato: "HOST_PORT:CONTAINER_PORT"
-    # Isso permite acesso via http://<IP_DO_SERVIDOR>:3005
+    # IMPORTANTE: Use 3000 ou 3005 conforme disponibilidade
+    # O Coolify detecta automaticamente a porta mapeada
+    # Para usar porta 3005, altere para: "3005:3005" e ajuste PORT=3005 abaixo
     ports:
-      - "3005:3005"
+      - "3000:3000"
     
     # Não definir hostname explicitamente - deixa o Docker gerar automaticamente
     # Isso evita que o hostname do container apareça nos logs do Next.js
@@ -22,9 +25,12 @@ services:
     environment:
       # Variáveis de ambiente da aplicação
       - NODE_ENV=production
-      - PORT=3005
+      # PORT: Use 3000 ou 3005 conforme disponibilidade
+      # O Coolify pode sobrescrever isso via variáveis de ambiente
+      # IMPORTANTE: A porta aqui deve corresponder ao mapeamento acima
+      - PORT=${PORT:-3000}
       # HOST=0.0.0.0 faz o servidor escutar em todas as interfaces
-      # Isso permite acesso externo via IP do servidor
+      # CRÍTICO: Sem isso, o servidor só escuta em localhost e não é acessível externamente
       - HOST=0.0.0.0
       - HOSTNAME=0.0.0.0
       - NEXT_TELEMETRY_DISABLED=1
@@ -42,12 +48,15 @@ services:
     
     # Arquivo .env (opcional, para desenvolvimento local)
     # No Coolify, configure as variáveis diretamente no painel
+    # O env_file é ignorado se a variável já estiver definida no environment
     env_file:
       - .env
     
     # Health check - verifica se a aplicação está respondendo
+    # IMPORTANTE: A porta deve corresponder à PORT definida nas variáveis de ambiente
+    # Se usar PORT=3005, altere para "http://localhost:3005/api/health"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3005/api/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -55,12 +64,22 @@ services:
     
     # Comando para iniciar o servidor Next.js standalone
     # O server-start.js força o hostname a 0.0.0.0 e mostra IP real nos logs
+    # CRÍTICO: Este script patcheia os.hostname() para retornar IP real
     command: node server-start.js
     
-    # Rede isolada (opcional, mas recomendado)
+    # Labels para o Coolify (opcional, mas ajuda na identificação)
+    labels:
+      - "coolify.managed=true"
+      - "coolify.service=app"
+    
+    # Rede bridge - permite acesso externo via IP do servidor
+    # IMPORTANTE: Não usar network_mode: bridge junto com networks:
+    # São mutuamente exclusivos. Usar networks: é mais flexível
     networks:
       - app-network
 
 networks:
   app-network:
     driver: bridge
+    # Bridge permite que containers se comuniquem e sejam acessíveis externamente
+    # via IP do host quando as portas estão mapeadas
