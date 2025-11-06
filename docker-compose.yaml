@@ -24,12 +24,12 @@ services:
       - NEXT_TELEMETRY_DISABLED=1
       - NEXT_USE_TURBOPACK=0
 
-      ## Banco de dados
-      #- DB_HOST=${DB_HOST:-192.168.1.193}
-      #- DB_PORT=${DB_PORT:-3306}
-      #- DB_USER=${DB_USER:-Indicadores}
-      #- DB_PASSWORD=${DB_PASSWORD:-xEth+vOHltr*c4Eju3+t}
-      #- DB_NAME=${DB_NAME:-indicadores}
+      # Banco de dados
+      - DB_HOST=${DB_HOST:-192.168.1.193}
+      - DB_PORT=${DB_PORT:-3306}
+      - DB_USER=${DB_USER:-Indicadores}
+      - DB_PASSWORD=${DB_PASSWORD:-xEth+vOHltr*c4Eju3+t}
+      - DB_NAME=${DB_NAME:-indicadores}
 
     env_file:
       - .env
