@@ -24,7 +24,26 @@ export function getDBConfig(): DBConfig {
 
 export async function getDBConnection() {
   const config = getDBConfig()
-  return await mysql.createConnection(config)
+  
+  // Log de debug para diagnóstico (apenas em desenvolvimento ou se DB_DEBUG estiver definido)
+  if (process.env.DB_DEBUG === 'true' || process.env.NODE_ENV !== 'production') {
+    console.log('[DB] Tentando conectar:', {
+      host: config.host,
+      port: config.port,
+      user: config.user,
+      database: config.database,
+      // Não logar senha por segurança
+    })
+  }
+  
+  // Adicionar timeout maior para conexões remotas
+  const connectionConfig = {
+    ...config,
+    connectTimeout: 30000, // 30 segundos
+    acquireTimeout: 30000,
+  }
+  
+  return await mysql.createConnection(connectionConfig)
 }
 
 /**

@@ -27,8 +27,10 @@ services:
       # Banco de dados
       # Servidor MySQL: IP público 201.76.177.134:3306
       # Hostname interno: sql (192.168.1.193)
-      # O Coolify pode sobrescrever DB_HOST se necessário
-      - DB_HOST=${DB_HOST:-201.76.177.134}
+      # IMPORTANTE: Valor fixo para garantir que sempre use o IP público correto
+      # Se precisar mudar, altere aqui ou defina DB_HOST no Coolify para sobrescrever
+      - DB_HOST=201.76.177.134
+      - DB_DEBUG=${DB_DEBUG:-false}
       - DB_PORT=${DB_PORT:-3306}
       - DB_USER=${DB_USER:-Indicadores}
       - DB_PASSWORD=${DB_PASSWORD:-xEth+vOHltr*c4Eju3+t}
