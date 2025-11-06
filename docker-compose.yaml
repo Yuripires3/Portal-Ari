@@ -8,14 +8,23 @@ services:
       # Não usar args aqui - segredos devem estar apenas em runtime
     container_name: payment-and-commission-platform
     restart: always
+    
+    # Mapeamento de portas: expõe a porta 3005 do container para o host
+    # Formato: "HOST_PORT:CONTAINER_PORT"
+    # Isso permite acesso via http://<IP_DO_SERVIDOR>:3005
     ports:
-      # Publica a porta 3005 do container para o host
-      # Permite acesso via IP: http://<SEU-IP>:3005
       - "3005:3005"
+    
+    # Não definir hostname explicitamente - deixa o Docker gerar automaticamente
+    # Isso evita que o hostname do container apareça nos logs do Next.js
+    # O server-start.js irá substituir o hostname pelo IP real nos logs
+    
     environment:
       # Variáveis de ambiente da aplicação
       - NODE_ENV=production
       - PORT=3005
+      # HOST=0.0.0.0 faz o servidor escutar em todas as interfaces
+      # Isso permite acesso externo via IP do servidor
       - HOST=0.0.0.0
       - HOSTNAME=0.0.0.0
       - NEXT_TELEMETRY_DISABLED=1
@@ -30,16 +39,25 @@ services:
       - DB_USER=${DB_USER:-Indicadores}
       - DB_PASSWORD=${DB_PASSWORD}
       - DB_NAME=${DB_NAME:-indicadores}
+    
+    # Arquivo .env (opcional, para desenvolvimento local)
+    # No Coolify, configure as variáveis diretamente no painel
     env_file:
       - .env
+    
+    # Health check - verifica se a aplicação está respondendo
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3005/api/health"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 20s
+    
     # Comando para iniciar o servidor Next.js standalone
+    # O server-start.js força o hostname a 0.0.0.0 e mostra IP real nos logs
     command: node server-start.js
+    
+    # Rede isolada (opcional, mas recomendado)
     networks:
       - app-network
 
