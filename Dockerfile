@@ -20,9 +20,11 @@ RUN npm ci
 # Copia todo o código (incluindo scripts Python)
 COPY . .
 
-# Instala dependências Python se houver requirements.txt não vazio
-RUN if [ ! -f requirements.txt ]; then touch requirements.txt; fi
-RUN if [ -s requirements.txt ]; then pip3 install --no-cache-dir -r requirements.txt; fi
+# Instala dependências Python em ambiente virtual para evitar limitações do sistema
+RUN python3 -m venv /venv
+ENV PATH="/venv/bin:$PATH"
+
+RUN if [ -s requirements.txt ]; then pip install --no-cache-dir -r requirements.txt; fi
 
 # Build de produção do Next.js (espera que output: "standalone" esteja habilitado)
 ENV NODE_ENV=production
