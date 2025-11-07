@@ -16,6 +16,7 @@ import { formatCurrency } from "@/utils/bonificacao"
 import jsPDF from "jspdf"
 import autoTable from "jspdf-autotable"
 import { formatDateBR, formatDateISO, getDateParts } from "@/lib/date-utils"
+import QvLogoImage from "@/logo/qv-beneficios.png"
 
 interface HistoricoData {
   id?: number
@@ -557,12 +558,14 @@ export default function HistoricoBonificacoesPage() {
       // Tentar adicionar logo
       try {
         // Carregar logo da pasta public/logo
-        const logoPath = '/logo/qv-beneficios.png'
         const logoWidth = 40
         const logoHeight = 15
+        const logoSrc = typeof QvLogoImage === "string"
+          ? QvLogoImage
+          : (QvLogoImage as { src?: string }).src || "/logo/qv-beneficios.png"
         
         // Carregar imagem como base64
-        const response = await fetch(logoPath)
+        const response = await fetch(logoSrc, { cache: "no-store" })
         if (!response.ok) throw new Error('Logo não encontrado')
         
         const blob = await response.blob()
