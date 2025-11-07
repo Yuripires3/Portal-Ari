@@ -31,6 +31,8 @@ COPY . .
 
 # Cria um requirements.txt vazio caso não exista para permitir COPY condicional na stage final
 RUN if [ ! -f requirements.txt ]; then touch requirements.txt; fi
+# Garante que a pasta de scripts exista mesmo que não haja scripts no repositório
+RUN mkdir -p scripts
 
 # Variáveis de ambiente para build
 # Aumentar memória para evitar OOM durante o build
