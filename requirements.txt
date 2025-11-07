@@ -1,0 +1,10 @@
+pandas
+numpy
+SQLAlchemy
+mysqlclient
+orjson
+openpyxl
+requests
+python-dateutil
+tzlocal
+

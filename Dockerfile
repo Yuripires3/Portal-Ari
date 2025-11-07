@@ -20,6 +20,9 @@ RUN if [ -s requirements.txt ]; then pip3 install --no-cache-dir -r requirements
 ENV NODE_ENV=production
 RUN npm run build
 
+# Disponibiliza scripts também dentro de .next/standalone para acesso em produção
+RUN if [ -d scripts ]; then mkdir -p .next/standalone/scripts && cp -r scripts/. .next/standalone/scripts/; fi
+
 # Define porta/host padrão e expõe a porta 3005
 ENV PORT=3005
 ENV HOST=0.0.0.0
