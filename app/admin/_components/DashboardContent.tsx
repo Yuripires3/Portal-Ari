@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useEffect, useState, useCallback, useMemo, type KeyboardEvent } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -16,7 +16,8 @@ import {
   TrendingDown,
   Activity,
   Filter,
-  RefreshCw
+  RefreshCw,
+  X
 } from "lucide-react"
 import {
   BarChart,
@@ -107,6 +108,16 @@ const getCorOperadora = (operadora: string, index: number): string => {
   return "#002f67"
 }
 
+const normalizeTexto = (valor: string) => normalizarNomeOperadora(valor).toLowerCase()
+
+const getPrimeiroDiaMesAtualISO = () => {
+  const hoje = new Date()
+  const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
+  return formatDateISO(primeiroDiaMes)
+}
+
+const getHojeISO = () => formatDateISO(new Date())
+
 // Tipos
 type Kpis = {
   comissoesMes: number
@@ -144,21 +155,22 @@ export default function DashboardContent() {
     const param = searchParams.get("inicio")
     if (param) return param
     // Padrão: primeiro dia do mês atual
-    const hoje = new Date()
-    const primeiroDiaMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1)
-    return formatDateISO(primeiroDiaMes)
+    return getPrimeiroDiaMesAtualISO()
   })
   const [dataFim, setDataFim] = useState(() => {
     const param = searchParams.get("fim")
     if (param) return param
     // Padrão: data do dia atual
-    return formatDateISO(new Date())
+    return getHojeISO()
   })
   const [operadora, setOperadora] = useState(searchParams.get("operadora") || "")
+  const [operadoraQuery, setOperadoraQuery] = useState(searchParams.get("operadora") || "")
+  const [operadoraFocused, setOperadoraFocused] = useState(false)
   const [entidades, setEntidades] = useState<string[]>(() => {
     const entidadesParam = searchParams.get("entidade")
     return entidadesParam ? entidadesParam.split(",") : []
   })
+  const [entidadeSelectKey, setEntidadeSelectKey] = useState(0)
   const [papel, setPapel] = useState<"geral" | "corretores" | "supervisores">(
     (searchParams.get("papel") as "geral" | "corretores" | "supervisores") || "geral"
   )
@@ -177,6 +189,7 @@ export default function DashboardContent() {
   // Estados de filtros disponíveis
   const [operadorasDisponiveis, setOperadorasDisponiveis] = useState<string[]>([])
   const [entidadesDisponiveis, setEntidadesDisponiveis] = useState<string[]>([])
+  const [entidadesPorOperadora, setEntidadesPorOperadora] = useState<Record<string, string[]>>({})
 
   // Estados de loading
   const [loading, setLoading] = useState(true)
@@ -195,6 +208,30 @@ export default function DashboardContent() {
     return date.toLocaleDateString("pt-BR", { month: "short", year: "numeric" })
   }
 
+  const operadoraInputValue = operadora || operadoraQuery
+
+  const operadoraSuggestions = useMemo(() => {
+    if (!operadorasDisponiveis.length) return [] as string[]
+
+    if (!operadoraQuery.trim()) {
+      return operadorasDisponiveis
+    }
+
+    const termo = normalizeTexto(operadoraQuery)
+    return operadorasDisponiveis.filter(op => normalizeTexto(op).includes(termo))
+  }, [operadoraQuery, operadorasDisponiveis])
+
+  const entidadesBase = useMemo(() => {
+    if (operadora && entidadesPorOperadora[operadora]) {
+      return entidadesPorOperadora[operadora]
+    }
+    return entidadesDisponiveis
+  }, [operadora, entidadesDisponiveis, entidadesPorOperadora])
+
+  const entidadesDisponiveisParaSelecao = useMemo(() => {
+    return entidadesBase.filter(ent => !entidades.includes(ent))
+  }, [entidadesBase, entidades])
+
   // Carregar filtros disponíveis
   useEffect(() => {
     const loadFiltros = async () => {
@@ -204,6 +241,7 @@ export default function DashboardContent() {
         const data = await res.json()
         setOperadorasDisponiveis(data.operadoras || [])
         setEntidadesDisponiveis(data.entidades || [])
+        setEntidadesPorOperadora(data.entidadesPorOperadora || {})
       } catch (error: any) {
         console.error("Erro ao carregar filtros:", error)
         toast({
@@ -217,6 +255,17 @@ export default function DashboardContent() {
     }
     loadFiltros()
   }, [toast])
+
+  useEffect(() => {
+    if (loadingFiltros) return
+
+    if (operadora && !operadorasDisponiveis.includes(operadora)) {
+      setOperadora("")
+      setOperadoraQuery("")
+      setEntidades([])
+      setEntidadeSelectKey(prev => prev + 1)
+    }
+  }, [loadingFiltros, operadora, operadorasDisponiveis])
 
   // Carregar dados do dashboard
   const loadDashboard = useCallback(async () => {
@@ -450,6 +499,20 @@ export default function DashboardContent() {
     router.replace(`/admin?${params.toString()}`, { scroll: false })
   }, [dataInicio, dataFim, operadora, entidades, papel, router])
 
+  useEffect(() => {
+    if (loadingFiltros) return
+
+    const entidadesValidas = new Set(entidadesBase)
+    setEntidades(prev => {
+      if (!prev.length) return prev
+      const filtradas = prev.filter(ent => entidadesValidas.has(ent))
+      if (filtradas.length === prev.length && filtradas.every((valor, index) => valor === prev[index])) {
+        return prev
+      }
+      return filtradas
+    })
+  }, [entidadesBase, loadingFiltros])
+
 
   // Toggle entidade no filtro
   const toggleEntidade = (entidade: string) => {
@@ -459,6 +522,52 @@ export default function DashboardContent() {
         : [...prev, entidade]
     )
   }
+
+  const handleOperadoraInputChange = useCallback((value: string) => {
+    setOperadoraQuery(value)
+
+    if (!value.trim()) {
+      if (operadora) {
+        setOperadora("")
+      }
+      setEntidades([])
+      setEntidadeSelectKey(prev => prev + 1)
+      return
+    }
+
+    if (operadora) {
+      setOperadora("")
+      setEntidades([])
+      setEntidadeSelectKey(prev => prev + 1)
+    }
+  }, [operadora])
+
+  const handleSelectOperadora = useCallback((valor: string) => {
+    setOperadora(valor)
+    setOperadoraQuery(valor)
+    setEntidades([])
+    setEntidadeSelectKey(prev => prev + 1)
+    setOperadoraFocused(false)
+  }, [])
+
+  const handleOperadoraKeyDown = useCallback((event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Enter" && operadoraSuggestions.length > 0) {
+      event.preventDefault()
+      handleSelectOperadora(operadoraSuggestions[0])
+      setOperadoraFocused(false)
+    }
+  }, [handleSelectOperadora, operadoraSuggestions])
+
+  const clearFilters = useCallback(() => {
+    setDataInicio(getPrimeiroDiaMesAtualISO())
+    setDataFim(getHojeISO())
+    setOperadora("")
+    setOperadoraQuery("")
+    setOperadoraFocused(false)
+    setEntidades([])
+    setEntidadeSelectKey(prev => prev + 1)
+    setPapel("geral")
+  }, [])
 
 
   return (
@@ -501,46 +610,73 @@ export default function DashboardContent() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="operadora">Operadora</Label>
-              <Select value={operadora || undefined} onValueChange={(val) => setOperadora(val || "")}>
-                <SelectTrigger id="operadora">
-                  <SelectValue placeholder="Todas" />
-                </SelectTrigger>
-                <SelectContent>
-                  {operadorasDisponiveis.map(op => (
-                    <SelectItem key={op} value={op}>{op}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {operadora && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setOperadora("")}
-                  className="h-6 text-xs"
-                >
-                  Limpar filtro
-                </Button>
-              )}
+              <div className="relative">
+                <Input
+                  id="operadora"
+                  placeholder="Digite para buscar"
+                  value={operadoraInputValue}
+                  onFocus={() => setOperadoraFocused(true)}
+                  onBlur={() => setTimeout(() => setOperadoraFocused(false), 150)}
+                  onChange={(e) => handleOperadoraInputChange(e.target.value)}
+                  onKeyDown={handleOperadoraKeyDown}
+                  autoComplete="off"
+                  className="bg-white"
+                />
+                {operadoraInputValue && (
+                  <button
+                    type="button"
+                    aria-label="Limpar operadora"
+                    onClick={() => {
+                      handleOperadoraInputChange("")
+                      setOperadoraFocused(true)
+                    }}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
+                {operadoraFocused && operadoraSuggestions.length > 0 && (
+                  <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-md border bg-white shadow">
+                    {operadoraSuggestions.map((op) => (
+                      <button
+                        key={op}
+                        type="button"
+                        onClick={() => handleSelectOperadora(op)}
+                        className="block w-full px-3 py-2 text-left hover:bg-zinc-100"
+                      >
+                        {op}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="space-y-2">
               <Label>Entidades</Label>
-              <Select 
-                value={entidades.length > 0 ? entidades[0] : undefined} 
+              <Select
+                key={entidadeSelectKey}
                 onValueChange={(val) => {
-                  if (val && !entidades.includes(val)) {
-                    setEntidades([...entidades, val])
+                  if (val && val !== "__no-entidade" && !entidades.includes(val)) {
+                    setEntidades(prev => [...prev, val])
                   }
+                  setEntidadeSelectKey(prev => prev + 1)
                 }}
+                disabled={entidadesDisponiveisParaSelecao.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder="Selecione" />
+                  <SelectValue placeholder={operadora ? "Selecione a entidade" : "Selecione"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {entidadesDisponiveis
-                    .filter(e => !entidades.includes(e))
-                    .map(ent => (
-                      <SelectItem key={ent} value={ent}>{ent}</SelectItem>
-                    ))}
+                  {entidadesDisponiveisParaSelecao.map(ent => (
+                    <SelectItem key={ent} value={ent}>
+                      {ent}
+                    </SelectItem>
+                  ))}
+                  {entidadesDisponiveisParaSelecao.length === 0 && (
+                    <SelectItem value="__no-entidade" disabled>
+                      {operadora ? "Sem entidades disponíveis" : "Nenhuma entidade disponível"}
+                    </SelectItem>
+                  )}
                 </SelectContent>
               </Select>
               {entidades.length > 0 && (
@@ -577,9 +713,12 @@ export default function DashboardContent() {
               </Select>
             </div>
           </div>
-          <div className="mt-4 flex justify-end">
-            <Button onClick={() => loadDashboard()} variant="outline" size="sm">
-              <RefreshCw className="h-4 w-4 mr-2" />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button variant="outline" size="sm" onClick={clearFilters}>
+              Limpar
+            </Button>
+            <Button onClick={() => loadDashboard()} size="sm" className="gap-2">
+              <RefreshCw className="h-4 w-4" />
               Atualizar
             </Button>
           </div>

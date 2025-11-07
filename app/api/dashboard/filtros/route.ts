@@ -33,6 +33,31 @@ export async function GET(request: NextRequest) {
        ORDER BY entidade ASC`
     )
 
+    // Buscar entidades por operadora em todo o histórico
+    const [entidadesPorOperadoraRaw]: any = await connection.execute(
+      `SELECT DISTINCT operadora, entidade
+       FROM unificado_bonificacao
+       WHERE operadora IS NOT NULL AND operadora != ''
+         AND entidade IS NOT NULL AND entidade != ''
+       ORDER BY operadora ASC, entidade ASC`
+    )
+
+    const entidadesPorOperadora = entidadesPorOperadoraRaw.reduce((acc: Record<string, string[]>, row: any) => {
+      const operadora = row.operadora
+      const entidade = row.entidade
+
+      if (!operadora || !entidade) return acc
+
+      if (!acc[operadora]) {
+        acc[operadora] = []
+      }
+
+      if (!acc[operadora].includes(entidade)) {
+        acc[operadora].push(entidade)
+      }
+      return acc
+    }, {})
+
     // Buscar última data registrada
     const [ultimaData]: any = await connection.execute(
       `SELECT MAX(COALESCE(dt_pagamento, dt_analise)) as ultima_data
@@ -47,6 +72,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({
       operadoras: operadoras.map((row: any) => row.operadora).filter(Boolean),
       entidades: entidades.map((row: any) => row.entidade).filter(Boolean),
+      entidadesPorOperadora,
       ultimaData: ultimaDataStr
     })
   } catch (error: any) {
