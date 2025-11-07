@@ -9,55 +9,36 @@ services:
     container_name: payment-and-commission-platform
     restart: always
 
-    # Mapeamento de portas - mantido em 3005
     ports:
       - "3005:3005"
 
-    # Garante que o código (incluindo scripts Python) fique disponível dentro do container
-    volumes:
-      - .:/app
-
-    # Define o diretório de trabalho padrão para todos os comandos/execs
-    working_dir: /app
-
     environment:
-      - NODE_ENV=production
-      - PORT=3005
-      - HOST=0.0.0.0
-      - TZ=America/Sao_Paulo
-      - APP_TIMEZONE=America/Sao_Paulo
-      # Removido HOSTNAME=0.0.0.0 (isso só confunde o Node)
-      # Define o IP real ou domínio público do servidor:
-      - PUBLIC_HOST=http://82.25.66.17:3005
-      - NEXT_PUBLIC_SITE_URL=http://82.25.66.17:3005
-      - NEXT_TELEMETRY_DISABLED=1
-      - NEXT_USE_TURBOPACK=0
-
-      # Banco de dados
-      # Servidor MySQL: IP público 201.76.177.134:3306
-      # Hostname interno: sql (192.168.1.193)
-      # IMPORTANTE: Valor fixo para garantir que sempre use o IP público correto
-      # Se precisar mudar, altere aqui ou defina DB_HOST no Coolify para sobrescrever
-      - DB_HOST=201.76.177.134
-      - DB_DEBUG=${DB_DEBUG:-false}
-      - DB_PORT=${DB_PORT:-3306}
-      - DB_USER=${DB_USER:-Indicadores}
-      - DB_PASSWORD=${DB_PASSWORD:-xEth+vOHltr*c4Eju3+t}
-      - DB_NAME=${DB_NAME:-indicadores}
+      NODE_ENV: production
+      PORT: 3005
+      HOSTNAME: 0.0.0.0
+      HOST: 0.0.0.0
+      TZ: America/Sao_Paulo
+      APP_TIMEZONE: America/Sao_Paulo
+      PUBLIC_HOST: http://82.25.66.17:3005
+      NEXT_PUBLIC_SITE_URL: https://app.ari.com.br
+      NEXT_TELEMETRY_DISABLED: "1"
+      NEXT_USE_TURBOPACK: "0"
+      DB_HOST: 201.76.177.134
+      DB_DEBUG: ${DB_DEBUG:-false}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_USER: ${DB_USER:-Indicadores}
+      DB_PASSWORD: ${DB_PASSWORD:-xEth+vOHltr*c4Eju3+t}
+      DB_NAME: ${DB_NAME:-indicadores}
 
     env_file:
       - .env
 
-    # Healthcheck - apontando para uma rota válida do Next.js
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:3005 || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:3005/api/health || curl -f http://localhost:3005/ || exit 1"]
       interval: 20s
       timeout: 5s
       retries: 4
       start_period: 25s
-
-    # Início do servidor
-    command: node server-start.js
 
     labels:
       - "coolify.managed=true"
