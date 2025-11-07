@@ -32,6 +32,7 @@ interface CalculoResult {
     df5: any[]
     desc: any[]
     unif_bonif: any[]
+    unif_com: any[]
   }
 }
 

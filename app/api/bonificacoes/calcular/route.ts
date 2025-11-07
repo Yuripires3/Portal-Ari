@@ -3,6 +3,8 @@ import { spawn } from "child_process"
 import path from "path"
 import { storeCalculoResult, generateExecId } from "@/lib/calculo-cache"
 import { pandasToArray } from "@/lib/pandas-utils"
+import { access } from "fs/promises"
+import { constants as fsConstants } from "fs"
 
 interface CalcularRequest {
   modo: "automatico" | "periodo"
@@ -54,6 +56,22 @@ export async function POST(request: NextRequest) {
 
     // Preparar parâmetros para o script Python
     const scriptPath = path.join(process.cwd(), "scripts", "calculo_bonificacao_completo.py")
+
+    try {
+      await access(scriptPath, fsConstants.F_OK)
+    } catch {
+      return NextResponse.json({
+        exec_id,
+        sucesso: false,
+        erro: "Script Python não encontrado no container.",
+        logs: `Caminho procurado: ${scriptPath}\nCertifique-se de que o arquivo foi copiado para a imagem.`,
+        preview_df5: [],
+        indicadores: null,
+        filtros: {},
+        sem_registro: {},
+        merges: {}
+      })
+    }
     const params = {
       modo,
       data_inicial: data_inicial || null,
@@ -75,7 +93,11 @@ export async function POST(request: NextRequest) {
     
     try {
       // Determinar comando Python (python3 ou python)
-      const pythonCmd = process.platform === "win32" ? "python" : "python3"
+      const pythonCmd = process.env.PYTHON_BIN
+        ? process.env.PYTHON_BIN
+        : process.platform === "win32"
+          ? "python"
+          : "python3"
       
       // Executar com entrada JSON via stdin usando spawn (melhor controle de stdin)
       const timeout = 600000 // 10 minutos (600000ms) - aumentado para processar grandes volumes de dados
@@ -83,10 +105,11 @@ export async function POST(request: NextRequest) {
       
       // Usar spawn para melhor controle de stdin/stdout/stderr
       const pythonProcess = spawn(pythonCmd, [scriptPath], {
-        stdio: ['pipe', 'pipe', 'pipe'],
-        maxBuffer: 100 * 1024 * 1024, // 100MB
-        encoding: 'utf8'
+        stdio: ['pipe', 'pipe', 'pipe']
       })
+
+      pythonProcess.stdout.setEncoding("utf8")
+      pythonProcess.stderr.setEncoding("utf8")
       
       // Resetar stdout e stderr para esta execução
       stdout = ''
@@ -126,10 +149,14 @@ export async function POST(request: NextRequest) {
       
       // Adicionar timeout manual
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => {
+        const timeoutId = setTimeout(() => {
           pythonProcess.kill() // Matar processo se timeout
           reject(new Error(`Timeout: Script Python demorou mais de ${timeout / 1000} segundos para executar`))
         }, timeout)
+
+        pythonProcess.on("close", () => clearTimeout(timeoutId))
+        pythonProcess.on("exit", () => clearTimeout(timeoutId))
+        pythonProcess.on("error", () => clearTimeout(timeoutId))
       })
       
       const result = await Promise.race([processPromise, timeoutPromise])
@@ -315,6 +342,8 @@ export async function POST(request: NextRequest) {
     }
 
     // Processar resultados
+    const ensureArray = (value: any): any[] => Array.isArray(value) ? value : []
+
     const preview_df5 = pandasToArray(pythonResult.preview_df5 || pythonResult.df5 || []).slice(0, 50)
     const df5_completo = pandasToArray(pythonResult.df5 || [])
     const calc_pag = pandasToArray(pythonResult.calc_pag || [])
@@ -325,7 +354,8 @@ export async function POST(request: NextRequest) {
     const unif_com = pandasToArray(pythonResult.unif_com || [])
 
     // Extrair indicadores
-    const indicadores = pythonResult.indicadores || {
+    const indicadoresRaw = pythonResult.indicadores || {}
+    const indicadores = {
       vlr_bruto_total: "R$ 0,00",
       vlr_bruto_cor: "R$ 0,00",
       vlr_bruto_sup: "R$ 0,00",
@@ -338,11 +368,26 @@ export async function POST(request: NextRequest) {
       prop_inicial: 0,
       ticket_medio: "R$ 0,00",
       vidas_pagas: 0
+      , ...indicadoresRaw
     }
 
-    const filtros = pythonResult.filtros || {}
-    const sem_registro = pythonResult.sem_registro || {}
-    const merges = pythonResult.merges || {}
+    const sanitizeRecordOfArrays = (value: any): Record<string, any[]> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+      return Object.fromEntries(
+        Object.entries(value).map(([key, val]) => [key, ensureArray(val)])
+      )
+    }
+
+    const sanitizeRecordOfStrings = (value: any): Record<string, string> => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+      return Object.fromEntries(
+        Object.entries(value).map(([key, val]) => [key, String(val ?? "")])
+      )
+    }
+
+    const filtros = sanitizeRecordOfArrays(pythonResult.filtros)
+    const sem_registro = sanitizeRecordOfArrays(pythonResult.sem_registro)
+    const merges = sanitizeRecordOfStrings(pythonResult.merges)
 
     // Verificar se há erro de "Fora da data de virada"
     const foraDaVirada = logs.includes("Fora da data de virada") || pythonResult.erro?.includes("Fora da data de virada")
@@ -376,21 +421,25 @@ export async function POST(request: NextRequest) {
     })
 
     // Armazenar resultados no cache
-    storeCalculoResult(exec_id, {
-      logs: pythonResult.logs || logs,
-      preview_df5,
-      indicadores,
-      filtros,
-      sem_registro,
-      merges,
-      calc_pag,
-      df4_sem_pix,
-      df4_com_pix,
-      df5: df5_completo,
-      desc,
-      unif_bonif,
-      unif_com
-    })
+    try {
+      storeCalculoResult(exec_id, {
+        logs: typeof pythonResult.logs === "string" ? pythonResult.logs : logs,
+        preview_df5,
+        indicadores,
+        filtros,
+        sem_registro,
+        merges,
+        calc_pag,
+        df4_sem_pix,
+        df4_com_pix,
+        df5: df5_completo,
+        desc,
+        unif_bonif,
+        unif_com
+      })
+    } catch (cacheError: any) {
+      console.error("Erro ao armazenar cálculo no cache:", cacheError)
+    }
 
     return NextResponse.json(
       {
