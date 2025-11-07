@@ -353,7 +353,7 @@ def main():
                 
                 encoded_password = quote_plus('xEth+vOHltr*c4Eju3+t')
                 # Adicionar charset utf8mb4 na conexão para garantir encoding correto
-                connection_string = f"mysql+mysqldb://Indicadores:{encoded_password}@192.168.1.193:3306/indicadores?charset=utf8mb4"
+                connection_string = f"mysql+mysqldb://Indicadores:{encoded_password}@201.76.177.134:3306/indicadores?charset=utf8mb4"
                 log_print(f"[Conexao] Tentando conectar ao banco de dados...")
                 engine = create_engine(
                     connection_string,
