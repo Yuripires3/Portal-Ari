@@ -1427,7 +1427,7 @@ def main():
             desc['movimentacao'] = 'desconto realizado'
             desc['registro'] = dt.today().strftime('%Y-%m-%d %H:%M:%S')
             desc.columns = ['dt_movimentacao', 'cpf', 'nome', 'valor', 'dt_apuracao', 'tipo_movimentacao', 'registro']
-            
+            desc = desc[desc['valor'] != 0]
             # Adicionar campos de staging para novos registros
             # Obter run_id e session_id do input_data se disponíveis
             run_id = input_data.get('run_id')
