@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast"
 import { Pencil, Check, X, Plus, Trash2 } from "lucide-react"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { normalizeClassification } from "@/lib/permissions"
 import { signalPageLoaded } from "@/components/ui/page-loading"
 
 interface UserRow {
@@ -35,7 +36,11 @@ export default function CadastroUsuariosPage() {
       const res = await fetch("/api/admin/users")
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || "Erro ao carregar usuários")
-      setUsers(data.users as UserRow[])
+      const normalizedUsers = (data.users as UserRow[]).map((user) => ({
+        ...user,
+        classificacao: normalizeClassification({ classificacao: user.classificacao }) || "USUARIO",
+      }))
+      setUsers(normalizedUsers)
     } catch (e) {
       toast({ title: "Erro", description: e instanceof Error ? e.message : "Falha ao carregar usuários", variant: "destructive" })
     } finally {
