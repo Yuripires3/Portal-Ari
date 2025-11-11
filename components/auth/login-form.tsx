@@ -118,9 +118,9 @@ export function LoginForm() {
         <a 
           className="underline font-medium hover:no-underline transition-all duration-200" 
           style={{ color: '#f58220' }}
-          href="mailto:ti@qvsaude.com.br"
+          href="mailto:yuri.oliveira@qvsaude.com.br"
         >
-          ti@qvsaude.com.br
+          (21) 2212-2018 / yuri.oliveira@qvsaude.com.br
         </a>
       </div>
       <div className="text-center text-xs text-gray-400 mt-4">

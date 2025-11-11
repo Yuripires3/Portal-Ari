@@ -1046,10 +1046,8 @@ def main():
                                            x['entidade_nova'], x['plano_novo'], x['vigencia']), axis=1
             )
             
-            CUT = pd.Timestamp('2025-11-20')
             mask = (
                 (df2['operadora'] == 'NOVA SAUDE') &
-                (df2['vigencia'] <= CUT) &
                 (df2['idade'].between(3, 18, inclusive='both')) &
                 (df2['plano'].astype('string').str.contains('AD COPART', case=False, na=False, regex=False)) &
                 (df2['entidade'].astype('string').str.contains('ABRAE', case=False, na=False, regex=False))
@@ -1194,8 +1192,43 @@ def main():
             
             etapa("Unificando corretores e supervisores...", 85)
             df4 = pd.concat([df_corretor.assign(tipo_vendedor='corretor'), df_supervisor.assign(tipo_vendedor='supervisor')], ignore_index=True)
-            
+
+            def _clean(series: pd.Series) -> pd.Series:
+                return (
+                    series.astype("string")
+                    .fillna(pd.NA)
+                    .str.strip()
+                    .replace({"": pd.NA, "nan": pd.NA, "None": pd.NA, "NULL": pd.NA})
+                )
+
+            def coalesce(df: pd.DataFrame, cols: list[str]) -> pd.Series:
+                existing = [c for c in cols if c in df.columns]
+                if not existing:
+                    return pd.Series([""] * len(df), dtype="string")
+                temp = df[existing].apply(_clean)
+                return temp.bfill(axis=1).iloc[:, 0].fillna("").astype("string")
+
+            df4.columns = df4.columns.str.strip()
+            df4['chave_pix'] = _clean(df4['chave_pix'])
             df4_sem_pix = df4[df4['chave_pix'].isna()].copy().reset_index(drop=True)
+            df4_sem_pix = (
+                df4_sem_pix.sort_values(by=["cpf_vendedor", "nome_vendedor"], ascending=[True, False])
+                .drop_duplicates(subset="cpf_vendedor", keep="first")
+                .reset_index(drop=True)
+            )
+
+            df4_sem_pix["NOME_RAZAO_SOCIAL"] = coalesce(df4_sem_pix, ["nome_vendedor", "nome"])
+            df4_sem_pix["CPF_CNPJ"] = coalesce(df4_sem_pix, ["cpf_vendedor", "cpf"])
+            df4_sem_pix["EMAIL"] = coalesce(df4_sem_pix, ["email", "email_vendedor", "email_2"])
+            df4_sem_pix["CELULAR"] = coalesce(df4_sem_pix, ["celular", "celular_vendedor", "celular_2"])
+            df4_sem_pix["VALOR"] = 0
+            df4_sem_pix = df4_sem_pix[["NOME_RAZAO_SOCIAL", "CPF_CNPJ", "EMAIL", "CELULAR", "VALOR"]]
+
+            print("[DBG] df4_sem_pix cols:", list(df4_sem_pix.columns))
+            sample_rows = df4_sem_pix.head(3).to_dict(orient="records")
+            print("[DBG] df4_sem_pix sample (3):", sample_rows)
+            empty_names = df4_sem_pix["NOME_RAZAO_SOCIAL"].isna() | (df4_sem_pix["NOME_RAZAO_SOCIAL"] == "")
+            print("[DBG] empty names:", int(empty_names.sum()))
             df4_com_pix = df4[~df4['chave_pix'].isna()].copy().reset_index(drop=True)
             
             etapa("Calculando descontos e valores finais...", 86)
@@ -1683,6 +1716,10 @@ def main():
                 if progress_callback:
                     progress_callback(95.4)
                 
+                # Substituir valores não numéricos serializáveis (NaN/Inf) por None
+                if df_limited.isnull().values.any():
+                    df_limited = df_limited.where(pd.notnull(df_limited), None)
+
                 # Usar to_dict('records') direto (otimizado pelo pandas)
                 result = df_limited.to_dict('records')
                 
@@ -1726,7 +1763,7 @@ def main():
                 
                 while processed < rows_to_process:
                     chunk_end = min(processed + chunk_size, rows_to_process)
-                    chunk = df.iloc[processed:chunk_end]
+                    chunk = df.iloc[processed:chunk_end].copy()
                     
                     # Converter datetimes (se houver)
                     if datetime_cols:
@@ -1743,6 +1780,10 @@ def main():
                         for col in cols_to_convert_float:
                             if col in chunk.columns:
                                 chunk[col] = chunk[col].astype('float32')
+                    
+                    # Substituir valores não serializáveis (NaN/Inf) por None
+                    if chunk.isnull().values.any():
+                        chunk = chunk.where(pd.notnull(chunk), None)
                     
                     # Converter chunk para dict (mais eficiente que iterrows)
                     chunk_dict = chunk.to_dict('records')

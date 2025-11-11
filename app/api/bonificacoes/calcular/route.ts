@@ -81,7 +81,8 @@ export async function POST(request: NextRequest) {
       include_frames: {
         df5: true,
         unif_bonif: true,
-        unif_com: true
+        unif_com: true,
+        df4_sem_pix: true
       }
     }
 
@@ -353,11 +354,46 @@ export async function POST(request: NextRequest) {
     const preview_df5 = pandasToArray(pythonResult.preview_df5 || pythonResult.df5 || []).slice(0, 50)
     const df5_completo = pandasToArray(pythonResult.df5 || [])
     const calc_pag = pandasToArray(pythonResult.calc_pag || [])
-    const df4_sem_pix = pandasToArray(pythonResult.df4_sem_pix || [])
+    let df4_sem_pix = pandasToArray(pythonResult.df4_sem_pix || [])
     const df4_com_pix = pandasToArray(pythonResult.df4_com_pix || [])
     const desc = pandasToArray(pythonResult.desc || [])
     const unif_bonif = pandasToArray(pythonResult.unif_bonif || [])
     const unif_com = pandasToArray(pythonResult.unif_com || [])
+
+    // Garantir que df4_sem_pix traga apenas colunas permitidas
+    const df4SemPixColumnsAllowed = [
+      "NOME_RAZAO_SOCIAL",
+      "CPF_CNPJ",
+      "EMAIL",
+      "CELULAR",
+      "VALOR"
+    ]
+
+    if (df4_sem_pix.length > 0) {
+      df4_sem_pix = df4_sem_pix.map((row) => {
+        const mappedRow: Record<string, any> = {}
+        df4SemPixColumnsAllowed.forEach((column) => {
+          if (column === "NOME_RAZAO_SOCIAL") {
+            mappedRow[column] =
+              row?.[column] ??
+              row?.["NOME/RAZÃO SOCIAL"] ??
+              row?.["NOME/RAZAO SOCIAL"] ??
+              row?.nome_vendedor ??
+              row?.nome ??
+              ""
+          } else if (column === "CPF_CNPJ") {
+            mappedRow[column] = row?.[column] ?? row?.["CPF/CNPJ"] ?? row?.cpf_vendedor ?? row?.cpf ?? ""
+          } else if (column === "EMAIL") {
+            mappedRow[column] = row?.[column] ?? row?.["E-MAIL"] ?? row?.email ?? ""
+          } else if (column === "CELULAR") {
+            mappedRow[column] = row?.[column] ?? row?.celular ?? row?.["CELULAR"] ?? ""
+      } else {
+        mappedRow[column] = row?.[column] ?? ""
+      }
+        })
+        return mappedRow
+      })
+    }
 
     // Extrair indicadores
     const indicadoresRaw = pythonResult.indicadores || {}
@@ -460,6 +496,7 @@ export async function POST(request: NextRequest) {
         df5_lite,
         unif_bonif: unif_bonif || [],
         unif_com: unif_com || [],
+        df4_sem_pix,
         data_pagamento: pythonResult.data_pagamento || null
       },
       {

@@ -73,14 +73,14 @@ export function AdminSidebar() {
               <SidebarMenuSub>
                 {bonificacoesSubmenu
                   .filter((subItem) => {
-                    // Ocultar "Calcular Bonificação" para usuários com classificacao COMERCIAL
-                    if (subItem.href === "/admin/bonificacoes/calculo") {
-                      const classificacao = user?.classificacao?.toUpperCase()
-                      const role = user?.role?.toUpperCase()
-                      // Verificar tanto classificacao quanto role (case-insensitive)
-                      if (classificacao === "COMERCIAL" || role === "COMERCIAL") {
-                        return false
-                      }
+                    const classificacao = user?.classificacao?.toUpperCase()
+                    const role = user?.role?.toUpperCase()
+                    if (classificacao === "COMERCIAL" || role === "COMERCIAL") {
+                      return (
+                        subItem.href === "/admin" ||
+                        subItem.href === "/admin/bonificacoes/historico" ||
+                        subItem.href === "/admin/bonificacoes/extrato-descontos"
+                      )
                     }
                     return true
                   })

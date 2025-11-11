@@ -22,6 +22,7 @@ import { Progress } from "@/components/ui/progress"
 import { ConfiguracaoExecucaoCard } from "./_components/ConfiguracaoExecucaoCard"
 import { useAuth } from "@/components/auth/auth-provider"
 import { formatDateBR, formatDateISO } from "@/lib/date-utils"
+import { downloadXlsxFromObjects } from "@/utils/downloadXlsx"
 
 interface Indicadores {
   vlr_bruto_total: string
@@ -51,6 +52,7 @@ interface CalculoResponse {
   merges: Record<string, string>
   unif_bonif?: any[]
   unif_com?: any[]
+  df4_sem_pix?: any[]
   data_pagamento?: string | null
 }
 
@@ -80,6 +82,7 @@ export default function CalculoBonificacaoPage() {
   // Estados para edição das tabelas unif_bonif e unif_com
   const [unifBonifData, setUnifBonifData] = useState<any[]>([])
   const [unifComData, setUnifComData] = useState<any[]>([])
+  const [df4SemPixData, setDf4SemPixData] = useState<any[]>([])
   const [editingUnifBonif, setEditingUnifBonif] = useState<{ rowIndex: number; field: string } | null>(null)
   const [editingUnifCom, setEditingUnifCom] = useState<{ rowIndex: number; field: string } | null>(null)
   const [validadoUnifBonif, setValidadoUnifBonif] = useState(false)
@@ -365,76 +368,72 @@ export default function CalculoBonificacaoPage() {
   }, [])
 
   // Guardar saída da página quando cálculo estiver em execução ou com resultado carregado
+  const CALCULO_STORAGE_KEY = "calculo_bonificacao_state"
+
+  // Desabilitei a guarda automática temporariamente a pedido do usuário para evitar limpeza de cache.
+
   useEffect(() => {
-    const shouldGuard = executando || (!!resultado && !registrando)
+    if (typeof window === "undefined") return
+    try {
+      const stored = window.sessionStorage.getItem(CALCULO_STORAGE_KEY)
+      if (!stored) return
+      const parsed = JSON.parse(stored)
+      if (!parsed || typeof parsed !== "object") return
+      setResultado(parsed.resultado ?? null)
+      setUnifBonifData(parsed.unifBonifData ?? [])
+      setUnifComData(parsed.unifComData ?? [])
+      setDf4SemPixData(parsed.df4SemPixData ?? [])
+      setValidadoUnifBonif(parsed.validadoUnifBonif ?? false)
+      setValidadoUnifCom(parsed.validadoUnifCom ?? false)
+      setRegistradoUnifBonif(parsed.registradoUnifBonif ?? false)
+      setRegistradoUnifCom(parsed.registradoUnifCom ?? false)
+      setDataApuracaoAtual(parsed.dataApuracaoAtual ?? null)
+      setIdsDescontosInseridos(parsed.idsDescontosInseridos ?? [])
+      setAutoDownloaded(parsed.autoDownloaded ?? false)
+    } catch (error) {
+      console.warn("[Persistência cálculo] Falha ao carregar estado persistido:", error)
+      window.sessionStorage.removeItem(CALCULO_STORAGE_KEY)
+    }
+  }, [])
 
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (!shouldGuard) return
-      e.preventDefault()
-      e.returnValue = "Ao sair da tela o cálculo será cancelado."
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (!resultado) {
+      window.sessionStorage.removeItem(CALCULO_STORAGE_KEY)
+      return
     }
-
-    const handleDocumentClick = (e: MouseEvent) => {
-      if (!shouldGuard) return
-      const target = e.target as HTMLElement | null
-      const link = target?.closest && (target.closest('a[href]') as HTMLAnchorElement | null)
-      if (!link) return
-      const href = link.getAttribute('href') || ""
-      if (!href) return
-      // Ignorar links de âncora interna e downloads
-      if (href.startsWith('#') || link.target === '_blank' || link.hasAttribute('download')) return
-      e.preventDefault()
-      e.stopPropagation()
-      setPendingHref(href)
-      setShowLeavePrompt(true)
+    const stateToPersist = {
+      resultado,
+      unifBonifData,
+      unifComData,
+      df4SemPixData,
+      validadoUnifBonif,
+      validadoUnifCom,
+      registradoUnifBonif,
+      registradoUnifCom,
+      dataApuracaoAtual,
+      idsDescontosInseridos,
+      autoDownloaded,
+      timestamp: Date.now()
     }
-
-    // Intercept programmatic navigation (history.pushState / replaceState)
-    const originalPushState = history.pushState
-    const originalReplaceState = history.replaceState
-    ;(history.pushState as any) = function (...args: any[]) {
-      if (shouldGuard) {
-        const url = typeof args[2] === 'string' ? args[2] : null
-        setPendingHref(url)
-        setPendingBack(false)
-        setShowLeavePrompt(true)
-        return
-      }
-      return originalPushState.apply(history, args as any)
+    try {
+      window.sessionStorage.setItem(CALCULO_STORAGE_KEY, JSON.stringify(stateToPersist))
+    } catch (error) {
+      console.warn("[Persistência cálculo] Falha ao salvar estado:", error)
     }
-    ;(history.replaceState as any) = function (...args: any[]) {
-      if (shouldGuard) {
-        const url = typeof args[2] === 'string' ? args[2] : null
-        setPendingHref(url)
-        setPendingBack(false)
-        setShowLeavePrompt(true)
-        return
-      }
-      return originalReplaceState.apply(history, args as any)
-    }
-
-    // Intercept browser back/forward
-    const handlePopState = (e: PopStateEvent) => {
-      if (!shouldGuard) return
-      e.preventDefault()
-      setPendingHref(null)
-      setPendingBack(true)
-      setShowLeavePrompt(true)
-      // cancel the navigation we just started
-      history.forward()
-    }
-
-    window.addEventListener('beforeunload', handleBeforeUnload)
-    document.addEventListener('click', handleDocumentClick, true)
-    window.addEventListener('popstate', handlePopState)
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload)
-      document.removeEventListener('click', handleDocumentClick, true)
-      window.removeEventListener('popstate', handlePopState)
-      history.pushState = originalPushState
-      history.replaceState = originalReplaceState
-    }
-  }, [executando, resultado, registrando])
+  }, [
+    resultado,
+    unifBonifData,
+    unifComData,
+    df4SemPixData,
+    validadoUnifBonif,
+    validadoUnifCom,
+    registradoUnifBonif,
+    registradoUnifCom,
+    dataApuracaoAtual,
+    idsDescontosInseridos,
+    autoDownloaded
+  ])
 
   // Se o usuário for COMERCIAL, não renderizar o conteúdo
   const classificacao = user?.classificacao?.toUpperCase()
@@ -724,6 +723,7 @@ export default function CalculoBonificacaoPage() {
 
     setExecutando(true)
     setResultado(null)
+    setDf4SemPixData([])
     setErroTecnico(null)
     setValidado(false)
     setProgresso(0)
@@ -800,6 +800,7 @@ export default function CalculoBonificacaoPage() {
       if (!response.ok) {
         throw new Error(data.erro || "Erro ao executar cálculo")
       }
+
 
       // Extrair informações das etapas dos logs
       const etapasInfo = extrairInfoEtapas(data.logs || "", data.etapas)
@@ -942,6 +943,7 @@ export default function CalculoBonificacaoPage() {
       if (data.unif_com) {
         setUnifComData(data.unif_com)
       }
+      setDf4SemPixData(normalizeDf4SemPix((data as any)?.df4_sem_pix || []))
 
       // Verificar se há erro de "Fora da data de virada"
       if (data.erro || !data.sucesso) {
@@ -1190,6 +1192,7 @@ export default function CalculoBonificacaoPage() {
     setEtapaAtual("")
     setUnifBonifData([])
     setUnifComData([])
+    setDf4SemPixData([])
     setValidadoUnifBonif(false)
     setValidadoUnifCom(false)
     setRegistradoUnifBonif(false)
@@ -1380,7 +1383,10 @@ export default function CalculoBonificacaoPage() {
       'nome_supervisor': 'Nome Supervisor',
       'vlr_bruto_supervisor': 'Valor Bruto Supervisor',
       'descontado': 'Descontado',
-      'chave_id': 'Chave ID'
+      'chave_id': 'Chave ID',
+      'NOME_RAZAO_SOCIAL': 'Nome/razão social',
+      'CPF_CNPJ': 'Cpf/cnpj',
+      'EMAIL': 'E-mail'
     }
     
     return columnNames[key.toLowerCase()] || key
@@ -1524,6 +1530,30 @@ export default function CalculoBonificacaoPage() {
   }
 
   const hojeStr = formatDateISO(new Date())
+  const DF4_SEM_PIX_COLUMNS = [
+    { key: "NOME_RAZAO_SOCIAL", label: "Nome/razão social" },
+    { key: "CPF_CNPJ", label: "Cpf/cnpj" },
+    { key: "EMAIL", label: "E-mail" },
+    { key: "CELULAR", label: "Celular" },
+    { key: "VALOR", label: "Valor" }
+  ]
+
+  const normalizeDf4SemPix = (rows: any[]): any[] => {
+    if (!Array.isArray(rows)) return []
+    return rows.map((r) => ({
+      NOME_RAZAO_SOCIAL:
+        r?.NOME_RAZAO_SOCIAL ??
+        r?.["NOME/RAZÃO SOCIAL"] ??
+        r?.["NOME/RAZAO SOCIAL"] ??
+        r?.nome_vendedor ??
+        r?.nome ??
+        "",
+      CPF_CNPJ: r?.CPF_CNPJ ?? r?.["CPF/CNPJ"] ?? r?.cpf_vendedor ?? r?.cpf ?? "",
+      EMAIL: r?.EMAIL ?? r?.["E-MAIL"] ?? r?.email ?? "",
+      CELULAR: r?.CELULAR ?? r?.celular ?? "",
+      VALOR: r?.VALOR ?? 0
+    }))
+  }
 
   return (
     <div className="w-full px-4 sm:px-6 lg:px-8 py-6 space-y-6">
@@ -1948,7 +1978,7 @@ export default function CalculoBonificacaoPage() {
               <CardContent className="space-y-3">
                 <div className="overflow-auto max-h-[600px] border rounded-md">
                   <Table className="min-w-full">
-                    <TableHeader className="sticky top-0 bg-white z-10">
+                    <TableHeader className="sticky top-0 z-10">
                       <TableRow>
                         {Object.keys(unifBonifData[0] || {}).filter(key => key !== 'desc').map((key) => (
                           <TableHead key={key} className="text-xs whitespace-nowrap">
@@ -2170,6 +2200,79 @@ export default function CalculoBonificacaoPage() {
             </Card>
           )}
 
+          {/* Tabela DF4 sem Pix (somente visualização) */}
+          {resultado && resultado.sucesso && df4SemPixData.length > 0 && (
+            <Card className="border shadow-sm bg-white">
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <CardTitle>Vendedor sem pix</CardTitle>
+                    <CardDescription>
+                      Dados exibidos apenas para consulta. Esta tabela não é registrada no banco.
+                    </CardDescription>
+                  </div>
+                  <Button
+                    variant="outline"
+                    disabled={!Array.isArray(df4SemPixData) || df4SemPixData.length === 0}
+                    onClick={async () => {
+                      const XLSX = await getXLSX()
+                      downloadXlsxFromObjects(
+                        df4SemPixData,
+                        `cadastro_E_plus_df4_sem_pix_${new Date().toISOString().slice(0, 16).replace("T", "_")}.xlsx`,
+                        XLSX
+                      )
+                      toast({ title: "Arquivo gerado com sucesso" })
+                    }}
+                  >
+                    <Download className="mr-2 h-4 w-4" />
+                    Baixar cadastro E+
+                  </Button>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="overflow-auto max-h-[600px] border rounded-md">
+                  <Table className="min-w-full">
+                    <TableHeader className="sticky top-0 bg-white z-10">
+                      <TableRow>
+                        {DF4_SEM_PIX_COLUMNS.map((column) => (
+                          <TableHead
+                            key={column.key}
+                            className="text-xs whitespace-nowrap px-2 py-1"
+                          >
+                            {column.label}
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {df4SemPixData.map((row, idx) => (
+                        <TableRow key={idx}>
+                          {DF4_SEM_PIX_COLUMNS.map((column) => {
+                            const value = (row as any)?.[column.key]
+                            const isDate = isDateField(column.key)
+                            return (
+                              <TableCell key={column.key} className="text-xs whitespace-nowrap px-2 py-1">
+                                {isDate ? formatDateDisplay(value) : normalizeValue(value)}
+                              </TableCell>
+                            )
+                          })}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
+
+          {resultado && resultado.sucesso && df4SemPixData.length === 0 && (
+            <Alert>
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Vendedor sem pix</AlertTitle>
+              <AlertDescription>Nenhum vendedor sem pix.</AlertDescription>
+            </Alert>
+          )}
+
           {/* Botão Fechar Resumo - aparece quando todas as tabelas disponíveis foram registradas */}
           {resultado && (() => {
             const temUnifBonif = unifBonifData.length > 0
@@ -2196,8 +2299,6 @@ export default function CalculoBonificacaoPage() {
                   <Button
                     onClick={() => {
                       cancelar()
-                      // Forçar atualização da página para garantir estado limpo
-                      window.location.reload()
                     }}
                     variant="outline"
                     className="w-full sm:w-auto"
