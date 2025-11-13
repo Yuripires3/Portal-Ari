@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getDBConnection } from "@/lib/db"
 
+const DATA_CORTE = "2025-10-01"
+
+const sanitizeCpfExpr = (field: string) =>
+  `REPLACE(REPLACE(REPLACE(REPLACE(TRIM(${field}), '.', ''), '-', ''), '/', ''), ' ', '')`
+
 export async function GET(request: NextRequest) {
   let connection: any = null
   
@@ -82,11 +87,13 @@ export async function GET(request: NextRequest) {
     const whereConditions: string[] = []
     const whereValues: any[] = []
 
+    const sanitizedUbcCpfExpr = sanitizeCpfExpr("ubc.cpf")
+
     if (cpf) {
       // Normalizar CPF removendo formatação (pontos e traços) antes de buscar
       const normalizedCpf = cpf.replace(/\D/g, "")
       // Remover formatação do CPF no banco antes de comparar
-      whereConditions.push("REPLACE(REPLACE(REPLACE(ubc.cpf, '.', ''), '-', ''), ' ', '') LIKE ?")
+      whereConditions.push(`${sanitizedUbcCpfExpr} LIKE ?`)
       whereValues.push(`%${normalizedCpf}%`)
     }
     if (nome) {
@@ -134,11 +141,14 @@ export async function GET(request: NextRequest) {
     const orderByClause = "ORDER BY ubc.`dt_pagamento` DESC, ubc.`tipo_premiado` ASC, COALESCE(ubc.`valor_carga`, 0) DESC, ubc.`id` DESC"
     
     // Construir query de forma mais segura - usar LIMIT e OFFSET diretamente na string (como na API de regras)
-    const cpfSanitize = "REPLACE(REPLACE(REPLACE(ubc.cpf, '.', ''), '-', ''), ' ', '')"
+    const cpfSanitize = sanitizedUbcCpfExpr
+    const sanitizeUnificadoCpf = sanitizeCpfExpr("ub.cpf_corretor")
+
     let query = `SELECT 
         ubc.cpf, 
         ubc.nome, 
         ubc.valor_carga, 
+        COALESCE(vb.valor_bruto, 0) AS valor_bruto,
         COALESCE(rd.desconto_realizado, 0) AS desconto_realizado,
         ubc.tipo_cartao, 
         ubc.premiacao, 
@@ -152,10 +162,10 @@ export async function GET(request: NextRequest) {
       FROM unificado_bonificacao_comercial ubc
       LEFT JOIN (
         SELECT 
-          REPLACE(REPLACE(REPLACE(cpf, '.', ''), '-', ''), ' ', '') AS cpf_normalizado,
+          ${sanitizeCpfExpr("rbd.cpf")} AS cpf_normalizado,
           dt_movimentacao,
           SUM(COALESCE(valor, 0)) AS desconto_realizado
-        FROM registro_bonificacao_descontos
+        FROM registro_bonificacao_descontos rbd
         WHERE 
           status = 'finalizado'
           AND is_active = TRUE
@@ -164,6 +174,25 @@ export async function GET(request: NextRequest) {
       ) rd 
         ON rd.cpf_normalizado = ${cpfSanitize}
         AND rd.dt_movimentacao = ubc.dt_pagamento
+      LEFT JOIN (
+        SELECT
+          ${sanitizeUnificadoCpf} AS cpf_normalizado,
+          DATE(ub.dt_analise) AS dt_analise,
+          SUM(
+            CASE
+              WHEN DATE(ub.dt_analise) < '${DATA_CORTE}'
+                THEN COALESCE(ub.vlr_bruto_corretor, 0) + COALESCE(ub.vlr_bruto_supervisor, 0)
+              ELSE COALESCE(ub.vlr_bruto_corretor, 0)
+            END
+          ) AS valor_bruto
+        FROM unificado_bonificacao ub
+        WHERE ub.dt_analise IS NOT NULL
+          AND ${sanitizeUnificadoCpf} IS NOT NULL
+          AND ${sanitizeUnificadoCpf} != ''
+        GROUP BY cpf_normalizado, DATE(ub.dt_analise)
+      ) vb 
+        ON vb.cpf_normalizado = ${cpfSanitize}
+        AND vb.dt_analise = DATE(ubc.dt_pagamento)
       LEFT JOIN registro_chave_pix rc ON rc.cpf = ubc.cpf`
     
     if (whereClause) {

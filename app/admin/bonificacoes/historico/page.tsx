@@ -24,6 +24,7 @@ interface HistoricoData {
   cpf?: string
   nome?: string
   valor_carga?: number | string
+  valor_bruto?: number | string | null
   desconto_realizado?: number | string | null
   tipo_cartao?: string
   premiacao?: number | string
@@ -1744,8 +1745,9 @@ export default function HistoricoBonificacoesPage() {
                 <TableRow>
                   <TableHead>CPF</TableHead>
                   <TableHead>Nome</TableHead>
-                  <TableHead>Valor Carga</TableHead>
+                  <TableHead>Valor Bruto</TableHead>
                   <TableHead>Desconto</TableHead>
+                  <TableHead>Valor Carga</TableHead>
                   <TableHead>Tipo Cartão</TableHead>
                   <TableHead>Premiação</TableHead>
                   <TableHead>Tipo Premiação</TableHead>
@@ -1758,13 +1760,13 @@ export default function HistoricoBonificacoesPage() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={(canDelete || canEdit) ? 11 : 10} className="text-center py-8">
+                    <TableCell colSpan={(canDelete || canEdit) ? 12 : 11} className="text-center py-8">
                       <p className="text-muted-foreground">Carregando...</p>
                     </TableCell>
                   </TableRow>
                 ) : data.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={(canDelete || canEdit) ? 11 : 10} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={(canDelete || canEdit) ? 12 : 11} className="text-center py-8 text-muted-foreground">
                       {filters.cpf || filters.nome || filters.tipo_premiado || filters.dt_pagamento_inicio ? (
                         <div className="space-y-2">
                           <p className="font-medium">Nenhum resultado encontrado</p>
@@ -1814,6 +1816,12 @@ export default function HistoricoBonificacoesPage() {
                           )}
                         </TableCell>
                         <TableCell>
+                          {formatCurrencyDisplay(row.valor_bruto)}
+                        </TableCell>
+                        <TableCell>
+                          {formatCurrencyDisplay(rowData.desconto_realizado)}
+                        </TableCell>
+                        <TableCell>
                           {isEditing ? (
                             <Input
                               type="number"
@@ -1829,9 +1837,6 @@ export default function HistoricoBonificacoesPage() {
                           ) : (
                             row.valor_carga ? formatCurrency(row.valor_carga) : ""
                           )}
-                        </TableCell>
-                        <TableCell>
-                          {formatCurrencyDisplay(rowData.desconto_realizado)}
                         </TableCell>
                         <TableCell>
                           {isEditing ? (
