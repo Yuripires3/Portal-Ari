@@ -134,10 +134,12 @@ export async function GET(request: NextRequest) {
     const orderByClause = "ORDER BY ubc.`dt_pagamento` DESC, ubc.`tipo_premiado` ASC, COALESCE(ubc.`valor_carga`, 0) DESC, ubc.`id` DESC"
     
     // Construir query de forma mais segura - usar LIMIT e OFFSET diretamente na string (como na API de regras)
+    const cpfSanitize = "REPLACE(REPLACE(REPLACE(ubc.cpf, '.', ''), '-', ''), ' ', '')"
     let query = `SELECT 
         ubc.cpf, 
         ubc.nome, 
         ubc.valor_carga, 
+        COALESCE(rd.desconto_realizado, 0) AS desconto_realizado,
         ubc.tipo_cartao, 
         ubc.premiacao, 
         ubc.tipo_premiado, 
@@ -148,6 +150,20 @@ export async function GET(request: NextRequest) {
         rc.chave_pix AS chave_pix,
         rc.tipo_chave AS tipo_chave
       FROM unificado_bonificacao_comercial ubc
+      LEFT JOIN (
+        SELECT 
+          REPLACE(REPLACE(REPLACE(cpf, '.', ''), '-', ''), ' ', '') AS cpf_normalizado,
+          dt_movimentacao,
+          SUM(COALESCE(valor, 0)) AS desconto_realizado
+        FROM registro_bonificacao_descontos
+        WHERE 
+          status = 'finalizado'
+          AND is_active = TRUE
+          AND LOWER(TRIM(tipo_movimentacao)) = 'desconto realizado'
+        GROUP BY cpf_normalizado, dt_movimentacao
+      ) rd 
+        ON rd.cpf_normalizado = ${cpfSanitize}
+        AND rd.dt_movimentacao = ubc.dt_pagamento
       LEFT JOIN registro_chave_pix rc ON rc.cpf = ubc.cpf`
     
     if (whereClause) {

@@ -24,6 +24,7 @@ interface HistoricoData {
   cpf?: string
   nome?: string
   valor_carga?: number | string
+  desconto_realizado?: number | string | null
   tipo_cartao?: string
   premiacao?: number | string
   tipo_premiado?: string
@@ -1265,6 +1266,19 @@ export default function HistoricoBonificacoesPage() {
     return formatted || (typeof date === "string" ? date : "")
   }
 
+  const formatCurrencyDisplay = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined || value === "") return ""
+    if (typeof value === "number") return formatCurrency(value)
+
+    const numeric = Number(value)
+    if (!Number.isNaN(numeric)) return formatCurrency(numeric)
+
+    const normalized = Number(String(value).replace(/\./g, "").replace(",", "."))
+    if (!Number.isNaN(normalized)) return formatCurrency(normalized)
+
+    return String(value)
+  }
+
   return (
     <div className="p-6 space-y-6 max-w-[1800px] mx-auto">
       <div>
@@ -1731,6 +1745,7 @@ export default function HistoricoBonificacoesPage() {
                   <TableHead>CPF</TableHead>
                   <TableHead>Nome</TableHead>
                   <TableHead>Valor Carga</TableHead>
+                  <TableHead>Desconto</TableHead>
                   <TableHead>Tipo Cartão</TableHead>
                   <TableHead>Premiação</TableHead>
                   <TableHead>Tipo Premiação</TableHead>
@@ -1743,13 +1758,13 @@ export default function HistoricoBonificacoesPage() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={(canDelete || canEdit) ? 10 : 9} className="text-center py-8">
+                    <TableCell colSpan={(canDelete || canEdit) ? 11 : 10} className="text-center py-8">
                       <p className="text-muted-foreground">Carregando...</p>
                     </TableCell>
                   </TableRow>
                 ) : data.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={(canDelete || canEdit) ? 10 : 9} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={(canDelete || canEdit) ? 11 : 10} className="text-center py-8 text-muted-foreground">
                       {filters.cpf || filters.nome || filters.tipo_premiado || filters.dt_pagamento_inicio ? (
                         <div className="space-y-2">
                           <p className="font-medium">Nenhum resultado encontrado</p>
@@ -1814,6 +1829,9 @@ export default function HistoricoBonificacoesPage() {
                           ) : (
                             row.valor_carga ? formatCurrency(row.valor_carga) : ""
                           )}
+                        </TableCell>
+                        <TableCell>
+                          {formatCurrencyDisplay(rowData.desconto_realizado)}
                         </TableCell>
                         <TableCell>
                           {isEditing ? (
