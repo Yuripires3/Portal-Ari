@@ -17,6 +17,10 @@ import pandas as pd
 import numpy as np
 import locale
 
+PREMIACAO_LABEL = "BONIFICAÇÃO"
+TIPO_PREMIADO_CORRETOR = "QV. SAÚDE - BONIFICAÇÃO CORRETOR"
+TIPO_PREMIADO_SUPERVISOR = "QV. SAÚDE - BONIFICAÇÃO SUPERVISOR"
+
 # Tentar importar orjson para serialização mais rápida
 try:
     import orjson  # pyright: ignore[reportMissingImports]
@@ -256,6 +260,7 @@ def main():
         max_rows_per_df = int(input_data.get("max_rows_per_df", 5000))
         include_logs = bool(input_data.get("include_logs", True))
         include_frames = input_data.get("include_frames", None)
+        persistir_unif_bonif = bool(input_data.get("persistir_unif_bonif", False))
         if include_frames is None:
             # Por padrão, não envia nenhuma tabela - apenas logs/prints
             include_frames = {
@@ -297,6 +302,7 @@ def main():
         data_final = resultado_datas["data_final"]
         data_inicial = resultado_datas["data_inicial"]
         n_apur = resultado_datas["n_apur"]
+        hoje = date.today()
         
         # Capturar todos os prints
         logs_parts = []
@@ -1248,7 +1254,7 @@ def main():
                 -max_desc_permitido
             )
             pag_cor['vlr_liquido'] = pag_cor['vlr_bruto'] + pag_cor['desc']
-            pag_cor['tipo_premiado'] = 'QV. SAÚDE - BONIFICAÇÃO CORRETOR'
+            pag_cor['tipo_premiado'] = TIPO_PREMIADO_CORRETOR
             
             pag_sup = (df4_com_pix.loc[df4_com_pix['tipo_vendedor'] == 'supervisor', ['cpf_vendedor', 'nome_vendedor', 'bonificacao']]
                       .groupby(['cpf_vendedor', 'nome_vendedor'], as_index=False, sort=False)['bonificacao'].sum().sort_values('bonificacao', ascending=False))
@@ -1257,7 +1263,7 @@ def main():
             pag_sup['saldo'] = pag_sup['saldo'].fillna(0)
             pag_sup['desc'] = 0
             pag_sup['vlr_liquido'] = pag_sup['vlr_bruto'] + pag_sup['desc']
-            pag_sup['tipo_premiado'] = 'QV. SAÚDE - BONIFICAÇÃO SUPERVISOR'
+            pag_sup['tipo_premiado'] = TIPO_PREMIADO_SUPERVISOR
             
             calc_pag = pd.concat([pag_cor, pag_sup]).drop(columns='saldo')
             
@@ -1275,10 +1281,11 @@ def main():
                 tipo_cartao='chave - Pix',
                 tipo_carga='Carga',
                 obs='Transferência realizada',
-                premiacao='BONIFICAÇÃO',
+                premiacao=PREMIACAO_LABEL,
                 dt_pagamento=dt_pagamento_str,
                 dt_registro=dt_registro_str
             )
+            log_print("[calc_pag] Valores distintos de premiacao/tipo:", calc_pag[['premiacao', 'tipo_premiado']].drop_duplicates().head().to_dict('records'))
             
             # Filtrar zeros e resetar índice
             calc_pag = calc_pag[calc_pag['vlr_bruto'] != 0].reset_index(drop=True)
@@ -1297,47 +1304,69 @@ def main():
                 log_print(f"[calc_pag] Tipos: {dict(calc_pag.dtypes)}")
             
             etapa("Montando estrutura df5...", 87)
-            df4_com_pix_corretor = df4_com_pix[df4_com_pix['tipo_vendedor'] == 'corretor'].copy().reset_index(drop=True).drop(columns=['tipo_vendedor', 'codigo']).rename(
-                columns={'cpf_vendedor': 'CPF Corretor', 'bonificacao': 'Vlr bruto Corretor', 'email': 'E-mail Corretor', 
-                        'celular': 'Telefone Corretor', 'nome_vendedor': 'Nome Corretor', 'chave_pix': 'chave_pix_vendedor', 
-                        'tipo_chave': 'tipo_chave_vendedor'})
-            df4_com_pix_corretor['CPF Supervisor'] = 'N/A'
-            df4_com_pix_corretor['Nome Supervisor'] = 'N/A'
-            df4_com_pix_corretor['Vlr bruto Supervisor'] = 0
-            df4_com_pix_corretor['E-mail Supervisor'] = 'N/A'
-            df4_com_pix_corretor['Telefone Supervisor'] = 'N/A'
-            df4_com_pix_corretor['chave_pix_supervisor'] = 'N/A'
-            df4_com_pix_corretor['tipo_chave_supervisor'] = 'N/A'
-            df4_com_pix_corretor = df4_com_pix_corretor[['numero_contrato', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia', 
-                                                          'cpf_beneficiario', 'nome', 'tipo_de_beneficiario',
-                                                          'idade', 'numero_da_parcela', 'status_da_fatura', 'data_do_pagamento_da_fatura', 
-                                                          'concessionaria_nova', 'CPF Corretor', 'Nome Corretor',
-                                                          'Vlr bruto Corretor', 'E-mail Corretor', 'Telefone Corretor', 'CPF Supervisor', 
-                                                          'Nome Supervisor', 'Vlr bruto Supervisor', 'E-mail Supervisor',
-                                                          'Telefone Supervisor', 'chave_regra', 'id_beneficiario', 'regiao', 
-                                                          'chave_pix_vendedor', 'tipo_chave_vendedor', 'chave_pix_supervisor', 'tipo_chave_supervisor']]
-            
-            df4_com_pix_supervisor = df4_com_pix[df4_com_pix['tipo_vendedor'] == 'supervisor'].copy().reset_index(drop=True).drop(columns=['tipo_vendedor', 'codigo']).rename(
-                columns={'cpf_vendedor': 'CPF Supervisor', 'bonificacao': 'Vlr bruto Supervisor', 'email': 'E-mail Supervisor', 
-                        'celular': 'Telefone Supervisor', 'nome_vendedor': 'Nome Supervisor', 'chave_pix': 'chave_pix_supervisor', 
-                        'tipo_chave': 'tipo_chave_supervisor'})
-            df4_com_pix_supervisor['CPF Corretor'] = 'N/A'
-            df4_com_pix_supervisor['Nome Corretor'] = 'N/A'
-            df4_com_pix_supervisor['Vlr bruto Corretor'] = 0
-            df4_com_pix_supervisor['E-mail Corretor'] = 'N/A'
-            df4_com_pix_supervisor['Telefone Corretor'] = 'N/A'
-            df4_com_pix_supervisor['chave_pix_vendedor'] = 'N/A'
-            df4_com_pix_supervisor['tipo_chave_vendedor'] = 'N/A'
-            df4_com_pix_supervisor = df4_com_pix_supervisor[['numero_contrato', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia', 
-                                                              'cpf_beneficiario', 'nome', 'tipo_de_beneficiario',
-                                                              'idade', 'numero_da_parcela', 'status_da_fatura', 'data_do_pagamento_da_fatura', 
-                                                              'concessionaria_nova', 'CPF Corretor', 'Nome Corretor',
-                                                              'Vlr bruto Corretor', 'E-mail Corretor', 'Telefone Corretor', 'CPF Supervisor', 
-                                                              'Nome Supervisor', 'Vlr bruto Supervisor', 'E-mail Supervisor',
-                                                              'Telefone Supervisor', 'chave_regra', 'id_beneficiario', 'regiao', 
-                                                              'chave_pix_vendedor', 'tipo_chave_vendedor', 'chave_pix_supervisor', 'tipo_chave_supervisor']]
-            
-            df4_com_pix_novo = pd.concat([df4_com_pix_corretor, df4_com_pix_supervisor], ignore_index=True)
+            chave_base_cols = [
+                'numero_contrato', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia',
+                'cpf_beneficiario', 'nome', 'tipo_de_beneficiario', 'idade', 'numero_da_parcela',
+                'status_da_fatura', 'data_do_pagamento_da_fatura', 'concessionaria_nova',
+                'chave_regra', 'id_beneficiario', 'regiao'
+            ]
+
+            base_pix = df4_com_pix[chave_base_cols].drop_duplicates().reset_index(drop=True)
+
+            cor_cols = chave_base_cols + ['cpf_vendedor', 'nome_vendedor', 'bonificacao', 'email', 'celular', 'chave_pix', 'tipo_chave']
+            df4_pix_cor = (
+                df4_com_pix[df4_com_pix['tipo_vendedor'] == 'corretor'][cor_cols]
+                .drop_duplicates(subset=chave_base_cols, keep='last')
+                .rename(columns={
+                    'cpf_vendedor': 'CPF Corretor',
+                    'nome_vendedor': 'Nome Corretor',
+                    'bonificacao': 'Vlr bruto Corretor',
+                    'email': 'E-mail Corretor',
+                    'celular': 'Telefone Corretor',
+                    'chave_pix': 'chave_pix_vendedor',
+                    'tipo_chave': 'tipo_chave_vendedor'
+                })
+            )
+
+            sup_cols = chave_base_cols + ['cpf_vendedor', 'nome_vendedor', 'bonificacao', 'email', 'celular', 'chave_pix', 'tipo_chave']
+            df4_pix_sup = (
+                df4_com_pix[df4_com_pix['tipo_vendedor'] == 'supervisor'][sup_cols]
+                .drop_duplicates(subset=chave_base_cols, keep='last')
+                .rename(columns={
+                    'cpf_vendedor': 'CPF Supervisor',
+                    'nome_vendedor': 'Nome Supervisor',
+                    'bonificacao': 'Vlr bruto Supervisor',
+                    'email': 'E-mail Supervisor',
+                    'celular': 'Telefone Supervisor',
+                    'chave_pix': 'chave_pix_supervisor',
+                    'tipo_chave': 'tipo_chave_supervisor'
+                })
+            )
+
+            df4_com_pix_novo = (
+                base_pix
+                .merge(df4_pix_cor, how='left', on=chave_base_cols)
+                .merge(df4_pix_sup, how='left', on=chave_base_cols)
+            )
+
+            if 'Vlr bruto Supervisor' in df4_com_pix_novo.columns:
+                df4_com_pix_novo['Vlr bruto Supervisor'] = pd.to_numeric(
+                    df4_com_pix_novo['Vlr bruto Supervisor'], errors='coerce'
+                ).fillna(0.0)
+            if 'Vlr bruto Corretor' in df4_com_pix_novo.columns:
+                df4_com_pix_novo['Vlr bruto Corretor'] = pd.to_numeric(
+                    df4_com_pix_novo['Vlr bruto Corretor'], errors='coerce'
+                ).fillna(0.0)
+
+            str_fill_cols = [
+                'CPF Corretor', 'Nome Corretor', 'E-mail Corretor', 'Telefone Corretor',
+                'chave_pix_vendedor', 'tipo_chave_vendedor',
+                'CPF Supervisor', 'Nome Supervisor', 'E-mail Supervisor', 'Telefone Supervisor',
+                'chave_pix_supervisor', 'tipo_chave_supervisor'
+            ]
+            for col in str_fill_cols:
+                if col in df4_com_pix_novo.columns:
+                    df4_com_pix_novo[col] = df4_com_pix_novo[col].fillna('N/A')
             
             df5 = df4_com_pix_novo.copy()
             rename_cols = ['numero_contrato', 'Operadora', 'Entidade', 'Número da Proposta', 'Data do início da vigencia do beneficiario', 
@@ -1392,11 +1421,13 @@ def main():
             prop_inicial = len(df1[df1['numero_da_parcela'] == 1])
             
             # Gráficos apenas se necessário (otimização: não criar se não for usado)
-            graf_1 = df5[['Operadora', 'Data do pagamento da fatura']].groupby('Data do pagamento da fatura', sort=False).count().reset_index()
+            graf_1 = df5[['Operadora', 'Data do pagamento da fatura']].copy()
+            graf_1['Data do pagamento da fatura'] = pd.to_datetime(graf_1['Data do pagamento da fatura'], errors='coerce')
+            graf_1 = graf_1.groupby('Data do pagamento da fatura', sort=False)['Operadora'].count().reset_index()
             graf_1['Data'] = graf_1['Data do pagamento da fatura'].dt.strftime('%d/%m/%Y')
             
-            graf = df5[['Operadora', 'Vlr bruto Corretor']].copy()
-            graf['Vlr Total'] = graf['Vlr bruto Corretor']
+            graf = df5[['Operadora']].copy()
+            graf['Vlr Total'] = pd.to_numeric(df5['Vlr bruto Corretor'], errors='coerce').fillna(0.0)
             graf_2 = graf[['Operadora', 'Vlr Total']].groupby('Operadora', sort=False).mean().reset_index()
             graf_2['Vlr Total'] = graf_2['Vlr Total'].round(2)
             
@@ -1407,7 +1438,9 @@ def main():
             
             graf_4 = df5[['Operadora', 'CPF']].groupby('Operadora', sort=False).count().reset_index()
             
-            graf_5 = df5[['Operadora', 'Data do início da vigencia do beneficiario']].groupby('Data do início da vigencia do beneficiario', sort=False).count().reset_index()
+            graf_5 = df5[['Operadora', 'Data do início da vigencia do beneficiario']].copy()
+            graf_5['Data do início da vigencia do beneficiario'] = pd.to_datetime(graf_5['Data do início da vigencia do beneficiario'], errors='coerce')
+            graf_5 = graf_5.groupby('Data do início da vigencia do beneficiario', sort=False)['Operadora'].count().reset_index()
             graf_5['Data'] = graf_5['Data do início da vigencia do beneficiario'].dt.strftime('%d/%m/%Y')
             
             # Calcular indicadores para o relatório
@@ -1521,44 +1554,70 @@ def main():
             df4_com_pix_corretor = df4_com_pix[df4_com_pix['tipo_vendedor'] == 'corretor'].copy()
             df4_com_pix_supervisor = df4_com_pix[df4_com_pix['tipo_vendedor'] == 'supervisor'].copy()
             
-            # Criar unif_bonif apenas com dados de corretores
-            if len(df4_com_pix_corretor) > 0:
-                unif_bonif = df4_com_pix_corretor[['data_do_pagamento_da_fatura', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia', 
-                                                 'cpf_beneficiario', 'nome', 'tipo_de_beneficiario', 'idade', 'numero_da_parcela', 'codigo', 
-                                                 'cpf_vendedor', 'nome_vendedor', 'bonificacao', 'id_beneficiario', 'chave_regra']].copy()
-                unif_bonif.columns = ['dt_pagamento', 'operadora', 'entidade', 'numero_proposta', 'dt_inicio_vigencia', 'cpf', 'nome', 
-                                      'tipo_beneficiario', 'idade', 'parcela', 'cnpj_concessionaria', 'cpf_corretor', 'nome_corretor', 
+            # Montar DataFrame unificado de bonificações (corretores/supervisores)
+            if len(df4_com_pix) > 0:
+                unif_bonif = df4_com_pix[['data_do_pagamento_da_fatura', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia',
+                                          'cpf_beneficiario', 'nome', 'tipo_de_beneficiario', 'idade', 'numero_da_parcela', 'codigo',
+                                          'cpf_vendedor', 'nome_vendedor', 'bonificacao', 'id_beneficiario', 'chave_regra']].copy()
+                unif_bonif.columns = ['dt_pagamento', 'operadora', 'entidade', 'numero_proposta', 'dt_inicio_vigencia', 'cpf', 'nome',
+                                      'tipo_beneficiario', 'idade', 'parcela', 'cnpj_concessionaria', 'cpf_corretor', 'nome_corretor',
                                       'vlr_bruto_corretor', 'id_beneficiario', 'chave_plano']
-                unif_bonif['cpf_corretor'] = (unif_bonif['cpf_corretor'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(11))
-                
-                # Buscar supervisor correspondente (se houver) usando cpf_supervisor do df3
-                if len(df3) > 0 and 'cpf_supervisor' in df3.columns:
-                    df3_supervisor_map = df3[['numero_da_proposta', 'cpf_supervisor', 'nome_supervisor']].drop_duplicates(subset='numero_da_proposta', keep='last').set_index('numero_da_proposta')
-                    unif_bonif['cpf_supervisor'] = unif_bonif['numero_proposta'].map(df3_supervisor_map['cpf_supervisor']).fillna('')
-                    unif_bonif['nome_supervisor'] = unif_bonif['numero_proposta'].map(df3_supervisor_map['nome_supervisor']).fillna('')
-                    
-                    # Buscar valor bruto do supervisor se existir na mesma proposta
-                    if 'bonificacao_supervisor' in df3.columns:
-                        df3_supervisor_bonif = df3[df3['bonificacao_supervisor'] > 0][['numero_da_proposta', 'cpf_beneficiario', 'bonificacao_supervisor']].copy()
-                        if len(df3_supervisor_bonif) > 0:
-                            df3_supervisor_bonif['chave_merge'] = df3_supervisor_bonif['numero_da_proposta'] + df3_supervisor_bonif['cpf_beneficiario'].astype(str)
-                            unif_bonif['chave_merge'] = unif_bonif['numero_proposta'] + unif_bonif['cpf'].astype(str)
-                            unif_bonif = unif_bonif.merge(df3_supervisor_bonif[['chave_merge', 'bonificacao_supervisor']], how='left', on='chave_merge')
-                            unif_bonif['vlr_bruto_supervisor'] = unif_bonif['bonificacao_supervisor'].fillna(0)
-                            unif_bonif = unif_bonif.drop(columns=['chave_merge', 'bonificacao_supervisor'])
-                        else:
-                            unif_bonif['vlr_bruto_supervisor'] = 0
-                    else:
-                        unif_bonif['vlr_bruto_supervisor'] = 0
-                else:
-                    unif_bonif['cpf_supervisor'] = ''
-                    unif_bonif['nome_supervisor'] = ''
-                    unif_bonif['vlr_bruto_supervisor'] = 0
-                
+
+                unif_bonif['cpf_supervisor'] = ''
+                unif_bonif['cpf_corretor'] = (
+                    unif_bonif['cpf_corretor'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(11)
+                )
+
+                df4_com_pix['cpf_vendedor'] = (
+                    df4_com_pix['cpf_vendedor'].astype(str).str.replace(r'\D', '', regex=True).str.zfill(11)
+                )
+
+                mapa_tipo_vendedor = (
+                    df4_com_pix.drop_duplicates(subset='cpf_vendedor', keep='last')
+                    .set_index('cpf_vendedor')['tipo_vendedor']
+                )
+                mapa_bonificacao = (
+                    df4_com_pix.drop_duplicates(subset='cpf_vendedor', keep='last')
+                    .set_index('cpf_vendedor')['bonificacao']
+                )
+
+                unif_bonif['nome_supervisor'] = unif_bonif['cpf_corretor'].map(mapa_tipo_vendedor).fillna('')
+                unif_bonif['vlr_bruto_supervisor'] = (
+                    unif_bonif['cpf_corretor'].map(mapa_bonificacao).fillna(0).astype(float)
+                )
+
                 unif_bonif['dt_registro'] = dt.today().strftime('%Y-%m-%d %H:%M:%S')
                 unif_bonif['descontado'] = 0
-                unif_bonif['dt_analise'] = data_pagamento.strftime('%Y-%m-%d')
+                unif_bonif['dt_analise'] = hoje.strftime('%Y-%m-%d')
                 unif_bonif['chave_id'] = unif_bonif['numero_proposta'] + unif_bonif['id_beneficiario']
+
+                if persistir_unif_bonif:
+                    try:
+                        colunas_unif_bonif = [
+                            'dt_pagamento', 'operadora', 'entidade', 'numero_proposta', 'dt_inicio_vigencia',
+                            'cpf', 'nome', 'tipo_beneficiario', 'idade', 'parcela', 'cnpj_concessionaria',
+                            'cpf_corretor', 'nome_corretor', 'vlr_bruto_corretor', 'id_beneficiario', 'chave_plano',
+                            'cpf_supervisor', 'nome_supervisor', 'vlr_bruto_supervisor',
+                            'dt_registro', 'descontado', 'dt_analise', 'chave_id'
+                        ]
+                        colunas_presentes = [col for col in colunas_unif_bonif if col in unif_bonif.columns]
+                        if colunas_presentes:
+                            unif_bonif[colunas_presentes].to_sql(
+                                'unificado_bonificacao',
+                                con=engine,
+                                if_exists='append',
+                                index=False,
+                                method='multi'
+                            )
+                            log_print(f"[UNIF_BONIF] {len(unif_bonif)} registro(s) inserido(s) na tabela unificado_bonificacao")
+                            etapa("unificado_bonificacao registrado", 89.2)
+                        else:
+                            log_print("[UNIF_BONIF] Nenhuma coluna válida encontrada para inserir em unificado_bonificacao")
+                    except Exception as e:
+                        log_print(f"[ERRO] Falha ao registrar unif_bonif: {str(e)}")
+                        etapa("Erro ao registrar unif_bonif", 89.15)
+                else:
+                    log_print("[UNIF_BONIF] Persistência desabilitada; retornando dados sem inserir no banco.")
             else:
                 unif_bonif = pd.DataFrame()
             

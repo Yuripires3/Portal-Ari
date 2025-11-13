@@ -349,12 +349,86 @@ export async function POST(request: NextRequest) {
 
     const preview_df5 = pandasToArray(pythonResult.preview_df5 || pythonResult.df5 || []).slice(0, 50)
     const df5_completo = pandasToArray(pythonResult.df5 || [])
-    const calc_pag = pandasToArray(pythonResult.calc_pag || [])
+    let calc_pag = pandasToArray(pythonResult.calc_pag || [])
     let df4_sem_pix = pandasToArray(pythonResult.df4_sem_pix || [])
     const df4_com_pix = pandasToArray(pythonResult.df4_com_pix || [])
     const desc = pandasToArray(pythonResult.desc || [])
-    const unif_bonif = pandasToArray(pythonResult.unif_bonif || [])
-    const unif_com = pandasToArray(pythonResult.unif_com || [])
+    let unif_bonif = pandasToArray(pythonResult.unif_bonif || [])
+    let unif_com = pandasToArray(pythonResult.unif_com || [])
+
+    const accentDictionary = new Map<string, string>([
+      ["BONIFICACAO", "BONIFICAÇÃO"],
+      ["BONIFICACAO CORRETOR", "BONIFICAÇÃO CORRETOR"],
+      ["BONIFICACAO SUPERVISOR", "BONIFICAÇÃO SUPERVISOR"],
+      ["BONIFICA��O", "BONIFICAÇÃO"],
+      ["BONIFICA�O", "BONIFICAÇÃO"],
+      ["QV. SAUDE - BONIFICACAO CORRETOR", "QV. SAÚDE - BONIFICAÇÃO CORRETOR"],
+      ["QV. SADE - BONIFICACAO CORRETOR", "QV. SAÚDE - BONIFICAÇÃO CORRETOR"],
+      ["QV. SAUDE - BONIFICACAO SUPERVISOR", "QV. SAÚDE - BONIFICAÇÃO SUPERVISOR"],
+      ["QV. SADE - BONIFICACAO SUPERVISOR", "QV. SAÚDE - BONIFICAÇÃO SUPERVISOR"],
+      ["QV. SA�DE - BONIFICACAO CORRETOR", "QV. SAÚDE - BONIFICAÇÃO CORRETOR"],
+      ["QV. SA�DE - BONIFICACAO SUPERVISOR", "QV. SAÚDE - BONIFICAÇÃO SUPERVISOR"],
+      ["QV. SA�DE - BONIFICA��O CORRETOR", "QV. SAÚDE - BONIFICAÇÃO CORRETOR"],
+      ["QV. SA�DE - BONIFICA��O SUPERVISOR", "QV. SAÚDE - BONIFICAÇÃO SUPERVISOR"],
+      ["QV. SAUDE", "QV. SAÚDE"],
+      ["QV. SADE", "QV. SAÚDE"],
+      ["QV. SA�DE", "QV. SAÚDE"],
+      ["SAUDE", "SAÚDE"],
+      ["SADE", "SAÚDE"],
+      ["SA�DE", "SAÚDE"],
+      ["ASSIM SAUDE", "ASSIM SAÚDE"],
+      ["ASSIM SA�DE", "ASSIM SAÚDE"],
+      ["TRANSFERENCIA", "TRANSFERÊNCIA"],
+      ["TRANSFER�NCIA", "Transferência"],
+      ["TRANSFER�NCIA REALIZADA", "Transferência realizada"],
+      ["TRANSFERÊNCIA REALIZADA", "Transferência realizada"],
+      ["PREMIACAO", "PREMIAÇÃO"],
+      ["PREMIAM", "PREMIAÇÃO"],
+      ["PREMIAO", "PREMIAÇÃO"],
+      ["1� PARCELA", "1ª Parcela"],
+      ["2� PARCELA", "2ª Parcela"],
+      ["3� PARCELA", "3ª Parcela"],
+      ["13� - NOV25", "13ª - Nov25"],
+      ["13�", "13ª"]
+    ])
+    
+    const restoreAccentsInString = (value: any) => {
+      if (typeof value !== "string") return value
+      const normalized = value.normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      const upperNormalized = normalized.toUpperCase().replace(/\s+/g, " ")
+      if (accentDictionary.has(upperNormalized)) {
+        const corrected = accentDictionary.get(upperNormalized)!
+        return value === value.toUpperCase()
+          ? corrected
+          : value === value.toLowerCase()
+            ? corrected.toLowerCase()
+            : corrected
+      }
+      if (value.includes("\uFFFD")) {
+        const replaced = value.replace(/(\d+)\uFFFD/g, (_, num) => `${num}ª`)
+        if (replaced !== value) {
+          return replaced
+        }
+      }
+      return value
+    }
+
+    const restoreAccentsInArray = (data: any[]) =>
+      Array.isArray(data)
+        ? data.map((row: any) => {
+            if (!row || typeof row !== "object") return row
+            const restored: Record<string, any> = {}
+            Object.keys(row).forEach((key) => {
+              restored[key] = restoreAccentsInString(row[key])
+            })
+            return restored
+          })
+        : data
+
+    calc_pag = restoreAccentsInArray(calc_pag)
+    unif_com = restoreAccentsInArray(unif_com)
+    unif_bonif = restoreAccentsInArray(unif_bonif)
+    df4_sem_pix = restoreAccentsInArray(df4_sem_pix)
 
     // Garantir que df4_sem_pix traga apenas colunas permitidas
     const df4SemPixColumnsAllowed = [

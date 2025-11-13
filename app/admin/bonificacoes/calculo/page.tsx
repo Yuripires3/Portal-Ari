@@ -1321,20 +1321,9 @@ export default function CalculoBonificacaoPage() {
     setRunId(null)
   }
 
-  // Função para aplicar unidecode em todos os campos de texto dos dados
+  // Função para clonar dados antes do envio (sem alterar acentuação)
   const aplicarUnidecodeNosDados = (data: any[]): any[] => {
-    return data.map(row => {
-      const cleanedRow: any = {}
-      for (const [key, value] of Object.entries(row)) {
-        // Aplicar unidecode apenas em strings, mantendo outros tipos como estão
-        if (typeof value === 'string' && value !== null && value !== undefined) {
-          cleanedRow[key] = unidecode(value)
-        } else {
-          cleanedRow[key] = value
-        }
-      }
-      return cleanedRow
-    })
+    return data.map(row => ({ ...row }))
   }
 
   // Funções para edição de unif_bonif
@@ -1524,13 +1513,12 @@ export default function CalculoBonificacaoPage() {
 
   // Função para normalizar e corrigir caracteres corrompidos usando unidecode
   const normalizeValue = (value: any): string => {
-    if (value === null || value === undefined || value === '') return ''
+    if (value === null || value === undefined) return ''
+    if (typeof value === 'string') return value
     try {
-      const str = String(value)
-      // Usar unidecode para converter caracteres especiais corrompidos
-      return unidecode(str)
+      return String(value ?? '')
     } catch {
-      return String(value || '')
+      return ''
     }
   }
 

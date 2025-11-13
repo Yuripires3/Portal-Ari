@@ -1281,7 +1281,7 @@ export default function HistoricoBonificacoesPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-[1800px] mx-auto">
+    <div className="px-4 py-6 lg:pl-8 lg:pr-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Histórico de Bonificações</h1>
         <p className="text-muted-foreground mt-1">
@@ -1819,7 +1819,18 @@ export default function HistoricoBonificacoesPage() {
                           {formatCurrencyDisplay(row.valor_bruto)}
                         </TableCell>
                         <TableCell>
-                          {formatCurrencyDisplay(rowData.desconto_realizado)}
+                          <span className={
+                            (() => {
+                              if (rowData.desconto_realizado === null || rowData.desconto_realizado === undefined) return undefined
+                              const numericValue = typeof rowData.desconto_realizado === "number"
+                                ? rowData.desconto_realizado
+                                : parseFloat(String(rowData.desconto_realizado).replace(/\./g, "").replace(",", "."))
+                              if (Number.isNaN(numericValue) || numericValue === 0) return undefined
+                              return "text-red-600"
+                            })()
+                          }>
+                            {formatCurrencyDisplay(rowData.desconto_realizado)}
+                          </span>
                         </TableCell>
                         <TableCell>
                           {isEditing ? (

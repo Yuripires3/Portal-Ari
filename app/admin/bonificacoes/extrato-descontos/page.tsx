@@ -716,7 +716,7 @@ export default function ExtratoDescontosPage() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-[1800px] mx-auto">
+    <div className="px-4 py-6 lg:pl-8 lg:pr-6 space-y-6">
       <div>
         <h1 className="text-3xl font-bold">Extrato Descontos</h1>
         <p className="text-muted-foreground mt-1">
