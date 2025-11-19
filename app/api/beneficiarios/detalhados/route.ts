@@ -34,6 +34,7 @@ export async function GET(request: NextRequest) {
     const operadorasParam = searchParams.get("operadoras") || searchParams.get("operadora")
     const entidadesParam = searchParams.get("entidades")
     const tipo = searchParams.get("tipo")
+    const mesesReferenciaParam = searchParams.get("meses_referencia")
     const pagina = parseInt(searchParams.get("pagina") || "1")
     const limite = parseInt(searchParams.get("limite") || "20")
     const offset = (pagina - 1) * limite
@@ -86,58 +87,118 @@ export async function GET(request: NextRequest) {
     }
 
     // Construir filtros WHERE para beneficiários
-    const whereConditions: string[] = []
-    const whereValues: any[] = []
+    const beneficiarioConditions: string[] = []
+    const beneficiarioValues: any[] = []
 
     // Condições obrigatórias para beneficiários ativos
-    whereConditions.push("b.data_inicio_vigencia_beneficiario <= ?")
-    whereValues.push(dataFimNormalizada)
+    beneficiarioConditions.push("b.data_inicio_vigencia_beneficiario <= ?")
+    beneficiarioValues.push(dataFimNormalizada)
     
-    whereConditions.push(`(
+    beneficiarioConditions.push(`(
       (b.data_exclusao IS NULL AND b.status_beneficiario = 'ativo')
       OR (b.data_exclusao IS NOT NULL AND (
         b.data_exclusao > CURDATE()
         OR b.data_exclusao > ?
       ))
     )`)
-    whereValues.push(dataFimNormalizada)
+    beneficiarioValues.push(dataFimNormalizada)
 
     // Filtros opcionais
     if (operadorasParam) {
       const operadoras = operadorasParam.split(",").map(op => op.trim()).filter(Boolean)
       if (operadoras.length > 0) {
-        whereConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
-        whereValues.push(...operadoras)
+        beneficiarioConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
+        beneficiarioValues.push(...operadoras)
       }
     }
 
     if (entidadesParam) {
       const entidades = entidadesParam.split(",").map(e => e.trim()).filter(Boolean)
       if (entidades.length > 0) {
-        whereConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
-        whereValues.push(...entidades)
+        beneficiarioConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
+        beneficiarioValues.push(...entidades)
       }
     }
 
     if (tipo && tipo !== "Todos") {
-      whereConditions.push("b.tipo = ?")
-      whereValues.push(tipo)
+      beneficiarioConditions.push("b.tipo = ?")
+      beneficiarioValues.push(tipo)
     }
 
     // Excluir planos que contenham 'DENT', 'AESP' e 'STANDARD'
-    whereConditions.push(`(
+    beneficiarioConditions.push(`(
       UPPER(b.plano) NOT LIKE '%DENT%' 
       AND UPPER(b.plano) NOT LIKE '%AESP%' 
       AND UPPER(b.plano) NOT LIKE '%STANDARD%'
     )`)
 
-    const whereClause = whereConditions.length > 0 
-      ? `WHERE ${whereConditions.join(" AND ")}` 
+    const mesesReferencia = mesesReferenciaParam
+      ? mesesReferenciaParam.split(",").map(m => m.trim()).filter(Boolean)
+      : []
+    const mesesCompetenciaDatas = mesesReferencia.map(mes => `${mes}-01`)
+
+    const procedimentosConditions: string[] = ["p.evento IS NOT NULL"]
+    const procedimentosValues: any[] = []
+
+    if (mesesCompetenciaDatas.length > 0) {
+      procedimentosConditions.push(`DATE(p.data_competencia) IN (${mesesCompetenciaDatas.map(() => "?").join(",")})`)
+      procedimentosValues.push(...mesesCompetenciaDatas)
+    }
+
+    const allConditions = [...beneficiarioConditions, ...procedimentosConditions]
+    const whereClause = allConditions.length > 0
+      ? `WHERE ${allConditions.join(" AND ")}`
       : ""
 
-    // Query para buscar beneficiários ativos no período e seus procedimentos
-    // Excluir planos DENT, AESP e STANDARD
-    // Mostrar apenas linhas que tenham procedimentos (INNER JOIN)
+    const baseFromClause = `
+      FROM reg_beneficiarios b
+      INNER JOIN reg_procedimentos p ON b.cpf = p.cpf 
+        AND p.data_competencia >= ? 
+        AND p.data_competencia <= ?
+      ${whereClause}
+    `
+
+    const baseParams = [
+      dataInicio,
+      dataFimNormalizada,
+      ...beneficiarioValues,
+      ...procedimentosValues,
+    ]
+
+    // Buscar CPFs distintos para paginação real por beneficiário
+    const cpfsQuery = `
+      SELECT DISTINCT b.cpf, b.nome
+      ${baseFromClause}
+      ORDER BY b.nome, b.cpf
+      LIMIT ${limite} OFFSET ${offset}
+    `
+
+    const [cpfRows]: any = await connection.execute(cpfsQuery, baseParams)
+    const cpfsSelecionados = (cpfRows || []).map((row: any) => row.cpf).filter(Boolean)
+
+    if (cpfsSelecionados.length === 0) {
+      return NextResponse.json({
+        dados: [],
+        total: 0,
+        pagina,
+        limite,
+        totalPaginas: 0,
+      })
+    }
+
+    const cpfPlaceholders = cpfsSelecionados.map(() => "?").join(",")
+    const dadosWhereClause = whereClause
+      ? `${whereClause} AND b.cpf IN (${cpfPlaceholders})`
+      : `WHERE b.cpf IN (${cpfPlaceholders})`
+
+    const dadosFromClause = `
+      FROM reg_beneficiarios b
+      INNER JOIN reg_procedimentos p ON b.cpf = p.cpf 
+        AND p.data_competencia >= ? 
+        AND p.data_competencia <= ?
+      ${dadosWhereClause}
+    `
+
     const query = `
       SELECT DISTINCT
         b.operadora as OPERADORA,
@@ -151,45 +212,54 @@ export async function GET(request: NextRequest) {
         p.descricao as DESCRICAO,
         p.especialidade as ESPECIALIDADE,
         p.valor_procedimento as VALOR,
-        p.data_competencia as DATA_COMPETENCIA
-      FROM reg_beneficiarios b
-      INNER JOIN reg_procedimentos p ON b.cpf = p.cpf 
-        AND p.data_competencia >= ? 
-        AND p.data_competencia <= ?
-      ${whereClause}
-      AND p.evento IS NOT NULL
+        p.data_competencia as DATA_COMPETENCIA,
+        p.data_atendimento as DATA_ATENDIMENTO
+      ${dadosFromClause}
       ORDER BY b.nome, p.data_competencia DESC
-      LIMIT ${limite} OFFSET ${offset}
     `
 
     const [rows]: any = await connection.execute(query, [
-      dataInicio,
-      dataFimNormalizada,
-      ...whereValues
+      ...baseParams,
+      ...cpfsSelecionados,
     ])
 
-    // Buscar total de registros para paginação
-    // Excluir planos DENT, AESP e STANDARD e mostrar apenas com procedimentos
-    const countQuery = `
-      SELECT COUNT(DISTINCT CONCAT(b.cpf, '-', p.evento, '-', p.data_competencia)) as total
-      FROM reg_beneficiarios b
-      INNER JOIN reg_procedimentos p ON b.cpf = p.cpf 
-        AND p.data_competencia >= ? 
-        AND p.data_competencia <= ?
-      ${whereClause}
-      AND p.evento IS NOT NULL
+    const gastosAnuaisQuery = `
+      SELECT 
+        p.cpf,
+        SUM(p.valor_procedimento) as gasto_anual
+      FROM reg_procedimentos p
+      INNER JOIN (
+        SELECT cpf, MAX(data_competencia) as data_recente
+        FROM reg_procedimentos
+        WHERE cpf IN (${cpfPlaceholders})
+        GROUP BY cpf
+      ) ult ON ult.cpf = p.cpf
+      WHERE p.data_competencia BETWEEN DATE_SUB(ult.data_recente, INTERVAL 11 MONTH) AND ult.data_recente
+      GROUP BY p.cpf
     `
 
-    const [countRows]: any = await connection.execute(countQuery, [
-      dataInicio,
-      dataFimNormalizada,
-      ...whereValues
-    ])
+    const [gastosAnuaisRows]: any = await connection.execute(gastosAnuaisQuery, cpfsSelecionados)
+    const gastosAnuaisMap = new Map<string, number>()
+    ;(gastosAnuaisRows || []).forEach((row: any) => {
+      gastosAnuaisMap.set(row.cpf, Number(row.gasto_anual) || 0)
+    })
+
+    const dadosComGastoAnual = (rows || []).map((row: any) => ({
+      ...row,
+      GASTO_ANUAL: gastosAnuaisMap.get(row.CPF) || 0,
+    }))
+
+    const countQuery = `
+      SELECT COUNT(DISTINCT b.cpf) as total
+      ${baseFromClause}
+    `
+
+    const [countRows]: any = await connection.execute(countQuery, baseParams)
 
     const total = countRows[0]?.total || 0
 
     return NextResponse.json({
-      dados: rows || [],
+      dados: dadosComGastoAnual,
       total,
       pagina,
       limite,

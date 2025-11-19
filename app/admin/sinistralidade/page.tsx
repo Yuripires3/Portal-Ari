@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useMemo, useCallback } from "react"
+import { useEffect, useState, useMemo, useCallback, Fragment, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -29,16 +29,33 @@ import { Checkbox } from "@/components/ui/checkbox"
 const fetchNoStore = (input: string, init?: RequestInit) =>
   fetch(input, { ...init, cache: "no-store" })
 
+// Removido: Guards complexos - usando abordagem simples como Histórico de Bonificações
+
 type VidasAtivasPorMes = {
   mes_referencia: string
   vidas_ativas: number
+}
+
+type AppliedFiltersSnapshot = {
+  mesesReferencia: string[]
+  dataInicioSelecionado: string
+  dataFimSelecionado: string
+  operadoras: string[]
+  entidades: string[]
+  tipo: string
+}
+
+type DashboardRequestContext = AppliedFiltersSnapshot & {
+  dataInicioGrafico: string
+  dataFimGrafico: string
+  mesesParaGrafico: string[]
 }
 
 export default function SinistralidadeDashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
-  const { filters, updateFilters, resetFilters } = useBeneficiariosFilters()
+  const { filters, updateFilters } = useBeneficiariosFilters()
   
   const [entidadeSelectKey, setEntidadeSelectKey] = useState(0)
   const [mesesDropdownOpen, setMesesDropdownOpen] = useState(false)
@@ -53,26 +70,40 @@ export default function SinistralidadeDashboardPage() {
   const [totalPaginas, setTotalPaginas] = useState(1)
   const [loading, setLoading] = useState(false)
   const [loadingDetalhados, setLoadingDetalhados] = useState(false)
-  const [dadosCarregadosInicialmente, setDadosCarregadosInicialmente] = useState(false)
   const [paginaAtual, setPaginaAtual] = useState(1)
+  const [expandedRowKeys, setExpandedRowKeys] = useState<Set<string>>(() => new Set())
+  // Ref para preservar linhas expandidas entre re-renders e evitar que sejam fechadas automaticamente
+  const expandedRowKeysRef = useRef<Set<string>>(new Set())
+  
+  // Sincronizar ref com state
+  useEffect(() => {
+    expandedRowKeysRef.current = expandedRowKeys
+  }, [expandedRowKeys])
+  
+  // Ref para rastrear se é o carregamento inicial (mesma abordagem da página de Histórico de Bonificações)
+  const isInitialLoad = useRef(true)
+  const loadAllDataCalledRef = useRef(false)
+  const loadDashboardInProgressRef = useRef(false)
   const linhasPorPagina = 20
 
-  // Extrair valores com fallbacks seguros
-  // Se não houver meses selecionados, usar o mês atual como padrão
-  const mesesReferencia = useMemo(() => {
-    if (Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0) {
-      return filters.mesesReferencia
-    }
-    if (filters?.mesReferencia) {
-      return [filters.mesReferencia]
-    }
-    // Usar o mês atual como padrão
-    const hoje = new Date()
-    const ano = hoje.getFullYear()
-    const mes = String(hoje.getMonth() + 1).padStart(2, "0")
-    return [`${ano}-${mes}`]
-  }, [filters?.mesesReferencia, filters?.mesReferencia])
-  
+  const buildFiltersSignature = useCallback((input: { mesesReferencia: string[]; operadoras: string[]; entidades: string[]; tipo: string }) => {
+    const sanitize = (list: string[]) =>
+      Array.from(new Set(list)).filter(Boolean).sort((a, b) => a.localeCompare(b))
+
+    return JSON.stringify({
+      mesesReferencia: sanitize(input.mesesReferencia),
+      operadoras: sanitize(input.operadoras),
+      entidades: sanitize(input.entidades),
+      tipo: input.tipo || "Todos",
+    })
+  }, [])
+
+  // Ler filtros diretamente do store - seguindo padrão do DashboardContent
+  const mesesReferencia = Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0
+    ? filters.mesesReferencia
+    : filters?.mesReferencia
+    ? [filters.mesReferencia]
+    : []
   const operadoras = Array.isArray(filters?.operadoras) ? filters.operadoras : []
   const entidades = Array.isArray(filters?.entidades) ? filters.entidades : []
   const tipo = filters?.tipo || "Todos"
@@ -106,8 +137,12 @@ export default function SinistralidadeDashboardPage() {
     ]
   }, [])
 
+  const redirectCheckedRef = useRef(false)
   useEffect(() => {
+    // Evitar múltiplos redirects
+    if (redirectCheckedRef.current) return
     if (!authLoading && user && user.role !== "admin") {
+      redirectCheckedRef.current = true
       router.push("/admin")
     }
   }, [authLoading, user, router])
@@ -137,9 +172,13 @@ export default function SinistralidadeDashboardPage() {
 
   // Garantir que o valor do tipo está na lista disponível
   const tipoValido = useMemo(() => {
-    if (!tipo || tipo === "Todos") return "Todos"
+    if (!tipo || tipo === "Todos") {
+      return "Todos"
+    }
     return tiposDisponiveis.includes(tipo) ? tipo : "Todos"
   }, [tipo, tiposDisponiveis])
+
+  // Filtrar operadoras válidas (que estão na lista disponível)
 
   const entidadesBase = useMemo(() => {
     // Se houver operadoras selecionadas, mostrar entidades dessas operadoras
@@ -222,46 +261,46 @@ export default function SinistralidadeDashboardPage() {
     setEntidadeSelectKey(prev => prev + 1)
   }
 
-  // Carregar filtros disponíveis
+  // Correção de filtros inválidos - apenas uma vez após filtros carregarem
+  const filtrosInvalidosCorrigidosRef = useRef(false)
+  const correcaoEmAndamentoRef = useRef(false)
   useEffect(() => {
-    const loadFiltros = async () => {
-      try {
-        const res = await fetchNoStore("/api/beneficiarios/filtros")
-        if (!res.ok) throw new Error("Erro ao carregar filtros")
-        const data = await res.json()
-        setOperadorasDisponiveis(data.operadoras || [])
-        setEntidadesDisponiveis(data.entidades || [])
-        setEntidadesPorOperadora(data.entidadesPorOperadora || {})
-        setTiposDisponiveis(data.tipos || [])
-      } catch (error: any) {
-        console.error("Erro ao carregar filtros:", error)
-        toast({
-          title: "Erro",
-          description: "Não foi possível carregar filtros",
-          variant: "destructive"
-        })
-      } finally {
-        setLoadingFiltros(false)
-        signalPageLoaded()
-      }
+    // Evitar execução se já estiver corrigindo ou se já foi corrigido
+    if (loadingFiltros || filtrosInvalidosCorrigidosRef.current || correcaoEmAndamentoRef.current) {
+      return
     }
-    loadFiltros()
-  }, [toast, filters?.mesesReferencia, filters?.mesReferencia, updateFilters])
-
-  useEffect(() => {
-    if (loadingFiltros) return
-
-    // Corrigir valores inválidos quando os filtros carregarem
+    
     const operadorasInvalidas = operadoras.filter(op => !operadorasDisponiveis.includes(op))
-    if (operadorasInvalidas.length > 0) {
-      updateFilters({ 
-        operadoras: operadoras.filter(op => operadorasDisponiveis.includes(op)),
-        entidades: [] 
-      })
-      setEntidadeSelectKey(prev => prev + 1)
-    }
-    if (tipo && tipo !== "Todos" && !tiposDisponiveis.includes(tipo)) {
-      updateFilters({ tipo: "Todos" })
+    const tipoInvalido = tipo && tipo !== "Todos" && !tiposDisponiveis.includes(tipo)
+    
+    // Só corrigir se realmente houver algo inválido
+    if (operadorasInvalidas.length > 0 || tipoInvalido) {
+      correcaoEmAndamentoRef.current = true
+      filtrosInvalidosCorrigidosRef.current = true
+      
+      // Fazer todas as correções de uma vez para evitar múltiplos updates
+      const updates: Partial<{ operadoras: string[]; entidades: string[]; tipo: string }> = {}
+      if (operadorasInvalidas.length > 0) {
+        updates.operadoras = operadoras.filter(op => operadorasDisponiveis.includes(op))
+        updates.entidades = []
+      }
+      if (tipoInvalido) {
+        updates.tipo = "Todos"
+      }
+      
+      if (Object.keys(updates).length > 0) {
+        updateFilters(updates)
+        if (updates.entidades !== undefined) {
+          setEntidadeSelectKey(prev => prev + 1)
+        }
+      }
+      
+      // Resetar flag após um pequeno delay para permitir que o update seja processado
+      setTimeout(() => {
+        correcaoEmAndamentoRef.current = false
+      }, 100)
+    } else {
+      filtrosInvalidosCorrigidosRef.current = true
     }
   }, [loadingFiltros, operadoras, operadorasDisponiveis, tipo, tiposDisponiveis, updateFilters])
 
@@ -294,7 +333,17 @@ export default function SinistralidadeDashboardPage() {
   }
 
   // Carregar dados detalhados
-  const loadDadosDetalhados = useCallback(async (dataInicio: string, dataFim: string, pagina: number = 1) => {
+  const loadDadosDetalhados = useCallback(async (
+    dataInicio: string,
+    dataFim: string,
+    pagina: number = 1,
+    mesesFiltrados?: string[],
+    overrides?: {
+      operadoras?: string[]
+      entidades?: string[]
+      tipo?: string
+    }
+  ): Promise<boolean> => {
     setLoadingDetalhados(true)
     try {
       const params = new URLSearchParams({
@@ -303,20 +352,61 @@ export default function SinistralidadeDashboardPage() {
         pagina: pagina.toString(),
         limite: "20",
       })
-      if (operadorasValidas.length > 0) params.append("operadoras", operadorasValidas.join(","))
-      if (entidades.length > 0) params.append("entidades", entidades.join(","))
-      if (tipoValido && tipoValido !== "Todos") params.append("tipo", tipoValido)
+      const operadorasFiltro = overrides?.operadoras ?? operadorasValidas
+      const entidadesFiltro = overrides?.entidades ?? entidades
+      const tipoFiltro = overrides?.tipo ?? tipoValido
+
+      if (operadorasFiltro.length > 0) params.append("operadoras", operadorasFiltro.join(","))
+      if (entidadesFiltro.length > 0) params.append("entidades", entidadesFiltro.join(","))
+      if (tipoFiltro && tipoFiltro !== "Todos") params.append("tipo", tipoFiltro)
+      if (mesesFiltrados && mesesFiltrados.length > 0) params.append("meses_referencia", mesesFiltrados.join(","))
 
       const res = await fetchNoStore(`/api/beneficiarios/detalhados?${params}`)
       if (!res.ok) throw new Error("Erro ao carregar dados detalhados")
       
       const data = await res.json()
-      setDadosDetalhados(data.dados || [])
+      const novosDados = data.dados || []
+      
+      // Preservar linhas expandidas ao atualizar dados detalhados (paginação)
+      // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
+      const getGrupoKey = (row: any) => {
+        if (row?.CPF) return `cpf:${row.CPF}`
+        if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
+        const parts = [
+          row?.OPERADORA || "SEM-OPERADORA",
+          row?.PLANO || "SEM-PLANO",
+          row?.NOME || "SEM-NOME",
+          row?.ENTIDADE || "SEM-ENTIDADE",
+          row?.STATUS || "SEM-STATUS",
+        ]
+        return `fallback:${parts.join("|")}`
+      }
+      
+      // Preservar keys expandidas que ainda existem nos novos dados
+      const keysExpandidasAtuais = expandedRowKeysRef.current
+      if (keysExpandidasAtuais.size > 0 && novosDados.length > 0) {
+        const novasKeys = new Set<string>()
+        novosDados.forEach((row: any) => {
+          const key = getGrupoKey(row)
+          if (keysExpandidasAtuais.has(key)) {
+            novasKeys.add(key)
+          }
+        })
+        
+        // Preservar todas as keys que ainda existem nos novos dados
+        if (novasKeys.size > 0) {
+          setExpandedRowKeys(novasKeys)
+          expandedRowKeysRef.current = novasKeys
+        }
+      }
+      
+      setDadosDetalhados(novosDados)
       setTotalRegistros(data.total || 0)
       setTotalPaginas(data.totalPaginas || 1)
       if (pagina === 1) {
         setPaginaAtual(1) // Resetar apenas se for primeira página
       }
+      return true
     } catch (error: any) {
       console.error("Erro ao carregar dados detalhados:", error)
       toast({
@@ -324,71 +414,97 @@ export default function SinistralidadeDashboardPage() {
         description: error.message || "Não foi possível carregar dados detalhados",
         variant: "destructive"
       })
-      setDadosDetalhados([])
+      return false
     } finally {
       setLoadingDetalhados(false)
     }
   }, [operadorasValidas, entidades, tipoValido, toast])
 
   // Carregar dados de vidas ativas
-  const loadVidasAtivas = useCallback(async () => {
-    if (!mesesReferencia || mesesReferencia.length === 0) return
-
-    // Ordenar os meses para identificar o mais recente dos meses filtrados
+  const getPeriodoSelecionado = useCallback(() => {
+    if (!mesesReferencia || mesesReferencia.length === 0) return null
     const mesesOrdenados = [...mesesReferencia].sort()
+    const primeiroMes = mesesOrdenados[0]
+    const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
+
+    const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
+    const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
+
+    const [anoFimSel, mesFimSel] = ultimoMes.split("-")
+    const anoFimNum = parseInt(anoFimSel)
+    const mesFimNum = parseInt(mesFimSel)
+    const ultimoDiaSelecionado = new Date(anoFimNum, mesFimNum + 1, 0).getDate()
+    const dataFimSelecionado = `${anoFimSel}-${mesFimSel}-${String(ultimoDiaSelecionado).padStart(2, "0")}`
+
+    return {
+      mesesOrdenados,
+      dataInicioSelecionado,
+      dataFimSelecionado,
+    }
+  }, [mesesReferencia])
+
+  const buildDashboardRequestContext = useCallback((): DashboardRequestContext | null => {
+    const periodo = getPeriodoSelecionado()
+    if (!periodo) return null
+
+    const { mesesOrdenados, dataInicioSelecionado, dataFimSelecionado } = periodo
     const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
-    
-    // Calcular os 12 meses para o gráfico: mês mais recente filtrado + 11 meses anteriores
+
     const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
-    
-    // data_inicio será o primeiro dia do mês mais antigo (primeiro dos 12 meses)
-    const [anoInicio, mesInicio] = mesesParaGrafico[0].split("-")
-    const dataInicio = `${anoInicio}-${mesInicio}-01`
 
-    // data_fim será o último dia do mês mais recente filtrado
-    const [anoFim, mesFim] = mesMaisRecente.split("-")
-    const anoNum = parseInt(anoFim)
-    const mesNum = parseInt(mesFim) // mesNum está em formato 1-12
-    // Calcular último dia do mês: JavaScript Date usa mês 0-indexed
-    // new Date(ano, mesNum, 0) onde mesNum está em formato 1-12 retorna último dia do mês (mesNum-1)
-    // Para pegar último dia do mês atual (mesNum), usamos new Date(ano, mesNum + 1, 0)
-    const ultimoDia = new Date(anoNum, mesNum + 1, 0).getDate()
-    const dataFim = `${anoFim}-${mesFim}-${String(ultimoDia).padStart(2, "0")}`
+    const [anoInicioGrafico, mesInicioGrafico] = mesesParaGrafico[0].split("-")
+    const dataInicioGrafico = `${anoInicioGrafico}-${mesInicioGrafico}-01`
 
+    const [anoFimGrafico, mesFimGrafico] = mesMaisRecente.split("-")
+    const anoNum = parseInt(anoFimGrafico)
+    const mesNum = parseInt(mesFimGrafico)
+    const ultimoDiaGrafico = new Date(anoNum, mesNum + 1, 0).getDate()
+    const dataFimGrafico = `${anoFimGrafico}-${mesFimGrafico}-${String(ultimoDiaGrafico).padStart(2, "0")}`
+
+    return {
+      mesesReferencia: mesesOrdenados,
+      dataInicioSelecionado,
+      dataFimSelecionado,
+      operadoras: operadorasValidas,
+      entidades,
+      tipo: tipoValido,
+      dataInicioGrafico,
+      dataFimGrafico,
+      mesesParaGrafico,
+    }
+  }, [getPeriodoSelecionado, calcular12MesesParaGrafico, operadorasValidas, entidades, tipoValido])
+
+  const loadVidasAtivas = useCallback(async (context: DashboardRequestContext): Promise<boolean> => {
     setLoading(true)
     try {
       const params = new URLSearchParams({
-        data_inicio: dataInicio,
-        data_fim: dataFim,
+        data_inicio: context.dataInicioGrafico,
+        data_fim: context.dataFimGrafico,
       })
-      if (operadorasValidas.length > 0) params.append("operadoras", operadorasValidas.join(","))
-      if (entidades.length > 0) params.append("entidades", entidades.join(","))
-      if (tipoValido && tipoValido !== "Todos") params.append("tipo", tipoValido)
+      if (context.operadoras.length > 0) params.append("operadoras", context.operadoras.join(","))
+      if (context.entidades.length > 0) params.append("entidades", context.entidades.join(","))
+      if (context.tipo && context.tipo !== "Todos") params.append("tipo", context.tipo)
 
       const res = await fetchNoStore(`/api/beneficiarios/ativos?${params}`)
       if (!res.ok) throw new Error("Erro ao carregar vidas ativas")
-      
+
       const data = await res.json()
-      
-      // Criar um mapa dos dados retornados para busca rápida
+
       const dadosPorMes = new Map<string, VidasAtivasPorMes>()
       ;(data || []).forEach((item: VidasAtivasPorMes) => {
         dadosPorMes.set(item.mes_referencia, item)
       })
-      
-      // Garantir que todos os 12 meses estejam presentes no gráfico
-      const vidasCompletas = mesesParaGrafico.map(mes => {
+
+      const vidasCompletas = context.mesesParaGrafico.map(mes => {
         const dadosDoMes = dadosPorMes.get(mes)
         if (dadosDoMes) {
           return dadosDoMes
         }
         return { mes_referencia: mes, vidas_ativas: 0 }
       })
-      
+
       setVidasAtivas(vidasCompletas)
-      
-      // Carregar dados detalhados também (primeira página)
-      await loadDadosDetalhados(dataInicio, dataFim, 1)
+      return true
     } catch (error: any) {
       console.error("Erro ao carregar vidas ativas:", error)
       toast({
@@ -397,39 +513,258 @@ export default function SinistralidadeDashboardPage() {
         variant: "destructive"
       })
       setVidasAtivas([])
+      return false
+    } finally {
+      setLoading(false)
+      // IMPORTANTE: Chamar signalPageLoaded apenas uma vez quando TODOS os dados estiverem carregados
+      // Isso será feito em atualizarDados() após ambos loadVidas e loadDadosDetalhados completarem
+      // signalPageLoaded() // REMOVIDO - será chamado em atualizarDados() após todos os dados carregarem
+    }
+  }, [toast])
+
+  // REMOVIDO: useEffect que forçava mês padrão
+  // O store já cuida de fornecer valores padrão quando necessário
+  // Não devemos forçar valores aqui para evitar conflitos com o store
+
+  // Estabilizar arrays para comparação profunda
+  const mesesReferenciaStable = useMemo(() => {
+    const sorted = [...mesesReferencia].sort()
+    const str = JSON.stringify(sorted)
+    return str
+  }, [mesesReferencia])
+
+  const operadorasValidasStable = useMemo(() => {
+    const sorted = [...operadorasValidas].sort()
+    const str = JSON.stringify(sorted)
+    return str
+  }, [operadorasValidas])
+
+  const entidadesStable = useMemo(() => {
+    const sorted = [...entidades].sort()
+    const str = JSON.stringify(sorted)
+    return str
+  }, [entidades])
+
+  // Carregar dados do dashboard - APENAS quando chamado explicitamente (botão Atualizar ou carregamento inicial)
+  // Mesma abordagem da página de Histórico de Bonificações: sem comparações automáticas
+  const loadDashboard = useCallback(async () => {
+    // Proteção: evitar chamadas duplicadas simultâneas
+    if (loadDashboardInProgressRef.current) {
+      return
+    }
+    loadDashboardInProgressRef.current = true
+    
+    // Usar valores atuais dos filtros
+    const mesesAtuais = JSON.parse(mesesReferenciaStable) as string[]
+    const operadorasAtuais = JSON.parse(operadorasValidasStable) as string[]
+    const entidadesAtuais = JSON.parse(entidadesStable) as string[]
+
+    if (mesesAtuais.length === 0) {
+      loadDashboardInProgressRef.current = false
+      return
+    }
+
+    setLoading(true)
+    try {
+      // Calcular período selecionado
+      const mesesOrdenados = [...mesesAtuais]
+      const primeiroMes = mesesOrdenados[0]
+      const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
+
+      const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
+      const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
+
+      const [anoFimSel, mesFimSel] = ultimoMes.split("-")
+      const anoFimNum = parseInt(anoFimSel)
+      const mesFimNum = parseInt(mesFimSel)
+      const ultimoDiaSelecionado = new Date(anoFimNum, mesFimNum + 1, 0).getDate()
+      const dataFimSelecionado = `${anoFimSel}-${mesFimSel}-${String(ultimoDiaSelecionado).padStart(2, "0")}`
+
+      // Calcular período do gráfico (12 meses a partir do mês mais recente)
+      const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
+      const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
+
+      const [anoInicioGrafico, mesInicioGrafico] = mesesParaGrafico[0].split("-")
+      const dataInicioGrafico = `${anoInicioGrafico}-${mesInicioGrafico}-01`
+
+      const [anoFimGrafico, mesFimGrafico] = mesMaisRecente.split("-")
+      const anoNum = parseInt(anoFimGrafico)
+      const mesNum = parseInt(mesFimGrafico)
+      const ultimoDiaGrafico = new Date(anoNum, mesNum + 1, 0).getDate()
+      const dataFimGrafico = `${anoFimGrafico}-${mesFimGrafico}-${String(ultimoDiaGrafico).padStart(2, "0")}`
+
+      // Carregar dados em paralelo
+      const paramsVidas = new URLSearchParams({
+        data_inicio: dataInicioGrafico,
+        data_fim: dataFimGrafico,
+      })
+      if (operadorasAtuais.length > 0) paramsVidas.append("operadoras", operadorasAtuais.join(","))
+      if (entidadesAtuais.length > 0) paramsVidas.append("entidades", entidadesAtuais.join(","))
+      if (tipoValido && tipoValido !== "Todos") paramsVidas.append("tipo", tipoValido)
+
+      const paramsDetalhados = new URLSearchParams({
+        data_inicio: dataInicioSelecionado,
+        data_fim: dataFimSelecionado,
+        pagina: "1",
+        limite: "20",
+      })
+      if (operadorasAtuais.length > 0) paramsDetalhados.append("operadoras", operadorasAtuais.join(","))
+      if (entidadesAtuais.length > 0) paramsDetalhados.append("entidades", entidadesAtuais.join(","))
+      if (tipoValido && tipoValido !== "Todos") paramsDetalhados.append("tipo", tipoValido)
+      if (mesesAtuais.length > 0) paramsDetalhados.append("meses_referencia", mesesAtuais.join(","))
+
+      const [vidasRes, detalhadosRes] = await Promise.all([
+        fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`),
+        fetchNoStore(`/api/beneficiarios/detalhados?${paramsDetalhados}`)
+      ])
+
+      if (!vidasRes.ok) throw new Error("Erro ao carregar vidas ativas")
+      if (!detalhadosRes.ok) throw new Error("Erro ao carregar dados detalhados")
+
+      const [vidasData, detalhadosData] = await Promise.all([
+        vidasRes.json(),
+        detalhadosRes.json()
+      ])
+
+      // Processar vidas ativas
+      const dadosPorMes = new Map<string, VidasAtivasPorMes>()
+      ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
+        dadosPorMes.set(item.mes_referencia, item)
+      })
+
+      const vidasCompletas = mesesParaGrafico.map(mes => {
+        const dadosDoMes = dadosPorMes.get(mes)
+        if (dadosDoMes) {
+          return dadosDoMes
+        }
+        return { mes_referencia: mes, vidas_ativas: 0 }
+      })
+
+      setVidasAtivas(vidasCompletas)
+      
+      // Preservar linhas expandidas ao recarregar dados
+      const novosDados = detalhadosData.dados || []
+      
+      // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
+      const getGrupoKey = (row: any) => {
+        if (row?.CPF) return `cpf:${row.CPF}`
+        if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
+        const parts = [
+          row?.OPERADORA || "SEM-OPERADORA",
+          row?.PLANO || "SEM-PLANO",
+          row?.NOME || "SEM-NOME",
+          row?.ENTIDADE || "SEM-ENTIDADE",
+          row?.STATUS || "SEM-STATUS",
+        ]
+        return `fallback:${parts.join("|")}`
+      }
+      
+      // Preservar keys expandidas que ainda existem nos novos dados
+      // IMPORTANTE: Só preservar quando realmente há novos dados (não em re-renders)
+      // Usar ref para garantir que as linhas expandidas sejam preservadas
+      const keysExpandidasAtuais = expandedRowKeysRef.current
+      if (keysExpandidasAtuais.size > 0 && novosDados.length > 0) {
+        const novasKeys = new Set<string>()
+        novosDados.forEach((row: any) => {
+          const key = getGrupoKey(row)
+          if (keysExpandidasAtuais.has(key)) {
+            novasKeys.add(key)
+          }
+        })
+        
+        // Preservar todas as keys que ainda existem nos novos dados
+        if (novasKeys.size > 0) {
+          setExpandedRowKeys(novasKeys)
+          expandedRowKeysRef.current = novasKeys
+        }
+      }
+      
+      setDadosDetalhados(novosDados)
+      setTotalRegistros(detalhadosData.total || 0)
+      setTotalPaginas(detalhadosData.totalPaginas || 1)
+      setPaginaAtual(1)
+      signalPageLoaded()
+    } catch (error: any) {
+      console.error("Erro ao carregar dashboard:", error)
+      toast({
+        title: "Erro",
+        description: error.message || "Não foi possível carregar dados do dashboard",
+        variant: "destructive"
+      })
+      setVidasAtivas([])
+      setDadosDetalhados([])
+    } finally {
+      setLoading(false)
+      loadDashboardInProgressRef.current = false
+    }
+  }, [mesesReferenciaStable, operadorasValidasStable, entidadesStable, tipoValido, toast])
+  
+  // Carregar todos os dados necessários na inicialização (mesma abordagem da página de Histórico de Bonificações)
+  const loadAllData = useCallback(async () => {
+    // Proteção: garantir que só execute uma vez
+    if (loadAllDataCalledRef.current) {
+      return
+    }
+    loadAllDataCalledRef.current = true
+    
+    setLoading(true)
+    try {
+      // Primeiro carregar filtros disponíveis
+      try {
+        const res = await fetchNoStore("/api/beneficiarios/filtros")
+        if (!res.ok) throw new Error("Erro ao carregar filtros")
+        const data = await res.json()
+        setOperadorasDisponiveis(data.operadoras || [])
+        setEntidadesDisponiveis(data.entidades || [])
+        setEntidadesPorOperadora(data.entidadesPorOperadora || {})
+        setTiposDisponiveis(data.tipos || [])
+        setLoadingFiltros(false)
+      } catch (error: any) {
+        console.error("Erro ao carregar filtros:", error)
+        toast({
+          title: "Erro",
+          description: "Não foi possível carregar filtros",
+          variant: "destructive"
+        })
+        setLoadingFiltros(false)
+      }
+      
+      // Depois carregar dados do dashboard (após filtros estarem prontos)
+      await loadDashboard()
+    } catch (error) {
+      console.error("Erro ao carregar dados:", error)
+      // Resetar flag em caso de erro para permitir retry
+      loadAllDataCalledRef.current = false
     } finally {
       setLoading(false)
       signalPageLoaded()
+      isInitialLoad.current = false
     }
-  }, [mesesReferencia, operadorasValidas, entidades, tipoValido, toast, loadDadosDetalhados])
+  }, [loadDashboard, toast])
 
-  // Garantir que sempre haja pelo menos um mês selecionado
+  // Carregamento inicial único - executa apenas uma vez no mount
   useEffect(() => {
-    if (mesesReferencia.length === 0 && !loadingFiltros) {
-      // Usar o mês atual como padrão
-      const hoje = new Date()
-      const ano = hoje.getFullYear()
-      const mes = String(hoje.getMonth() + 1).padStart(2, "0")
-      const mesAtual = `${ano}-${mes}`
-      updateFilters({ mesesReferencia: [mesAtual] })
-    }
-  }, [mesesReferencia, loadingFiltros, updateFilters])
-
-  // Carregar dados apenas uma vez quando a página monta (após filtros carregarem)
-  useEffect(() => {
-    if (!loadingFiltros && mesesReferencia.length > 0 && !dadosCarregadosInicialmente) {
-      loadVidasAtivas()
-      setDadosCarregadosInicialmente(true)
-    }
+    loadAllData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadingFiltros]) // Carregar apenas quando os filtros terminarem de carregar pela primeira vez
+  }, [])
+
+  // REMOVIDO: useEffect que recarregava automaticamente quando filtros mudavam
+  // A página fica congelada até o usuário clicar no botão "Atualizar"
+  // Mesma abordagem da página de Histórico de Bonificações - sem reloads automáticos
 
   const fmtNumber = (v: number) => 
     new Intl.NumberFormat("pt-BR").format(v)
 
   const fmtCurrency = (v: number | null | undefined) => {
-    if (v === null || v === undefined) return '-'
+    if (v === null || v === undefined) return "-"
     return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v)
+  }
+
+  const fmtDate = (value?: string | null) => {
+    if (!value) return "-"
+    const date = new Date(value)
+    if (isNaN(date.getTime())) return value
+    return date.toLocaleDateString("pt-BR")
   }
 
   const fmtMes = (mes: string) => {
@@ -437,6 +772,156 @@ export default function SinistralidadeDashboardPage() {
     const date = new Date(parseInt(ano), parseInt(mesNum) - 1, 1)
     return date.toLocaleDateString("pt-BR", { month: "short", year: "numeric" })
   }
+
+  const parseValor = (valor: any): number => {
+    if (typeof valor === "number") return valor
+    if (typeof valor === "string") {
+      const parsed = Number(valor.replace(",", "."))
+      return isNaN(parsed) ? 0 : parsed
+    }
+    return 0
+  }
+
+  const chartData = useMemo(() => {
+    return vidasAtivas.map(item => ({
+      ...item,
+      mes: fmtMes(item.mes_referencia),
+    }))
+  }, [vidasAtivas])
+
+  const dadosAgrupados = useMemo(() => {
+    const getGrupoKey = (row: any) => {
+      if (row?.CPF) return `cpf:${row.CPF}`
+      if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
+      const parts = [
+        row?.OPERADORA || "SEM-OPERADORA",
+        row?.PLANO || "SEM-PLANO",
+        row?.NOME || "SEM-NOME",
+        row?.ENTIDADE || "SEM-ENTIDADE",
+        row?.STATUS || "SEM-STATUS",
+      ]
+      return `fallback:${parts.join("|")}`
+    }
+
+    const grupos = new Map<
+      string,
+      {
+        key: string
+        info: any
+        procedimentos: {
+          evento?: string | null
+          descricao?: string | null
+          especialidade?: string | null
+          valor: number
+          data_competencia?: string | null
+          data_atendimento?: string | null
+        }[]
+        totalValor: number
+        gastoAnual: number
+      }
+    >()
+
+    dadosDetalhados.forEach(row => {
+      const key = getGrupoKey(row)
+      const valorProcedimento = parseValor(row.VALOR)
+      const gastoAnual = parseValor(row.GASTO_ANUAL)
+      if (!grupos.has(key)) {
+        grupos.set(key, {
+          key,
+          info: row,
+          procedimentos: [],
+          totalValor: 0,
+          gastoAnual,
+        })
+      }
+      const grupo = grupos.get(key)!
+      if (gastoAnual > 0) {
+        grupo.gastoAnual = gastoAnual
+      }
+        grupo.procedimentos.push({
+        evento: row.EVENTO,
+        descricao: row.DESCRICAO,
+        especialidade: row.ESPECIALIDADE,
+        valor: valorProcedimento,
+        data_competencia: row.DATA_COMPETENCIA,
+        data_atendimento: row.DATA_ATENDIMENTO,
+      })
+      grupo.totalValor += valorProcedimento
+    })
+
+    return Array.from(grupos.values())
+      .map(grupo => ({
+        ...grupo,
+        info: {
+          ...grupo.info,
+          NOME: grupo.info?.NOME
+            ? grupo.info.NOME
+                .toLowerCase()
+                .split(" ")
+                .filter(Boolean)
+                .map((part: string) => part.charAt(0).toUpperCase() + part.slice(1))
+                .join(" ")
+            : grupo.info?.NOME,
+        },
+      }))
+      .sort((a, b) => {
+        if (b.gastoAnual !== a.gastoAnual) {
+          return b.gastoAnual - a.gastoAnual
+        }
+        return b.totalValor - a.totalValor
+      })
+  }, [dadosDetalhados])
+
+  // REMOVIDO: useEffect que fechava linhas expandidas automaticamente
+  // As linhas expandidas agora ficam abertas até o usuário fechar manualmente
+  // Não há mais reloads automáticos que fecham as linhas
+
+  const toggleExpandRow = (key: string) => {
+    setExpandedRowKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      // Atualizar ref também para garantir persistência
+      expandedRowKeysRef.current = next
+      return next
+    })
+  }
+
+  const recarregarPaginaDetalhados = useCallback(async (paginaDestino: number) => {
+    if (mesesReferencia.length === 0) return false
+
+    // Calcular período selecionado
+    const mesesOrdenados = [...mesesReferencia].sort()
+    const primeiroMes = mesesOrdenados[0]
+    const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
+
+    const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
+    const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
+
+    const [anoFimSel, mesFimSel] = ultimoMes.split("-")
+    const anoFimNum = parseInt(anoFimSel)
+    const mesFimNum = parseInt(mesFimSel)
+    const ultimoDiaSelecionado = new Date(anoFimNum, mesFimNum + 1, 0).getDate()
+    const dataFimSelecionado = `${anoFimSel}-${mesFimSel}-${String(ultimoDiaSelecionado).padStart(2, "0")}`
+
+    return await loadDadosDetalhados(
+      dataInicioSelecionado,
+      dataFimSelecionado,
+      paginaDestino,
+      mesesReferencia,
+      {
+        operadoras: operadorasValidas,
+        entidades: entidades,
+        tipo: tipoValido,
+      }
+    )
+  }, [loadDadosDetalhados, mesesReferencia, operadorasValidas, entidades, tipoValido])
+
+  // REMOVIDO: useEffects complexos e refs desnecessárias
+  // Agora usa abordagem simples como Histórico de Bonificações
 
   // Aguardar carregamento do usuário antes de renderizar
   if (authLoading) {
@@ -683,14 +1168,16 @@ export default function SinistralidadeDashboardPage() {
               </Select>
             </div>
           </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <Button variant="outline" size="sm" onClick={clearFilters}>
-              Limpar
-            </Button>
-            <Button onClick={() => loadVidasAtivas()} size="sm" className="gap-2" disabled={loading}>
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-              Atualizar
-            </Button>
+          <div className="mt-4 flex flex-col items-end gap-1">
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={clearFilters}>
+                Limpar
+              </Button>
+              <Button onClick={() => loadDashboard()} size="sm" className="gap-2" disabled={loading}>
+                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+                Atualizar
+              </Button>
+            </div>
           </div>
         </CardContent>
       </Card>
@@ -710,7 +1197,7 @@ export default function SinistralidadeDashboardPage() {
             <p className="text-muted-foreground text-center py-8">Nenhum dado disponível</p>
           ) : (
             <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={vidasAtivas.map(item => ({ ...item, mes: fmtMes(item.mes_referencia) }))}>
+              <BarChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="mes" />
                 <YAxis tickFormatter={(value) => fmtNumber(value)} />
@@ -759,35 +1246,95 @@ export default function SinistralidadeDashboardPage() {
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-10" />
                       <TableHead>Operadora</TableHead>
                       <TableHead>Plano</TableHead>
                       <TableHead>CPF</TableHead>
                       <TableHead>Nome</TableHead>
-                      <TableHead>Entidade</TableHead>
                       <TableHead>Status</TableHead>
+                      <TableHead>Entidade</TableHead>
                       <TableHead>Idade</TableHead>
-                      <TableHead>Evento</TableHead>
-                      <TableHead>Descrição</TableHead>
-                      <TableHead>Especialidade</TableHead>
-                      <TableHead>Valor</TableHead>
+                      <TableHead>Procedimentos</TableHead>
+                      <TableHead>Gasto do Mês</TableHead>
+                      <TableHead>Gasto Anual</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {dadosDetalhados.map((row, index) => (
-                      <TableRow key={`${row.CPF}-${index}-${row.EVENTO || ''}-${row.DATA_COMPETENCIA || ''}`}>
-                        <TableCell>{row.OPERADORA || '-'}</TableCell>
-                        <TableCell>{row.PLANO || '-'}</TableCell>
-                        <TableCell>{row.CPF || '-'}</TableCell>
-                        <TableCell>{row.NOME || '-'}</TableCell>
-                        <TableCell>{row.ENTIDADE || '-'}</TableCell>
-                        <TableCell>{row.STATUS || '-'}</TableCell>
-                        <TableCell>{row.IDADE || '-'}</TableCell>
-                        <TableCell>{row.EVENTO || '-'}</TableCell>
-                        <TableCell>{row.DESCRICAO || '-'}</TableCell>
-                        <TableCell>{row.ESPECIALIDADE || '-'}</TableCell>
-                        <TableCell>{fmtCurrency(row.VALOR)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {dadosAgrupados.map(grupo => {
+                      const isExpanded = expandedRowKeys.has(grupo.key)
+                      return (
+                        <Fragment key={grupo.key}>
+                          <TableRow>
+                            <TableCell className="w-10">
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                onClick={() => toggleExpandRow(grupo.key)}
+                                aria-label={isExpanded ? "Recolher procedimentos" : "Expandir procedimentos"}
+                              >
+                                <ChevronDown
+                                  className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                                />
+                              </Button>
+                            </TableCell>
+                            <TableCell>{grupo.info?.OPERADORA || "-"}</TableCell>
+                            <TableCell>{grupo.info?.PLANO || "-"}</TableCell>
+                            <TableCell>{grupo.info?.CPF || "-"}</TableCell>
+                            <TableCell>{grupo.info?.NOME || "-"}</TableCell>
+                            <TableCell>{grupo.info?.STATUS || "-"}</TableCell>
+                            <TableCell>{grupo.info?.ENTIDADE || "-"}</TableCell>
+                            <TableCell>{grupo.info?.IDADE || "-"}</TableCell>
+                            <TableCell>{grupo.procedimentos.length}</TableCell>
+                            <TableCell>{fmtCurrency(grupo.totalValor)}</TableCell>
+                            <TableCell>{fmtCurrency(grupo.gastoAnual)}</TableCell>
+                          </TableRow>
+                          {isExpanded && (
+                            <TableRow>
+                              <TableCell colSpan={11} className="bg-muted/40">
+                                <div className="space-y-3 p-3">
+                                  <p className="text-sm font-semibold text-muted-foreground">
+                                    Procedimentos realizados
+                                  </p>
+                                  <div className="space-y-3">
+                                    {grupo.procedimentos.map((proc, index) => (
+                                      <div
+                                        key={`${grupo.key}-proc-${index}-${proc.evento || "evento"}`}
+                                        className="rounded-lg border bg-white p-3 text-sm shadow-sm"
+                                      >
+                                        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                                          <div>
+                                            <p className="text-xs uppercase text-muted-foreground">Evento</p>
+                                            <p className="font-medium">{proc.evento || "-"}</p>
+                                          </div>
+                                          <div>
+                                            <p className="text-xs uppercase text-muted-foreground">Descrição</p>
+                                            <p className="font-medium break-words whitespace-pre-line">
+                                              {proc.descricao || "-"}
+                                            </p>
+                                          </div>
+                                          <div>
+                                            <p className="text-xs uppercase text-muted-foreground">Especialidade</p>
+                                            <p className="font-medium">{proc.especialidade || "-"}</p>
+                                          </div>
+                                          <div>
+                                            <p className="text-xs uppercase text-muted-foreground">Data</p>
+                                            <p className="font-medium">{fmtDate(proc.data_atendimento || proc.data_competencia)}</p>
+                                          </div>
+                                          <div>
+                                            <p className="text-xs uppercase text-muted-foreground">Valor</p>
+                                            <p className="font-medium">{fmtCurrency(proc.valor)}</p>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </Fragment>
+                      )
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -802,21 +1349,12 @@ export default function SinistralidadeDashboardPage() {
                     size="sm"
                     onClick={async () => {
                       const novaPagina = Math.max(1, paginaAtual - 1)
-                      setPaginaAtual(novaPagina)
-                      // Recalcular datas para recarregar
-                      const mesesOrdenados = [...mesesReferencia].sort()
-                      const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
-                      const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
-                      const [anoInicio, mesInicio] = mesesParaGrafico[0].split("-")
-                      const dataInicio = `${anoInicio}-${mesInicio}-01`
-                      const [anoFim, mesFim] = mesMaisRecente.split("-")
-                      const anoNum = parseInt(anoFim)
-                      const mesNum = parseInt(mesFim)
-                      const ultimoDia = new Date(anoNum, mesNum + 1, 0).getDate()
-                      const dataFim = `${anoFim}-${mesFim}-${String(ultimoDia).padStart(2, "0")}`
-                      await loadDadosDetalhados(dataInicio, dataFim, novaPagina)
+                      const sucesso = await recarregarPaginaDetalhados(novaPagina)
+                      if (sucesso) {
+                        setPaginaAtual(novaPagina)
+                      }
                     }}
-                    disabled={paginaAtual === 1 || loadingDetalhados}
+                    disabled={dadosDetalhados.length === 0 || paginaAtual === 1 || loadingDetalhados}
                   >
                     <ChevronLeft className="h-4 w-4" />
                     Anterior
@@ -829,21 +1367,12 @@ export default function SinistralidadeDashboardPage() {
                     size="sm"
                     onClick={async () => {
                       const novaPagina = Math.min(totalPaginas, paginaAtual + 1)
-                      setPaginaAtual(novaPagina)
-                      // Recalcular datas para recarregar
-                      const mesesOrdenados = [...mesesReferencia].sort()
-                      const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
-                      const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
-                      const [anoInicio, mesInicio] = mesesParaGrafico[0].split("-")
-                      const dataInicio = `${anoInicio}-${mesInicio}-01`
-                      const [anoFim, mesFim] = mesMaisRecente.split("-")
-                      const anoNum = parseInt(anoFim)
-                      const mesNum = parseInt(mesFim)
-                      const ultimoDia = new Date(anoNum, mesNum + 1, 0).getDate()
-                      const dataFim = `${anoFim}-${mesFim}-${String(ultimoDia).padStart(2, "0")}`
-                      await loadDadosDetalhados(dataInicio, dataFim, novaPagina)
+                      const sucesso = await recarregarPaginaDetalhados(novaPagina)
+                      if (sucesso) {
+                        setPaginaAtual(novaPagina)
+                      }
                     }}
-                    disabled={paginaAtual >= totalPaginas || loadingDetalhados}
+                    disabled={dadosDetalhados.length === 0 || paginaAtual >= totalPaginas || loadingDetalhados}
                   >
                     Próxima
                     <ChevronRight className="h-4 w-4" />
@@ -857,4 +1386,5 @@ export default function SinistralidadeDashboardPage() {
     </div>
   )
 }
+
 

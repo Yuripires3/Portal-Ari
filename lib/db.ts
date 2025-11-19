@@ -10,7 +10,8 @@ interface DBConfig {
 
 const DEFAULT_APP_TIMEZONE = process.env.APP_TIMEZONE || process.env.TZ || "America/Sao_Paulo"
 const DEFAULT_MYSQL_OFFSET = process.env.DB_TIMEZONE_OFFSET || "-03:00"
-const DEFAULT_SESSION_TIMEZONE = process.env.DB_SESSION_TIMEZONE || DEFAULT_APP_TIMEZONE
+// Usar offset ao invés de nome de timezone para evitar erro se timezone tables não estiverem carregadas
+const DEFAULT_SESSION_TIMEZONE = process.env.DB_SESSION_TIMEZONE || DEFAULT_MYSQL_OFFSET
 
 if (!process.env.TZ) {
   process.env.TZ = DEFAULT_APP_TIMEZONE

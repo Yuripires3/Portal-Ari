@@ -1,7 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useMemo } from "react"
-import { formatDateISO } from "@/lib/date-utils"
+import { useCallback, useEffect, useMemo, useRef } from "react"
 import { usePersistentState } from "@/hooks/usePersistentState"
 
 type BeneficiariosFiltersState = {
@@ -15,44 +14,20 @@ type BeneficiariosFiltersState = {
 const STORAGE_KEY = "admin-beneficiarios-filters"
 
 function getMesReferenciaAtual(): string {
-  try {
-    const hoje = new Date()
-    if (Number.isNaN(hoje.getTime())) {
-      const fallback = new Date()
-      const year = fallback.getFullYear()
-      const month = String(fallback.getMonth() + 1).padStart(2, "0")
-      return `${year}-${month}`
-    }
-    const year = hoje.getFullYear()
-    const month = String(hoje.getMonth() + 1).padStart(2, "0")
-    return `${year}-${month}`
-  } catch (error) {
-    console.error("[getMesReferenciaAtual] Error:", error)
-    return ""
-  }
+  const hoje = new Date()
+  const year = hoje.getFullYear()
+  const month = String(hoje.getMonth() + 1).padStart(2, "0")
+  return `${year}-${month}`
 }
 
 const createDefaultFilters = (): BeneficiariosFiltersState => {
-  try {
-    const mesReferencia = getMesReferenciaAtual() || ""
-    return {
-      mesReferencia, // Mantido para compatibilidade
-      mesesReferencia: mesReferencia ? [mesReferencia] : [],
-      operadoras: [],
-      entidades: [],
-      tipo: "Todos",
-    }
-  } catch (error) {
-    console.error("[createDefaultFilters] Error:", error)
-    // Retornar valores padrão seguros em caso de erro
-    const mesReferencia = getMesReferenciaAtual() || ""
-    return {
-      mesReferencia, // Mantido para compatibilidade
-      mesesReferencia: mesReferencia ? [mesReferencia] : [],
-      operadoras: [],
-      entidades: [],
-      tipo: "Todos",
-    }
+  const mesReferencia = getMesReferenciaAtual()
+  return {
+    mesReferencia,
+    mesesReferencia: [mesReferencia],
+    operadoras: [],
+    entidades: [],
+    tipo: "Todos",
   }
 }
 
@@ -115,15 +90,8 @@ const normalizeFilters = (
   } else if (mesReferencia) {
     mesesReferencia = [mesReferencia]
   } else {
-    // Garantir que sempre tenha pelo menos o mês atual
-    const mesAtual = getMesReferenciaAtual()
-    mesesReferencia = mesAtual ? [mesAtual] : []
-  }
-
-  // Garantir que nunca fique vazio - sempre ter pelo menos o mês atual
-  if (mesesReferencia.length === 0) {
-    const mesAtual = getMesReferenciaAtual()
-    mesesReferencia = mesAtual ? [mesAtual] : []
+    // Se não houver nenhum valor, usar o mês atual como padrão
+    mesesReferencia = [getMesReferenciaAtual()]
   }
 
   return {
@@ -143,6 +111,45 @@ export function useBeneficiariosFilters(initial?: Partial<BeneficiariosFiltersSt
     createDefaultFilters
   )
 
+  // Normalizar filtros uma vez após carregar do localStorage para garantir consistência
+  // entre mesReferencia e mesesReferencia
+  const normalizedOnceRef = useRef(false)
+  useEffect(() => {
+    if (normalizedOnceRef.current) return
+    
+    // Verificar se há inconsistência entre mesReferencia e mesesReferencia
+    // Usar setFilters com função para acessar o estado atual sem depender de filters
+    setFilters((prev) => {
+      if (normalizedOnceRef.current) return prev
+      normalizedOnceRef.current = true
+      
+      const mesRef = prev.mesReferencia
+      const mesesRef = prev.mesesReferencia
+      
+      // Se mesReferencia existe mas não está em mesesReferencia, ou se estão diferentes
+      const needsNormalization = 
+        (mesRef && mesesRef.length > 0 && !mesesRef.includes(mesRef)) ||
+        (mesesRef.length > 0 && mesRef !== mesesRef[0])
+      
+      if (needsNormalization) {
+        // Normalizar: usar mesesReferencia como fonte da verdade
+        const mesesNormalizados = mesesRef.length > 0 ? mesesRef : (mesRef ? [mesRef] : [getMesReferenciaAtual()])
+        const mesNormalizado = mesesNormalizados[0] || getMesReferenciaAtual()
+        
+        // Só atualizar se realmente houver mudança
+        if (mesNormalizado !== mesRef || JSON.stringify(mesesNormalizados) !== JSON.stringify(mesesRef)) {
+          return {
+            ...prev,
+            mesReferencia: mesNormalizado,
+            mesesReferencia: mesesNormalizados
+          }
+        }
+      }
+      
+      return prev
+    })
+  }, [setFilters])
+
   useEffect(() => {
     if (!initial || Object.keys(initial).length === 0) return
     setFilters((prev) => normalizeFilters({ ...prev, ...initial }, prev))
@@ -159,13 +166,8 @@ export function useBeneficiariosFilters(initial?: Partial<BeneficiariosFiltersSt
     setFilters(createDefaultFilters())
   }, [setFilters])
 
-  // Garantir que sempre retorne um objeto válido, nunca undefined
-  const safeFilters = useMemo(() => {
-    return filters || createDefaultFilters()
-  }, [filters])
-
   return {
-    filters: safeFilters,
+    filters,
     updateFilters,
     resetFilters,
   }
