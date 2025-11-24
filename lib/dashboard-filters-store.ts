@@ -1,12 +1,14 @@
 "use client"
 
+console.log("🚨 dashboard store loaded", performance.now())
+
 import { useCallback, useEffect, useMemo } from "react"
 import { formatDateISO } from "@/lib/date-utils"
 import { usePersistentState } from "@/hooks/usePersistentState"
 
 export type DashboardPapel = "geral" | "corretores" | "supervisores"
 
-type DashboardFiltersState = {
+export type DashboardFiltersState = {
   dataInicio: string
   dataFim: string
   operadora: string
@@ -40,9 +42,9 @@ const normalizeFilters = (
 ): DashboardFiltersState => {
   const entidadesValue = input.entidades
   const entidades = Array.isArray(entidadesValue)
-    ? entidadesValue.map((ent) => String(ent).trim()).filter(Boolean)
+    ? entidadesValue.map((ent: unknown) => String(ent).trim()).filter(Boolean)
     : typeof entidadesValue === "string"
-    ? entidadesValue.split(",").map((ent) => ent.trim()).filter(Boolean)
+    ? (entidadesValue as string).split(",").map((ent: string) => ent.trim()).filter(Boolean)
     : fallback.entidades
 
   const papelValue = input.papel

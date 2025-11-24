@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback, useMemo, type KeyboardEvent } from "react"
+import { useEffect, useState, useCallback, useMemo, useRef, type KeyboardEvent } from "react"
 import { useSearchParams, useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -38,7 +38,7 @@ import {
 } from "recharts"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { formatDateISO } from "@/lib/date-utils"
-import { useDashboardFilters, type DashboardPapel } from "@/lib/dashboard-filters-store"
+import { useDashboardFilters, type DashboardPapel, type DashboardFiltersState } from "@/lib/dashboard-filters-store"
 
 // Cores QV (paleta conforme especificado)
 const COLORS_QV = {
@@ -114,6 +114,9 @@ const normalizeTexto = (valor: string) => normalizarNomeOperadora(valor).toLower
 const fetchNoStore = (input: string, init?: RequestInit) =>
   fetch(input, { ...init, cache: "no-store" })
 
+const isDashboardPapel = (value: string | null): value is DashboardPapel =>
+  value === "geral" || value === "corretores" || value === "supervisores"
+
 // Tipos
 type Kpis = {
   comissoesMes: number
@@ -147,18 +150,19 @@ export default function DashboardContent() {
   const { toast } = useToast()
 
   const searchParamsString = searchParams.toString()
-  const initialFiltersFromUrl = useMemo(() => {
+  const initialFiltersFromUrl = useMemo<Partial<DashboardFiltersState>>(() => {
     if (!searchParamsString) return {}
     const params = new URLSearchParams(searchParamsString)
     const entidadesParam = params.get("entidade")
-    const papelParam = params.get("papel") as DashboardPapel | null
+    const papelParam = params.get("papel")
+    const papel = isDashboardPapel(papelParam) ? papelParam : undefined
 
     return {
       dataInicio: params.get("inicio") || undefined,
       dataFim: params.get("fim") || undefined,
       operadora: params.get("operadora") || undefined,
       entidades: entidadesParam ? entidadesParam.split(",").map((ent) => ent.trim()).filter(Boolean) : undefined,
-      papel: papelParam === "corretores" || papelParam === "supervisores" ? papelParam : papelParam === "geral" ? "geral" : undefined,
+      papel,
     }
   }, [searchParamsString])
 
@@ -190,7 +194,7 @@ export default function DashboardContent() {
   const [entidadesPorOperadora, setEntidadesPorOperadora] = useState<Record<string, string[]>>({})
 
   // Estados de loading
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(false)
   const [loadingFiltros, setLoadingFiltros] = useState(true)
 
   // Formatação
@@ -264,7 +268,10 @@ export default function DashboardContent() {
     }
   }, [loadingFiltros, operadora, operadorasDisponiveis, updateFilters])
 
-  // Carregar dados do dashboard
+  // Referência para permitir apenas um carregamento automático inicial (quando URL já vem preenchida)
+  const allowInitialLoadRef = useRef(Boolean(initialFiltersFromUrl.dataInicio && initialFiltersFromUrl.dataFim))
+
+  // Carrega todos os dados do dashboard; única função que dispara chamadas /api/dashboard/*
   const loadDashboard = useCallback(async () => {
     if (!dataInicio || !dataFim) return
 
@@ -399,90 +406,13 @@ export default function DashboardContent() {
     }
   }, [dataInicio, dataFim, operadora, entidades, papel, toast])
 
-  // Função para verificar se o range é maior que 12 meses (contando a partir da data fim)
-  const isRangeGreaterThan12Months = useCallback((inicio: string, fim: string): boolean => {
-    if (!inicio || !fim) return false
-    
-    const dataInicio = new Date(inicio)
-    const dataFim = new Date(fim)
-    
-    // Calcular diferença em meses (contando da data fim)
-    const diffTime = dataFim.getTime() - dataInicio.getTime()
-    const diffMonths = diffTime / (1000 * 60 * 60 * 24 * 30.44) // Média de dias por mês
-    
-    return diffMonths > 12
-  }, [])
-
-  // Função para carregar apenas os gráficos específicos quando range > 12 meses
-  const loadSpecificCharts = useCallback(async () => {
-    if (!dataInicio || !dataFim) return
-
-    try {
-      const params = new URLSearchParams({
-        inicio: dataInicio,
-        fim: dataFim,
-        papel: papel
-      })
-      if (operadora) params.append("operadora", operadora)
-      if (entidades.length > 0) params.append("entidade", entidades.join(","))
-
-      // Carregar apenas os três gráficos específicos
-      const [evolucaoRes, impactoRes, evolucaoDescontosRes] = await Promise.all([
-        fetchNoStore(`/api/dashboard/evolucao?${params}`),
-        fetchNoStore(`/api/dashboard/impacto-descontos?${params}`),
-        fetchNoStore(`/api/dashboard/evolucao-descontos?${params}`)
-      ])
-
-      if (!evolucaoRes.ok) throw new Error("Erro ao carregar evolução")
-      if (!impactoRes.ok) throw new Error("Erro ao carregar impacto de descontos")
-      if (!evolucaoDescontosRes.ok) throw new Error("Erro ao carregar evolução de descontos")
-
-      const [evolucaoData, impactoData, evolucaoDescontosData] = await Promise.all([
-        evolucaoRes.json(),
-        impactoRes.json(),
-        evolucaoDescontosRes.json()
-      ])
-
-      setEvolucao(evolucaoData)
-      setImpactoDescontos(impactoData)
-      setEvolucaoDescontos(evolucaoDescontosData)
-    } catch (error: any) {
-      console.error("Erro ao carregar gráficos específicos:", error)
-      toast({
-        title: "Erro",
-        description: error.message || "Não foi possível atualizar os gráficos",
-        variant: "destructive"
-      })
-    }
-  }, [dataInicio, dataFim, operadora, entidades, papel, toast])
-
-  // Carregar dados quando filtros mudarem
+  // Dispara apenas um carregamento inicial se os filtros já vierem na URL; não reage após interações do usuário
   useEffect(() => {
+    if (!allowInitialLoadRef.current) return
+    if (!dataInicio || !dataFim) return
+    allowInitialLoadRef.current = false
     loadDashboard()
-  }, [loadDashboard])
-
-  // Atualizar gráficos específicos quando range > 12 meses (após carregamento inicial)
-  useEffect(() => {
-    if (!dataInicio || !dataFim) return
-    
-    // Verificar se o range é maior que 12 meses
-    if (!isRangeGreaterThan12Months(dataInicio, dataFim)) {
-      return
-    }
-    
-    // Se ainda está carregando, aguardar terminar
-    if (loading) {
-      return
-    }
-    
-    // Aguardar um pequeno delay para garantir que loadDashboard terminou completamente
-    // e então atualizar apenas os três gráficos específicos
-    const timer = setTimeout(() => {
-      loadSpecificCharts()
-    }, 300)
-    
-    return () => clearTimeout(timer)
-  }, [dataFim, dataInicio, loading, isRangeGreaterThan12Months, loadSpecificCharts])
+  }, [dataInicio, dataFim, loadDashboard])
 
   // Atualizar URL quando papel mudar
   const buildCanonicalQueryString = (pairs: Array<[string, string]>) =>
@@ -541,6 +471,10 @@ export default function DashboardContent() {
       : [...entidades, entidade]
     updateFilters({ entidades: next })
   }, [entidades, updateFilters])
+
+  const handlePapelChange = useCallback((nextPapel: DashboardPapel) => {
+    updateFilters({ papel: nextPapel })
+  }, [updateFilters])
 
   const handleOperadoraInputChange = useCallback((value: string) => {
     setOperadoraQuery(value)
@@ -714,7 +648,7 @@ export default function DashboardContent() {
             </div>
             <div className="space-y-2">
               <Label>Tipo de produtor</Label>
-              <Select value={papel} onValueChange={(val) => setPapel(val as "geral" | "corretores" | "supervisores")}>
+              <Select value={papel} onValueChange={(val) => handlePapelChange(val as DashboardPapel)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -730,8 +664,13 @@ export default function DashboardContent() {
             <Button variant="outline" size="sm" onClick={clearFilters}>
               Limpar
             </Button>
-            <Button onClick={() => loadDashboard()} size="sm" className="gap-2">
-              <RefreshCw className="h-4 w-4" />
+            <Button 
+              onClick={() => loadDashboard()} 
+              size="sm" 
+              className="gap-2"
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
               Atualizar
             </Button>
           </div>

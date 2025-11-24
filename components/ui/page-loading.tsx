@@ -1,69 +1,94 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { usePathname } from "next/navigation"
 import { Loader2 } from "lucide-react"
 
-// Evento customizado para sinalizar que a página terminou de carregar
-const PAGE_LOADED_EVENT = 'page-loaded'
+const PAGE_LOADED_EVENT = "page-loaded"
+
+const logPageLoading = (message: string, payload?: Record<string, unknown>) => {
+  console.log(`[PAGE-LOADING] ${message}`, {
+    ts: new Date().toISOString(),
+    ...payload,
+  })
+}
 
 export function PageLoading() {
   const pathname = usePathname()
   const [loading, setLoading] = useState(false)
   const [prevPathname, setPrevPathname] = useState(pathname)
+  const hideTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const safetyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const setLoadingWithReason = useCallback(
+    (next: boolean, reason: string) => {
+      setLoading((current) => {
+        if (current === next) {
+          return current
+        }
+        logPageLoading(`setLoading(${next})`, { reason, pathname })
+        return next
+      })
+    },
+    [pathname]
+  )
 
   useEffect(() => {
-    // Detecta cliques em links para mostrar loading imediatamente
     const handleClick = (e: MouseEvent) => {
       const target = e.target as HTMLElement
-      const link = target.closest('a[href]')
-      if (link) {
-        const href = link.getAttribute('href')
-        if (href && href.startsWith('/') && href !== pathname) {
-          setLoading(true)
-        }
+      const link = target.closest("a[href]")
+      if (!link) return
+      const href = link.getAttribute("href")
+      if (href && href.startsWith("/") && href !== pathname) {
+        setLoadingWithReason(true, `click:${href}`)
       }
     }
 
-    // Escuta evento de página carregada
-    const handlePageLoaded = () => {
-      // Aguarda 12 segundos após o carregamento completo antes de esconder
-      setTimeout(() => {
-        setLoading(false)
-      }, 12000) // 12 segundos = 12000ms
+    const handlePageLoaded = (event: Event) => {
+      const detail = (event as CustomEvent<{ reason?: string }>).detail
+      logPageLoading("page-loaded event recebido", { detail })
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current)
+      }
+      hideTimeoutRef.current = setTimeout(() => {
+        setLoadingWithReason(false, "page-loaded-event")
+      }, 300)
     }
 
-    document.addEventListener('click', handleClick)
+    document.addEventListener("click", handleClick)
     window.addEventListener(PAGE_LOADED_EVENT, handlePageLoaded)
 
     return () => {
-      document.removeEventListener('click', handleClick)
+      document.removeEventListener("click", handleClick)
       window.removeEventListener(PAGE_LOADED_EVENT, handlePageLoaded)
+      if (hideTimeoutRef.current) {
+        clearTimeout(hideTimeoutRef.current)
+      }
     }
-  }, [pathname])
+  }, [pathname, setLoadingWithReason])
 
   useEffect(() => {
-    // Detecta mudança de rota
     if (pathname !== prevPathname) {
-      setLoading(true)
+      setLoadingWithReason(true, `pathname:${prevPathname} -> ${pathname}`)
       setPrevPathname(pathname)
-      
-      // Timeout de segurança - sempre esconde após um tempo máximo
-      // Deve ser maior que o delay de 12 segundos após carregamento completo
-      const safetyTimeout = setTimeout(() => {
-        setLoading(false)
-      }, 20000) // Máximo 20 segundos (12s de delay + margem de segurança)
-      
-      return () => {
-        clearTimeout(safetyTimeout)
-      }
-    } else {
-      // Se não mudou, garante que não está em loading
-      setLoading(false)
-    }
-  }, [pathname, prevPathname])
 
-  // Mostra loading durante a transição
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current)
+      }
+      safetyTimeoutRef.current = setTimeout(() => {
+        setLoadingWithReason(false, "safety-timeout")
+      }, 20000)
+    } else {
+      setLoadingWithReason(false, "pathname-unchanged")
+    }
+
+    return () => {
+      if (safetyTimeoutRef.current) {
+        clearTimeout(safetyTimeoutRef.current)
+      }
+    }
+  }, [pathname, prevPathname, setLoadingWithReason])
+
   if (!loading) return null
 
   return (
@@ -76,10 +101,10 @@ export function PageLoading() {
   )
 }
 
-// Função helper para páginas sinalizarem que terminaram de carregar
-export function signalPageLoaded() {
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent(PAGE_LOADED_EVENT))
+export function signalPageLoaded(reason: string = "manual") {
+  if (typeof window !== "undefined") {
+    logPageLoading("dispatching page-loaded event", { reason })
+    window.dispatchEvent(new CustomEvent(PAGE_LOADED_EVENT, { detail: { reason } }))
   }
 }
 

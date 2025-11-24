@@ -20,6 +20,8 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode
 }>) {
+  const isProduction = process.env.NODE_ENV === "production"
+
   return (
     <html lang="pt-BR">
       <head>
@@ -30,7 +32,7 @@ export default function RootLayout({
         <AuthProvider>
           {children}
           <Toaster />
-          <Analytics />
+          {isProduction && <Analytics />}
         </AuthProvider>
       </body>
     </html>

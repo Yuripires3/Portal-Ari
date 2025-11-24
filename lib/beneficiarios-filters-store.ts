@@ -1,5 +1,7 @@
 "use client"
 
+console.log("🚨 dashboard store loaded", performance.now())
+
 import { useCallback, useEffect, useMemo, useRef } from "react"
 import { usePersistentState } from "@/hooks/usePersistentState"
 
@@ -31,25 +33,33 @@ const createDefaultFilters = (): BeneficiariosFiltersState => {
   }
 }
 
+const normalizeToStringArray = (value: unknown, fallback: string[]): string[] => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item).trim()).filter(Boolean)
+  }
+  if (typeof value === "string") {
+    return value
+      .split(",")
+      .map((item: string) => item.trim())
+      .filter(Boolean)
+  }
+  return fallback
+}
+
 const normalizeFilters = (
   input: Partial<BeneficiariosFiltersState>,
   fallback: BeneficiariosFiltersState
 ): BeneficiariosFiltersState => {
-  const entidadesValue = input.entidades
-  const entidades = Array.isArray(entidadesValue)
-    ? entidadesValue.map((ent) => String(ent).trim()).filter(Boolean)
-    : typeof entidadesValue === "string"
-    ? entidadesValue.split(",").map((ent) => ent.trim()).filter(Boolean)
-    : fallback.entidades
+  const entidades = normalizeToStringArray(input.entidades, fallback.entidades)
 
   // Normalizar operadoras (suporta migração de string para array)
-  const operadorasValue = input.operadoras !== undefined ? input.operadoras : 
-    (input as any).operadora !== undefined ? [(input as any).operadora].filter(Boolean) : undefined
-  const operadoras = Array.isArray(operadorasValue)
-    ? operadorasValue.map((op) => String(op).trim()).filter(Boolean)
-    : typeof operadorasValue === "string"
-    ? operadorasValue.split(",").map((op) => op.trim()).filter(Boolean)
-    : fallback.operadoras
+  const operadorasValue =
+    input.operadoras !== undefined
+      ? input.operadoras
+      : (input as any).operadora !== undefined
+      ? [(input as any).operadora].filter(Boolean)
+      : undefined
+  const operadoras = normalizeToStringArray(operadorasValue, fallback.operadoras)
 
   // Normalizar mesReferencia (suporta migração de dataInicio/dataFim)
   let mesReferencia = fallback.mesReferencia
@@ -77,11 +87,7 @@ const normalizeFilters = (
   // Normalizar mesesReferencia
   let mesesReferencia: string[] = []
   if (input.mesesReferencia !== undefined) {
-    mesesReferencia = Array.isArray(input.mesesReferencia)
-      ? input.mesesReferencia.map(m => String(m).trim()).filter(Boolean)
-      : typeof input.mesesReferencia === "string"
-      ? input.mesesReferencia.split(",").map(m => m.trim()).filter(Boolean)
-      : []
+    mesesReferencia = normalizeToStringArray(input.mesesReferencia, [])
   } else if (input.mesReferencia) {
     // Migração: converter mesReferencia único para array
     mesesReferencia = [input.mesReferencia]

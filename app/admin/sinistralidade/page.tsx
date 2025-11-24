@@ -11,8 +11,8 @@ import { useAuth } from "@/components/auth/auth-provider"
 import { useBeneficiariosFilters } from "@/lib/beneficiarios-filters-store"
 import { useToast } from "@/hooks/use-toast"
 import { Filter, RefreshCw, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
-import { signalPageLoaded } from "@/components/ui/page-loading"
 import { Skeleton } from "@/components/ui/skeleton"
+import { signalPageLoaded } from "@/components/ui/page-loading"
 import {
   BarChart,
   Bar,
@@ -26,8 +26,56 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
 
-const fetchNoStore = (input: string, init?: RequestInit) =>
-  fetch(input, { ...init, cache: "no-store" })
+/**
+ * Logs + métricas para rastrear GETs duplicados:
+ * - logSinistralidade centraliza prefixo + timestamp.
+ * - fetchNoStore mede delta entre requisições e duração de cada resposta.
+ * - signalPageLoaded é disparado após cada ciclo de carregamento para informar o PageLoading.
+ * Causa raiz identificada anteriormente: Vercel Analytics em dev + PageLoading sem signal
+ * mantinham a página em transição e reexecutavam a montagem. Os logs ajudam a provar
+ * se outro fator (StrictMode, filtros, etc.) está disparando os loads.
+ */
+
+const getNow = () => {
+  if (typeof performance !== "undefined" && typeof performance.now === "function") {
+    return performance.now()
+  }
+  return Date.now()
+}
+
+const logSinistralidade = (message: string, payload?: Record<string, unknown>) => {
+  console.log(`[SINISTRALIDADE] ${message}`, {
+    ts: new Date().toISOString(),
+    ...payload,
+  })
+}
+
+let lastFetchTimestamp = getNow()
+
+const fetchNoStore = (input: string, init?: RequestInit) => {
+  const startedAt = getNow()
+  const deltaSinceLast = startedAt - lastFetchTimestamp
+  lastFetchTimestamp = startedAt
+
+  logSinistralidade("FETCH START", {
+    url: input,
+    deltaSincePreviousMs: Math.round(deltaSinceLast),
+  })
+
+  return fetch(input, { ...init, cache: "no-store" }).then((response) => {
+    const finishedAt = getNow()
+    logSinistralidade("FETCH END", {
+      url: input,
+      status: response.status,
+      durationMs: Math.round(finishedAt - startedAt),
+    })
+    return response
+  })
+}
+
+logSinistralidade("MODULE EVALUATED", {
+  environment: typeof window === "undefined" ? "server" : "client",
+})
 
 // Removido: Guards complexos - usando abordagem simples como Histórico de Bonificações
 
@@ -52,6 +100,10 @@ type DashboardRequestContext = AppliedFiltersSnapshot & {
 }
 
 export default function SinistralidadeDashboardPage() {
+  useEffect(() => {
+    logSinistralidade("CLIENTE MONTADO")
+  }, [])
+
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
@@ -80,23 +132,11 @@ export default function SinistralidadeDashboardPage() {
     expandedRowKeysRef.current = expandedRowKeys
   }, [expandedRowKeys])
   
-  // Ref para rastrear se é o carregamento inicial (mesma abordagem da página de Histórico de Bonificações)
-  const isInitialLoad = useRef(true)
-  const loadAllDataCalledRef = useRef(false)
+  const hasLoadedRef = useRef(false)
+  const loadAllDataCalledRef = useRef(0)
   const loadDashboardInProgressRef = useRef(false)
+  const latestLoadDashboardRef = useRef<(() => Promise<void>) | null>(null)
   const linhasPorPagina = 20
-
-  const buildFiltersSignature = useCallback((input: { mesesReferencia: string[]; operadoras: string[]; entidades: string[]; tipo: string }) => {
-    const sanitize = (list: string[]) =>
-      Array.from(new Set(list)).filter(Boolean).sort((a, b) => a.localeCompare(b))
-
-    return JSON.stringify({
-      mesesReferencia: sanitize(input.mesesReferencia),
-      operadoras: sanitize(input.operadoras),
-      entidades: sanitize(input.entidades),
-      tipo: input.tipo || "Todos",
-    })
-  }, [])
 
   // Ler filtros diretamente do store - seguindo padrão do DashboardContent
   const mesesReferencia = Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0
@@ -344,6 +384,9 @@ export default function SinistralidadeDashboardPage() {
       tipo?: string
     }
   ): Promise<boolean> => {
+    const startedAt = getNow()
+    logSinistralidade("loadDadosDetalhados CHAMADO", { dataInicio, dataFim, pagina })
+
     setLoadingDetalhados(true)
     try {
       const params = new URLSearchParams({
@@ -406,8 +449,17 @@ export default function SinistralidadeDashboardPage() {
       if (pagina === 1) {
         setPaginaAtual(1) // Resetar apenas se for primeira página
       }
+      logSinistralidade("loadDadosDetalhados SUCESSO", {
+        pagina,
+        registros: novosDados.length,
+        totalRegistros: data.total || 0,
+        durationMs: Math.round(getNow() - startedAt),
+      })
       return true
     } catch (error: any) {
+      logSinistralidade("loadDadosDetalhados ERRO", {
+        message: error?.message || "Erro desconhecido",
+      })
       console.error("Erro ao carregar dados detalhados:", error)
       toast({
         title: "Erro",
@@ -416,6 +468,10 @@ export default function SinistralidadeDashboardPage() {
       })
       return false
     } finally {
+      logSinistralidade("loadDadosDetalhados FINALIZADO", {
+        pagina,
+        durationMs: Math.round(getNow() - startedAt),
+      })
       setLoadingDetalhados(false)
     }
   }, [operadorasValidas, entidades, tipoValido, toast])
@@ -474,24 +530,50 @@ export default function SinistralidadeDashboardPage() {
     }
   }, [getPeriodoSelecionado, calcular12MesesParaGrafico, operadorasValidas, entidades, tipoValido])
 
-  const loadVidasAtivas = useCallback(async (context: DashboardRequestContext): Promise<boolean> => {
+  // REMOVIDO: useEffect que forçava mês padrão
+  // O store já cuida de fornecer valores padrão quando necessário
+  // Não devemos forçar valores aqui para evitar conflitos com o store
+
+  // Carregar dados do dashboard - APENAS quando chamado explicitamente (botão Atualizar ou carregamento inicial)
+  // Mesma abordagem da página de Histórico de Bonificações: sem comparações automáticas
+  const loadDashboard = useCallback(async () => {
+    const startedAt = getNow()
+    logSinistralidade("loadDashboard CHAMADO", {
+      inProgress: loadDashboardInProgressRef.current,
+    })
+
+    if (loadDashboardInProgressRef.current) {
+      logSinistralidade("loadDashboard IGNORADO", {
+        reason: "já em progresso",
+      })
+      return
+    }
+    loadDashboardInProgressRef.current = true
+
+    const context = buildDashboardRequestContext()
+    if (!context) {
+      logSinistralidade("loadDashboard ABORTADO", { reason: "contexto inválido" })
+      loadDashboardInProgressRef.current = false
+      signalPageLoaded("loadDashboard-sem-contexto")
+      return
+    }
+
     setLoading(true)
     try {
-      const params = new URLSearchParams({
+      const paramsVidas = new URLSearchParams({
         data_inicio: context.dataInicioGrafico,
         data_fim: context.dataFimGrafico,
       })
-      if (context.operadoras.length > 0) params.append("operadoras", context.operadoras.join(","))
-      if (context.entidades.length > 0) params.append("entidades", context.entidades.join(","))
-      if (context.tipo && context.tipo !== "Todos") params.append("tipo", context.tipo)
+      if (context.operadoras.length > 0) paramsVidas.append("operadoras", context.operadoras.join(","))
+      if (context.entidades.length > 0) paramsVidas.append("entidades", context.entidades.join(","))
+      if (context.tipo && context.tipo !== "Todos") paramsVidas.append("tipo", context.tipo)
 
-      const res = await fetchNoStore(`/api/beneficiarios/ativos?${params}`)
-      if (!res.ok) throw new Error("Erro ao carregar vidas ativas")
-
-      const data = await res.json()
+      const vidasRes = await fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`)
+      if (!vidasRes.ok) throw new Error("Erro ao carregar vidas ativas")
+      const vidasData = await vidasRes.json()
 
       const dadosPorMes = new Map<string, VidasAtivasPorMes>()
-      ;(data || []).forEach((item: VidasAtivasPorMes) => {
+      ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
         dadosPorMes.set(item.mes_referencia, item)
       })
 
@@ -504,187 +586,28 @@ export default function SinistralidadeDashboardPage() {
       })
 
       setVidasAtivas(vidasCompletas)
-      return true
-    } catch (error: any) {
-      console.error("Erro ao carregar vidas ativas:", error)
-      toast({
-        title: "Erro",
-        description: error.message || "Não foi possível carregar dados",
-        variant: "destructive"
-      })
-      setVidasAtivas([])
-      return false
-    } finally {
-      setLoading(false)
-      // IMPORTANTE: Chamar signalPageLoaded apenas uma vez quando TODOS os dados estiverem carregados
-      // Isso será feito em atualizarDados() após ambos loadVidas e loadDadosDetalhados completarem
-      // signalPageLoaded() // REMOVIDO - será chamado em atualizarDados() após todos os dados carregarem
-    }
-  }, [toast])
 
-  // REMOVIDO: useEffect que forçava mês padrão
-  // O store já cuida de fornecer valores padrão quando necessário
-  // Não devemos forçar valores aqui para evitar conflitos com o store
-
-  // Estabilizar arrays para comparação profunda
-  const mesesReferenciaStable = useMemo(() => {
-    const sorted = [...mesesReferencia].sort()
-    const str = JSON.stringify(sorted)
-    return str
-  }, [mesesReferencia])
-
-  const operadorasValidasStable = useMemo(() => {
-    const sorted = [...operadorasValidas].sort()
-    const str = JSON.stringify(sorted)
-    return str
-  }, [operadorasValidas])
-
-  const entidadesStable = useMemo(() => {
-    const sorted = [...entidades].sort()
-    const str = JSON.stringify(sorted)
-    return str
-  }, [entidades])
-
-  // Carregar dados do dashboard - APENAS quando chamado explicitamente (botão Atualizar ou carregamento inicial)
-  // Mesma abordagem da página de Histórico de Bonificações: sem comparações automáticas
-  const loadDashboard = useCallback(async () => {
-    // Proteção: evitar chamadas duplicadas simultâneas
-    if (loadDashboardInProgressRef.current) {
-      return
-    }
-    loadDashboardInProgressRef.current = true
-    
-    // Usar valores atuais dos filtros
-    const mesesAtuais = JSON.parse(mesesReferenciaStable) as string[]
-    const operadorasAtuais = JSON.parse(operadorasValidasStable) as string[]
-    const entidadesAtuais = JSON.parse(entidadesStable) as string[]
-
-    if (mesesAtuais.length === 0) {
-      loadDashboardInProgressRef.current = false
-      return
-    }
-
-    setLoading(true)
-    try {
-      // Calcular período selecionado
-      const mesesOrdenados = [...mesesAtuais]
-      const primeiroMes = mesesOrdenados[0]
-      const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
-
-      const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
-      const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
-
-      const [anoFimSel, mesFimSel] = ultimoMes.split("-")
-      const anoFimNum = parseInt(anoFimSel)
-      const mesFimNum = parseInt(mesFimSel)
-      const ultimoDiaSelecionado = new Date(anoFimNum, mesFimNum + 1, 0).getDate()
-      const dataFimSelecionado = `${anoFimSel}-${mesFimSel}-${String(ultimoDiaSelecionado).padStart(2, "0")}`
-
-      // Calcular período do gráfico (12 meses a partir do mês mais recente)
-      const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
-      const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
-
-      const [anoInicioGrafico, mesInicioGrafico] = mesesParaGrafico[0].split("-")
-      const dataInicioGrafico = `${anoInicioGrafico}-${mesInicioGrafico}-01`
-
-      const [anoFimGrafico, mesFimGrafico] = mesMaisRecente.split("-")
-      const anoNum = parseInt(anoFimGrafico)
-      const mesNum = parseInt(mesFimGrafico)
-      const ultimoDiaGrafico = new Date(anoNum, mesNum + 1, 0).getDate()
-      const dataFimGrafico = `${anoFimGrafico}-${mesFimGrafico}-${String(ultimoDiaGrafico).padStart(2, "0")}`
-
-      // Carregar dados em paralelo
-      const paramsVidas = new URLSearchParams({
-        data_inicio: dataInicioGrafico,
-        data_fim: dataFimGrafico,
-      })
-      if (operadorasAtuais.length > 0) paramsVidas.append("operadoras", operadorasAtuais.join(","))
-      if (entidadesAtuais.length > 0) paramsVidas.append("entidades", entidadesAtuais.join(","))
-      if (tipoValido && tipoValido !== "Todos") paramsVidas.append("tipo", tipoValido)
-
-      const paramsDetalhados = new URLSearchParams({
-        data_inicio: dataInicioSelecionado,
-        data_fim: dataFimSelecionado,
-        pagina: "1",
-        limite: "20",
-      })
-      if (operadorasAtuais.length > 0) paramsDetalhados.append("operadoras", operadorasAtuais.join(","))
-      if (entidadesAtuais.length > 0) paramsDetalhados.append("entidades", entidadesAtuais.join(","))
-      if (tipoValido && tipoValido !== "Todos") paramsDetalhados.append("tipo", tipoValido)
-      if (mesesAtuais.length > 0) paramsDetalhados.append("meses_referencia", mesesAtuais.join(","))
-
-      const [vidasRes, detalhadosRes] = await Promise.all([
-        fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`),
-        fetchNoStore(`/api/beneficiarios/detalhados?${paramsDetalhados}`)
-      ])
-
-      if (!vidasRes.ok) throw new Error("Erro ao carregar vidas ativas")
-      if (!detalhadosRes.ok) throw new Error("Erro ao carregar dados detalhados")
-
-      const [vidasData, detalhadosData] = await Promise.all([
-        vidasRes.json(),
-        detalhadosRes.json()
-      ])
-
-      // Processar vidas ativas
-      const dadosPorMes = new Map<string, VidasAtivasPorMes>()
-      ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
-        dadosPorMes.set(item.mes_referencia, item)
-      })
-
-      const vidasCompletas = mesesParaGrafico.map(mes => {
-        const dadosDoMes = dadosPorMes.get(mes)
-        if (dadosDoMes) {
-          return dadosDoMes
+      // Chamada centralizada para detalhados: só acontece aqui ou via paginação
+      await loadDadosDetalhados(
+        context.dataInicioSelecionado,
+        context.dataFimSelecionado,
+        1,
+        context.mesesReferencia,
+        {
+          operadoras: context.operadoras,
+          entidades: context.entidades,
+          tipo: context.tipo,
         }
-        return { mes_referencia: mes, vidas_ativas: 0 }
+      )
+      logSinistralidade("loadDashboard SUCESSO", {
+        durationMs: Math.round(getNow() - startedAt),
+        rangeInicio: context.dataInicioSelecionado,
+        rangeFim: context.dataFimSelecionado,
       })
-
-      setVidasAtivas(vidasCompletas)
-      
-      // Preservar linhas expandidas ao recarregar dados
-      const novosDados = detalhadosData.dados || []
-      
-      // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
-      const getGrupoKey = (row: any) => {
-        if (row?.CPF) return `cpf:${row.CPF}`
-        if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
-        const parts = [
-          row?.OPERADORA || "SEM-OPERADORA",
-          row?.PLANO || "SEM-PLANO",
-          row?.NOME || "SEM-NOME",
-          row?.ENTIDADE || "SEM-ENTIDADE",
-          row?.STATUS || "SEM-STATUS",
-        ]
-        return `fallback:${parts.join("|")}`
-      }
-      
-      // Preservar keys expandidas que ainda existem nos novos dados
-      // IMPORTANTE: Só preservar quando realmente há novos dados (não em re-renders)
-      // Usar ref para garantir que as linhas expandidas sejam preservadas
-      const keysExpandidasAtuais = expandedRowKeysRef.current
-      if (keysExpandidasAtuais.size > 0 && novosDados.length > 0) {
-        const novasKeys = new Set<string>()
-        novosDados.forEach((row: any) => {
-          const key = getGrupoKey(row)
-          if (keysExpandidasAtuais.has(key)) {
-            novasKeys.add(key)
-          }
-        })
-        
-        // Preservar todas as keys que ainda existem nos novos dados
-        if (novasKeys.size > 0) {
-          setExpandedRowKeys(novasKeys)
-          expandedRowKeysRef.current = novasKeys
-        }
-      }
-      
-      setDadosDetalhados(novosDados)
-      setTotalRegistros(detalhadosData.total || 0)
-      setTotalPaginas(detalhadosData.totalPaginas || 1)
-      setPaginaAtual(1)
-      signalPageLoaded()
     } catch (error: any) {
+      logSinistralidade("loadDashboard ERRO", {
+        message: error?.message || "Erro desconhecido",
+      })
       console.error("Erro ao carregar dashboard:", error)
       toast({
         title: "Erro",
@@ -696,20 +619,29 @@ export default function SinistralidadeDashboardPage() {
     } finally {
       setLoading(false)
       loadDashboardInProgressRef.current = false
+      logSinistralidade("loadDashboard FINALIZADO", {
+        durationMs: Math.round(getNow() - startedAt),
+      })
+      signalPageLoaded("loadDashboard-finally")
     }
-  }, [mesesReferenciaStable, operadorasValidasStable, entidadesStable, tipoValido, toast])
+  }, [buildDashboardRequestContext, loadDadosDetalhados, toast])
+
+  // Manter referência do loadDashboard mais recente para uso em loadAllData estável
+  useEffect(() => {
+    latestLoadDashboardRef.current = loadDashboard
+    logSinistralidade("latestLoadDashboardRef atualizado")
+  }, [loadDashboard])
   
-  // Carregar todos os dados necessários na inicialização (mesma abordagem da página de Histórico de Bonificações)
+  // Carregar todos os dados necessários na inicialização (primeiro filtros, depois dashboard)
   const loadAllData = useCallback(async () => {
-    // Proteção: garantir que só execute uma vez
-    if (loadAllDataCalledRef.current) {
-      return
-    }
-    loadAllDataCalledRef.current = true
-    
+    const startedAt = getNow()
+    loadAllDataCalledRef.current += 1
+    logSinistralidade("loadAllData CHAMADO", { count: loadAllDataCalledRef.current })
+
     setLoading(true)
+    let dashboardExecutado = false
     try {
-      // Primeiro carregar filtros disponíveis
+      logSinistralidade("loadAllData -> carregando filtros disponíveis")
       try {
         const res = await fetchNoStore("/api/beneficiarios/filtros")
         if (!res.ok) throw new Error("Erro ao carregar filtros")
@@ -719,7 +651,14 @@ export default function SinistralidadeDashboardPage() {
         setEntidadesPorOperadora(data.entidadesPorOperadora || {})
         setTiposDisponiveis(data.tipos || [])
         setLoadingFiltros(false)
+        logSinistralidade("loadAllData -> filtros atualizados", {
+          operadoras: (data.operadoras || []).length,
+          entidades: (data.entidades || []).length,
+        })
       } catch (error: any) {
+        logSinistralidade("loadAllData -> erro ao carregar filtros", {
+          message: error?.message || "Erro desconhecido",
+        })
         console.error("Erro ao carregar filtros:", error)
         toast({
           title: "Erro",
@@ -729,24 +668,48 @@ export default function SinistralidadeDashboardPage() {
         setLoadingFiltros(false)
       }
       
-      // Depois carregar dados do dashboard (após filtros estarem prontos)
-      await loadDashboard()
-    } catch (error) {
+      if (latestLoadDashboardRef.current) {
+        logSinistralidade("loadAllData -> disparando loadDashboard")
+        await latestLoadDashboardRef.current()
+        dashboardExecutado = true
+      }
+
+      logSinistralidade("loadAllData SUCESSO", {
+        durationMs: Math.round(getNow() - startedAt),
+      })
+    } catch (error: any) {
+      logSinistralidade("loadAllData ERRO", {
+        message: error?.message || "Erro desconhecido",
+      })
       console.error("Erro ao carregar dados:", error)
-      // Resetar flag em caso de erro para permitir retry
-      loadAllDataCalledRef.current = false
+      hasLoadedRef.current = false // permite nova tentativa se algo falhar
     } finally {
       setLoading(false)
-      signalPageLoaded()
-      isInitialLoad.current = false
+      if (!dashboardExecutado) {
+        signalPageLoaded("loadAllData-sem-dashboard")
+      }
     }
-  }, [loadDashboard, toast])
+  }, [toast])
 
-  // Carregamento inicial único - executa apenas uma vez no mount
+  // Carregamento inicial controlado: só dispara após auth e apenas uma vez por montagem
   useEffect(() => {
+    if (authLoading) {
+      logSinistralidade("loadAllData guardado", { reason: "authLoading" })
+      return
+    }
+    if (!user || user.role !== "admin") {
+      logSinistralidade("loadAllData guardado", { reason: "sem usuário admin" })
+      return
+    }
+    if (hasLoadedRef.current) {
+      logSinistralidade("loadAllData guardado", { reason: "já carregado" })
+      return
+    }
+
+    logSinistralidade("useEffect disparando loadAllData")
+    hasLoadedRef.current = true
     loadAllData()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [authLoading, user, loadAllData])
 
   // REMOVIDO: useEffect que recarregava automaticamente quando filtros mudavam
   // A página fica congelada até o usuário clicar no botão "Atualizar"
@@ -891,7 +854,12 @@ export default function SinistralidadeDashboardPage() {
   }
 
   const recarregarPaginaDetalhados = useCallback(async (paginaDestino: number) => {
-    if (mesesReferencia.length === 0) return false
+    if (mesesReferencia.length === 0) {
+      logSinistralidade("recarregarPaginaDetalhados abortado", { reason: "sem meses", paginaDestino })
+      return false
+    }
+
+    logSinistralidade("recarregarPaginaDetalhados CHAMADO", { paginaDestino })
 
     // Calcular período selecionado
     const mesesOrdenados = [...mesesReferencia].sort()
@@ -907,7 +875,7 @@ export default function SinistralidadeDashboardPage() {
     const ultimoDiaSelecionado = new Date(anoFimNum, mesFimNum + 1, 0).getDate()
     const dataFimSelecionado = `${anoFimSel}-${mesFimSel}-${String(ultimoDiaSelecionado).padStart(2, "0")}`
 
-    return await loadDadosDetalhados(
+    const sucesso = await loadDadosDetalhados(
       dataInicioSelecionado,
       dataFimSelecionado,
       paginaDestino,
@@ -918,7 +886,20 @@ export default function SinistralidadeDashboardPage() {
         tipo: tipoValido,
       }
     )
+    logSinistralidade("recarregarPaginaDetalhados FINALIZADO", { paginaDestino, sucesso })
+    return sucesso
   }, [loadDadosDetalhados, mesesReferencia, operadorasValidas, entidades, tipoValido])
+
+  const handleAtualizarClick = useCallback(async () => {
+    if (!hasLoadedRef.current) {
+      logSinistralidade("handleAtualizarClick -> carregamento inicial forçado")
+      hasLoadedRef.current = true
+      await loadAllData()
+      return
+    }
+    logSinistralidade("handleAtualizarClick -> disparando loadDashboard manual")
+    await loadDashboard()
+  }, [loadAllData, loadDashboard])
 
   // REMOVIDO: useEffects complexos e refs desnecessárias
   // Agora usa abordagem simples como Histórico de Bonificações
@@ -1173,7 +1154,7 @@ export default function SinistralidadeDashboardPage() {
               <Button variant="outline" size="sm" onClick={clearFilters}>
                 Limpar
               </Button>
-              <Button onClick={() => loadDashboard()} size="sm" className="gap-2" disabled={loading}>
+              <Button onClick={handleAtualizarClick} size="sm" className="gap-2" disabled={loading}>
                 <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
                 Atualizar
               </Button>
