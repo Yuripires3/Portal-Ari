@@ -268,8 +268,8 @@ export default function DashboardContent() {
     }
   }, [loadingFiltros, operadora, operadorasDisponiveis, updateFilters])
 
-  // Referência para permitir apenas um carregamento automático inicial (quando URL já vem preenchida)
-  const allowInitialLoadRef = useRef(Boolean(initialFiltersFromUrl.dataInicio && initialFiltersFromUrl.dataFim))
+  // Referência para permitir apenas um carregamento automático inicial
+  const allowInitialLoadRef = useRef(true)
 
   // Carrega todos os dados do dashboard; única função que dispara chamadas /api/dashboard/*
   const loadDashboard = useCallback(async () => {
@@ -406,7 +406,7 @@ export default function DashboardContent() {
     }
   }, [dataInicio, dataFim, operadora, entidades, papel, toast])
 
-  // Dispara apenas um carregamento inicial se os filtros já vierem na URL; não reage após interações do usuário
+  // Dispara apenas um carregamento inicial (primeiro render); não reage após interações do usuário
   useEffect(() => {
     if (!allowInitialLoadRef.current) return
     if (!dataInicio || !dataFim) return

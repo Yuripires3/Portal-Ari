@@ -11,6 +11,7 @@ type BeneficiariosFiltersState = {
   operadoras: string[]
   entidades: string[]
   tipo: string // "Todos" ou valor específico
+  cpf: string
 }
 
 const STORAGE_KEY = "admin-beneficiarios-filters"
@@ -30,6 +31,7 @@ const createDefaultFilters = (): BeneficiariosFiltersState => {
     operadoras: [],
     entidades: [],
     tipo: "Todos",
+    cpf: "",
   }
 }
 
@@ -50,6 +52,13 @@ const normalizeFilters = (
   input: Partial<BeneficiariosFiltersState>,
   fallback: BeneficiariosFiltersState
 ): BeneficiariosFiltersState => {
+  const normalizeCpf = (value: unknown, fallbackValue: string) => {
+    if (typeof value !== "string") {
+      return fallbackValue
+    }
+    return value.replace(/\D/g, "").slice(0, 11)
+  }
+
   const entidades = normalizeToStringArray(input.entidades, fallback.entidades)
 
   // Normalizar operadoras (suporta migração de string para array)
@@ -106,6 +115,7 @@ const normalizeFilters = (
     operadoras,
     entidades,
     tipo: typeof input.tipo === "string" && input.tipo !== "" ? input.tipo : fallback.tipo,
+    cpf: normalizeCpf(input.cpf, fallback.cpf),
   }
 }
 

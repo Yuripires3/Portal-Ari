@@ -91,12 +91,51 @@ type AppliedFiltersSnapshot = {
   operadoras: string[]
   entidades: string[]
   tipo: string
+  cpf: string
 }
 
 type DashboardRequestContext = AppliedFiltersSnapshot & {
   dataInicioGrafico: string
   dataFimGrafico: string
   mesesParaGrafico: string[]
+}
+
+type ResumoProcedimentos = {
+  ativos: {
+    quantidade: number
+    valor: number
+  }
+  cancelados: {
+    quantidade: number
+    valor: number
+  }
+  naoIdentificados: {
+    quantidade: number
+    valor: number
+  }
+}
+
+const RESUMO_PROCEDIMENTOS_VAZIO: ResumoProcedimentos = {
+  ativos: { quantidade: 0, valor: 0 },
+  cancelados: { quantidade: 0, valor: 0 },
+  naoIdentificados: { quantidade: 0, valor: 0 },
+}
+
+const normalizarResumoProcedimentos = (input: any): ResumoProcedimentos => {
+  return {
+    ativos: {
+      quantidade: Number(input?.ativos?.quantidade) || 0,
+      valor: Number(input?.ativos?.valor) || 0,
+    },
+    cancelados: {
+      quantidade: Number(input?.cancelados?.quantidade) || 0,
+      valor: Number(input?.cancelados?.valor) || 0,
+    },
+    naoIdentificados: {
+      quantidade: Number(input?.naoIdentificados?.quantidade) || 0,
+      valor: Number(input?.naoIdentificados?.valor) || 0,
+    },
+  }
 }
 
 export default function SinistralidadeDashboardPage() {
@@ -118,12 +157,18 @@ export default function SinistralidadeDashboardPage() {
   const [loadingFiltros, setLoadingFiltros] = useState(true)
   const [vidasAtivas, setVidasAtivas] = useState<VidasAtivasPorMes[]>([])
   const [dadosDetalhados, setDadosDetalhados] = useState<any[]>([])
+  const [dadosNaoIdentificados, setDadosNaoIdentificados] = useState<any[]>([])
   const [totalRegistros, setTotalRegistros] = useState(0)
   const [totalPaginas, setTotalPaginas] = useState(1)
   const [loading, setLoading] = useState(false)
   const [loadingDetalhados, setLoadingDetalhados] = useState(false)
   const [paginaAtual, setPaginaAtual] = useState(1)
   const [expandedRowKeys, setExpandedRowKeys] = useState<Set<string>>(() => new Set())
+  const [expandedRowKeysNaoIdentificados, setExpandedRowKeysNaoIdentificados] = useState<Set<string>>(() => new Set())
+  const [resumoProcedimentos, setResumoProcedimentos] = useState<ResumoProcedimentos>(
+    RESUMO_PROCEDIMENTOS_VAZIO
+  )
+  const [resumoProcedimentosLoading, setResumoProcedimentosLoading] = useState(false)
   // Ref para preservar linhas expandidas entre re-renders e evitar que sejam fechadas automaticamente
   const expandedRowKeysRef = useRef<Set<string>>(new Set())
   
@@ -147,6 +192,7 @@ export default function SinistralidadeDashboardPage() {
   const operadoras = Array.isArray(filters?.operadoras) ? filters.operadoras : []
   const entidades = Array.isArray(filters?.entidades) ? filters.entidades : []
   const tipo = filters?.tipo || "Todos"
+  const cpf = filters?.cpf || ""
 
   // Gerar lista de anos (últimos 5 anos até o ano atual)
   const anosDisponiveis = useMemo(() => {
@@ -296,7 +342,8 @@ export default function SinistralidadeDashboardPage() {
       mesesReferencia: [mesAtual],
       operadoras: [],
       entidades: [],
-      tipo: "Todos"
+      tipo: "Todos",
+      cpf: "",
     })
     setEntidadeSelectKey(prev => prev + 1)
   }
@@ -382,12 +429,17 @@ export default function SinistralidadeDashboardPage() {
       operadoras?: string[]
       entidades?: string[]
       tipo?: string
+      cpf?: string
     }
   ): Promise<boolean> => {
     const startedAt = getNow()
     logSinistralidade("loadDadosDetalhados CHAMADO", { dataInicio, dataFim, pagina })
 
     setLoadingDetalhados(true)
+    const shouldUpdateResumo = pagina === 1
+    if (shouldUpdateResumo) {
+      setResumoProcedimentosLoading(true)
+    }
     try {
       const params = new URLSearchParams({
         data_inicio: dataInicio,
@@ -398,10 +450,12 @@ export default function SinistralidadeDashboardPage() {
       const operadorasFiltro = overrides?.operadoras ?? operadorasValidas
       const entidadesFiltro = overrides?.entidades ?? entidades
       const tipoFiltro = overrides?.tipo ?? tipoValido
+      const cpfFiltro = overrides?.cpf ?? cpf
 
       if (operadorasFiltro.length > 0) params.append("operadoras", operadorasFiltro.join(","))
       if (entidadesFiltro.length > 0) params.append("entidades", entidadesFiltro.join(","))
       if (tipoFiltro && tipoFiltro !== "Todos") params.append("tipo", tipoFiltro)
+      if (cpfFiltro) params.append("cpf", cpfFiltro)
       if (mesesFiltrados && mesesFiltrados.length > 0) params.append("meses_referencia", mesesFiltrados.join(","))
 
       const res = await fetchNoStore(`/api/beneficiarios/detalhados?${params}`)
@@ -409,6 +463,10 @@ export default function SinistralidadeDashboardPage() {
       
       const data = await res.json()
       const novosDados = data.dados || []
+      setResumoProcedimentos(normalizarResumoProcedimentos({
+        ...data.resumo,
+        naoIdentificados: data.naoIdentificados,
+      }))
       
       // Preservar linhas expandidas ao atualizar dados detalhados (paginação)
       // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
@@ -444,6 +502,7 @@ export default function SinistralidadeDashboardPage() {
       }
       
       setDadosDetalhados(novosDados)
+      setDadosNaoIdentificados(data.naoIdentificadosDetalhes || [])
       setTotalRegistros(data.total || 0)
       setTotalPaginas(data.totalPaginas || 1)
       if (pagina === 1) {
@@ -466,6 +525,9 @@ export default function SinistralidadeDashboardPage() {
         description: error.message || "Não foi possível carregar dados detalhados",
         variant: "destructive"
       })
+      if (shouldUpdateResumo) {
+        setResumoProcedimentos(RESUMO_PROCEDIMENTOS_VAZIO)
+      }
       return false
     } finally {
       logSinistralidade("loadDadosDetalhados FINALIZADO", {
@@ -473,8 +535,11 @@ export default function SinistralidadeDashboardPage() {
         durationMs: Math.round(getNow() - startedAt),
       })
       setLoadingDetalhados(false)
+      if (shouldUpdateResumo) {
+        setResumoProcedimentosLoading(false)
+      }
     }
-  }, [operadorasValidas, entidades, tipoValido, toast])
+  }, [operadorasValidas, entidades, tipoValido, cpf, toast])
 
   // Carregar dados de vidas ativas
   const getPeriodoSelecionado = useCallback(() => {
@@ -524,11 +589,12 @@ export default function SinistralidadeDashboardPage() {
       operadoras: operadorasValidas,
       entidades,
       tipo: tipoValido,
+      cpf,
       dataInicioGrafico,
       dataFimGrafico,
       mesesParaGrafico,
     }
-  }, [getPeriodoSelecionado, calcular12MesesParaGrafico, operadorasValidas, entidades, tipoValido])
+  }, [getPeriodoSelecionado, calcular12MesesParaGrafico, operadorasValidas, entidades, tipoValido, cpf])
 
   // REMOVIDO: useEffect que forçava mês padrão
   // O store já cuida de fornecer valores padrão quando necessário
@@ -597,6 +663,7 @@ export default function SinistralidadeDashboardPage() {
           operadoras: context.operadoras,
           entidades: context.entidades,
           tipo: context.tipo,
+          cpf: context.cpf,
         }
       )
       logSinistralidade("loadDashboard SUCESSO", {
@@ -616,6 +683,7 @@ export default function SinistralidadeDashboardPage() {
       })
       setVidasAtivas([])
       setDadosDetalhados([])
+      setResumoProcedimentos(RESUMO_PROCEDIMENTOS_VAZIO)
     } finally {
       setLoading(false)
       loadDashboardInProgressRef.current = false
@@ -835,6 +903,54 @@ export default function SinistralidadeDashboardPage() {
       })
   }, [dadosDetalhados])
 
+  // Agrupar dados não identificados por CPF
+  const dadosNaoIdentificadosAgrupados = useMemo(() => {
+    const grupos = new Map<
+      string,
+      {
+        key: string
+        cpf: string
+        procedimentos: {
+          evento?: string | null
+          descricao?: string | null
+          especialidade?: string | null
+          valor: number
+          data_competencia?: string | null
+          data_atendimento?: string | null
+        }[]
+        totalValor: number
+      }
+    >()
+
+    dadosNaoIdentificados.forEach(row => {
+      const cpf = row.CPF || "SEM-CPF"
+      const key = `nao-identificado-${cpf}`
+      const valorProcedimento = parseValor(row.VALOR)
+      
+      if (!grupos.has(key)) {
+        grupos.set(key, {
+          key,
+          cpf,
+          procedimentos: [],
+          totalValor: 0,
+        })
+      }
+      const grupo = grupos.get(key)!
+      grupo.procedimentos.push({
+        evento: row.EVENTO,
+        descricao: row.DESCRICAO,
+        especialidade: row.ESPECIALIDADE,
+        valor: valorProcedimento,
+        data_competencia: row.DATA_COMPETENCIA,
+        data_atendimento: row.DATA_ATENDIMENTO,
+      })
+      grupo.totalValor += valorProcedimento
+    })
+
+    return Array.from(grupos.values())
+      .sort((a, b) => b.totalValor - a.totalValor)
+  }, [dadosNaoIdentificados])
+
   // REMOVIDO: useEffect que fechava linhas expandidas automaticamente
   // As linhas expandidas agora ficam abertas até o usuário fechar manualmente
   // Não há mais reloads automáticos que fecham as linhas
@@ -884,11 +1000,12 @@ export default function SinistralidadeDashboardPage() {
         operadoras: operadorasValidas,
         entidades: entidades,
         tipo: tipoValido,
+        cpf,
       }
     )
     logSinistralidade("recarregarPaginaDetalhados FINALIZADO", { paginaDestino, sucesso })
     return sucesso
-  }, [loadDadosDetalhados, mesesReferencia, operadorasValidas, entidades, tipoValido])
+  }, [loadDadosDetalhados, mesesReferencia, operadorasValidas, entidades, tipoValido, cpf])
 
   const handleAtualizarClick = useCallback(async () => {
     if (!hasLoadedRef.current) {
@@ -1148,6 +1265,19 @@ export default function SinistralidadeDashboardPage() {
                 </SelectContent>
               </Select>
             </div>
+          <div className="space-y-2">
+            <Label>CPF</Label>
+            <Input
+              value={cpf}
+              onChange={(event) =>
+                updateFilters({
+                  cpf: event.target.value.replace(/\D/g, "").slice(0, 11),
+                })
+              }
+              placeholder="Somente números"
+              maxLength={14}
+            />
+          </div>
           </div>
           <div className="mt-4 flex flex-col items-end gap-1">
             <div className="flex gap-2">
@@ -1162,6 +1292,47 @@ export default function SinistralidadeDashboardPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Cards Resumo Procedimentos */}
+      <div className="grid gap-4 md:grid-cols-3">
+        {[
+          {
+            id: "ativos",
+            title: "Beneficiários ativos com procedimentos",
+            resumo: resumoProcedimentos.ativos,
+          },
+          {
+            id: "cancelados",
+            title: "Beneficiários cancelados com procedimentos",
+            resumo: resumoProcedimentos.cancelados,
+          },
+          {
+            id: "naoIdentificados",
+            title: "Beneficiários não identificados",
+            resumo: resumoProcedimentos.naoIdentificados,
+          },
+        ].map(({ id, title, resumo }) => (
+          <Card key={id} className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+            <CardContent className="p-6">
+              <p className="text-sm font-medium text-muted-foreground">{title}</p>
+              {resumoProcedimentosLoading ? (
+                <div className="mt-4 space-y-3">
+                  <Skeleton className="h-8 w-32" />
+                  <Skeleton className="h-4 w-48" />
+                  <Skeleton className="h-6 w-40" />
+                </div>
+              ) : (
+                <>
+                  <div className="mt-2 text-3xl font-bold">{fmtNumber(resumo.quantidade)}</div>
+                  <p className="text-sm text-muted-foreground mt-1">beneficiários no período filtrado</p>
+                  <div className="mt-4 text-sm font-medium text-muted-foreground">Valor de procedimentos</div>
+                  <div className="text-xl font-semibold">{fmtCurrency(resumo.valor)}</div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
       {/* Gráfico de Vidas Ativas */}
       <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
@@ -1364,6 +1535,115 @@ export default function SinistralidadeDashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Tabela de Beneficiários Não Identificados */}
+      {dadosNaoIdentificados.length > 0 && (
+        <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+          <CardHeader>
+            <CardTitle>Beneficiários Não Identificados</CardTitle>
+            <CardDescription>
+              Procedimentos de CPFs que não foram identificados na base de beneficiários no mês em questão
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="border rounded-md overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-10" />
+                    <TableHead>CPF</TableHead>
+                    <TableHead>Procedimentos</TableHead>
+                    <TableHead>Gasto do Mês</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {dadosNaoIdentificadosAgrupados.map(grupo => {
+                    const isExpanded = expandedRowKeysNaoIdentificados.has(grupo.key)
+                    return (
+                      <Fragment key={grupo.key}>
+                        <TableRow>
+                          <TableCell className="w-10">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => {
+                                const newExpanded = new Set(expandedRowKeysNaoIdentificados)
+                                if (isExpanded) {
+                                  newExpanded.delete(grupo.key)
+                                } else {
+                                  newExpanded.add(grupo.key)
+                                }
+                                setExpandedRowKeysNaoIdentificados(newExpanded)
+                              }}
+                              aria-label={isExpanded ? "Recolher procedimentos" : "Expandir procedimentos"}
+                            >
+                              <ChevronDown
+                                className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-180" : ""}`}
+                              />
+                            </Button>
+                          </TableCell>
+                          <TableCell>{grupo.cpf || "-"}</TableCell>
+                          <TableCell>{grupo.procedimentos.length}</TableCell>
+                          <TableCell>{fmtCurrency(grupo.totalValor)}</TableCell>
+                        </TableRow>
+                        {isExpanded && (
+                          <TableRow>
+                            <TableCell colSpan={4} className="bg-muted/40">
+                              <div className="space-y-3 p-3">
+                                <p className="text-sm font-semibold text-muted-foreground">
+                                  Procedimentos realizados
+                                </p>
+                                <div className="space-y-3">
+                                  {grupo.procedimentos.map((proc, index) => (
+                                    <div
+                                      key={`${grupo.key}-proc-${index}-${proc.evento || "evento"}`}
+                                      className="rounded-lg border bg-white p-3 text-sm shadow-sm"
+                                    >
+                                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+                                        <div>
+                                          <p className="text-xs uppercase text-muted-foreground">Evento</p>
+                                          <p className="font-medium">{proc.evento || "-"}</p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs uppercase text-muted-foreground">Descrição</p>
+                                          <p className="font-medium break-words whitespace-pre-line">
+                                            {proc.descricao || "-"}
+                                          </p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs uppercase text-muted-foreground">Especialidade</p>
+                                          <p className="font-medium">{proc.especialidade || "-"}</p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs uppercase text-muted-foreground">Data</p>
+                                          <p className="font-medium">{fmtDate(proc.data_atendimento || proc.data_competencia)}</p>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs uppercase text-muted-foreground">Valor</p>
+                                          <p className="font-medium">{fmtCurrency(proc.valor)}</p>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    )
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+            <div className="mt-4 text-sm text-muted-foreground">
+              Total: {fmtNumber(dadosNaoIdentificadosAgrupados.length)} beneficiário(s) - {fmtCurrency(
+                dadosNaoIdentificadosAgrupados.reduce((sum, grupo) => sum + grupo.totalValor, 0)
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   )
 }
