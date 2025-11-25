@@ -25,6 +25,7 @@ import {
 } from "recharts"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Checkbox } from "@/components/ui/checkbox"
+import { CardsResumo } from "@/components/sinistralidade/CardsResumo"
 
 /**
  * Logs + métricas para rastrear GETs duplicados:
@@ -100,43 +101,46 @@ type DashboardRequestContext = AppliedFiltersSnapshot & {
   mesesParaGrafico: string[]
 }
 
-type ResumoProcedimentos = {
-  ativos: {
-    quantidade: number
-    valor: number
-  }
-  cancelados: {
-    quantidade: number
-    valor: number
-  }
-  naoIdentificados: {
-    quantidade: number
-    valor: number
-  }
+type SinistralidadeCardMetric = {
+  quantidade: number
+  valor: number
 }
 
-const RESUMO_PROCEDIMENTOS_VAZIO: ResumoProcedimentos = {
-  ativos: { quantidade: 0, valor: 0 },
-  cancelados: { quantidade: 0, valor: 0 },
-  naoIdentificados: { quantidade: 0, valor: 0 },
+type SinistralidadeCardsResumo = {
+  mes: string
+  ativo: SinistralidadeCardMetric
+  inativo: SinistralidadeCardMetric
+  naoLocalizado: SinistralidadeCardMetric
+  total: SinistralidadeCardMetric
 }
 
-const normalizarResumoProcedimentos = (input: any): ResumoProcedimentos => {
-  return {
-    ativos: {
-      quantidade: Number(input?.ativos?.quantidade) || 0,
-      valor: Number(input?.ativos?.valor) || 0,
-    },
-    cancelados: {
-      quantidade: Number(input?.cancelados?.quantidade) || 0,
-      valor: Number(input?.cancelados?.valor) || 0,
-    },
-    naoIdentificados: {
-      quantidade: Number(input?.naoIdentificados?.quantidade) || 0,
-      valor: Number(input?.naoIdentificados?.valor) || 0,
-    },
-  }
+const CARDS_RESUMO_VAZIO: SinistralidadeCardsResumo = {
+  mes: "",
+  ativo: { quantidade: 0, valor: 0 },
+  inativo: { quantidade: 0, valor: 0 },
+  naoLocalizado: { quantidade: 0, valor: 0 },
+  total: { quantidade: 0, valor: 0 },
 }
+
+const normalizarCardsResumo = (input: any, mesFallback: string): SinistralidadeCardsResumo => ({
+  mes: input?.mes || mesFallback,
+  ativo: {
+    quantidade: Number(input?.ativo) || 0,
+    valor: Number(input?.ativo_valor) || 0,
+  },
+  inativo: {
+    quantidade: Number(input?.inativo) || 0,
+    valor: Number(input?.inativo_valor) || 0,
+  },
+  naoLocalizado: {
+    quantidade: Number(input?.nao_localizado) || 0,
+    valor: Number(input?.nao_localizado_valor) || 0,
+  },
+  total: {
+    quantidade: Number(input?.total_geral) || 0,
+    valor: Number(input?.total_valor) || 0,
+  },
+})
 
 export default function SinistralidadeDashboardPage() {
   useEffect(() => {
@@ -165,10 +169,8 @@ export default function SinistralidadeDashboardPage() {
   const [paginaAtual, setPaginaAtual] = useState(1)
   const [expandedRowKeys, setExpandedRowKeys] = useState<Set<string>>(() => new Set())
   const [expandedRowKeysNaoIdentificados, setExpandedRowKeysNaoIdentificados] = useState<Set<string>>(() => new Set())
-  const [resumoProcedimentos, setResumoProcedimentos] = useState<ResumoProcedimentos>(
-    RESUMO_PROCEDIMENTOS_VAZIO
-  )
-  const [resumoProcedimentosLoading, setResumoProcedimentosLoading] = useState(false)
+  const [cardsResumo, setCardsResumo] = useState<SinistralidadeCardsResumo>(CARDS_RESUMO_VAZIO)
+  const [cardsResumoLoading, setCardsResumoLoading] = useState(false)
   // Ref para preservar linhas expandidas entre re-renders e evitar que sejam fechadas automaticamente
   const expandedRowKeysRef = useRef<Set<string>>(new Set())
   
@@ -436,10 +438,6 @@ export default function SinistralidadeDashboardPage() {
     logSinistralidade("loadDadosDetalhados CHAMADO", { dataInicio, dataFim, pagina })
 
     setLoadingDetalhados(true)
-    const shouldUpdateResumo = pagina === 1
-    if (shouldUpdateResumo) {
-      setResumoProcedimentosLoading(true)
-    }
     try {
       const params = new URLSearchParams({
         data_inicio: dataInicio,
@@ -463,10 +461,6 @@ export default function SinistralidadeDashboardPage() {
       
       const data = await res.json()
       const novosDados = data.dados || []
-      setResumoProcedimentos(normalizarResumoProcedimentos({
-        ...data.resumo,
-        naoIdentificados: data.naoIdentificados,
-      }))
       
       // Preservar linhas expandidas ao atualizar dados detalhados (paginação)
       // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
@@ -525,9 +519,6 @@ export default function SinistralidadeDashboardPage() {
         description: error.message || "Não foi possível carregar dados detalhados",
         variant: "destructive"
       })
-      if (shouldUpdateResumo) {
-        setResumoProcedimentos(RESUMO_PROCEDIMENTOS_VAZIO)
-      }
       return false
     } finally {
       logSinistralidade("loadDadosDetalhados FINALIZADO", {
@@ -535,11 +526,34 @@ export default function SinistralidadeDashboardPage() {
         durationMs: Math.round(getNow() - startedAt),
       })
       setLoadingDetalhados(false)
-      if (shouldUpdateResumo) {
-        setResumoProcedimentosLoading(false)
-      }
     }
   }, [operadorasValidas, entidades, tipoValido, cpf, toast])
+
+  const fetchCardsResumo = useCallback(async (mesReferencia: string | null | undefined) => {
+    if (!mesReferencia) {
+      setCardsResumo(CARDS_RESUMO_VAZIO)
+      return
+    }
+
+    setCardsResumoLoading(true)
+    try {
+      const params = new URLSearchParams({ mes_referencia: mesReferencia })
+      const res = await fetchNoStore(`/api/sinistralidade/cards?${params}`)
+      if (!res.ok) throw new Error("Erro ao carregar cards de sinistralidade")
+      const data = await res.json()
+      setCardsResumo(normalizarCardsResumo(data, mesReferencia))
+    } catch (error: any) {
+      console.error("Erro ao carregar cards de sinistralidade:", error)
+      toast({
+        title: "Erro",
+        description: error?.message || "Não foi possível carregar os cards de sinistralidade",
+        variant: "destructive",
+      })
+      setCardsResumo(CARDS_RESUMO_VAZIO)
+    } finally {
+      setCardsResumoLoading(false)
+    }
+  }, [toast])
 
   // Carregar dados de vidas ativas
   const getPeriodoSelecionado = useCallback(() => {
@@ -653,6 +667,9 @@ export default function SinistralidadeDashboardPage() {
 
       setVidasAtivas(vidasCompletas)
 
+      const mesParaCards = context.mesesReferencia?.[context.mesesReferencia.length - 1]
+      await fetchCardsResumo(mesParaCards)
+
       // Chamada centralizada para detalhados: só acontece aqui ou via paginação
       await loadDadosDetalhados(
         context.dataInicioSelecionado,
@@ -683,7 +700,7 @@ export default function SinistralidadeDashboardPage() {
       })
       setVidasAtivas([])
       setDadosDetalhados([])
-      setResumoProcedimentos(RESUMO_PROCEDIMENTOS_VAZIO)
+      setCardsResumo(CARDS_RESUMO_VAZIO)
     } finally {
       setLoading(false)
       loadDashboardInProgressRef.current = false
@@ -692,7 +709,7 @@ export default function SinistralidadeDashboardPage() {
       })
       signalPageLoaded("loadDashboard-finally")
     }
-  }, [buildDashboardRequestContext, loadDadosDetalhados, toast])
+  }, [buildDashboardRequestContext, loadDadosDetalhados, fetchCardsResumo, toast])
 
   // Manter referência do loadDashboard mais recente para uso em loadAllData estável
   useEffect(() => {
@@ -1294,45 +1311,24 @@ export default function SinistralidadeDashboardPage() {
       </Card>
 
       {/* Cards Resumo Procedimentos */}
-      <div className="grid gap-4 md:grid-cols-3">
-        {[
-          {
-            id: "ativos",
-            title: "Beneficiários ativos com procedimentos",
-            resumo: resumoProcedimentos.ativos,
-          },
-          {
-            id: "cancelados",
-            title: "Beneficiários cancelados com procedimentos",
-            resumo: resumoProcedimentos.cancelados,
-          },
-          {
-            id: "naoIdentificados",
-            title: "Beneficiários não identificados",
-            resumo: resumoProcedimentos.naoIdentificados,
-          },
-        ].map(({ id, title, resumo }) => (
-          <Card key={id} className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-            <CardContent className="p-6">
-              <p className="text-sm font-medium text-muted-foreground">{title}</p>
-              {resumoProcedimentosLoading ? (
-                <div className="mt-4 space-y-3">
-                  <Skeleton className="h-8 w-32" />
-                  <Skeleton className="h-4 w-48" />
-                  <Skeleton className="h-6 w-40" />
-                </div>
-              ) : (
-                <>
-                  <div className="mt-2 text-3xl font-bold">{fmtNumber(resumo.quantidade)}</div>
-                  <p className="text-sm text-muted-foreground mt-1">beneficiários no período filtrado</p>
-                  <div className="mt-4 text-sm font-medium text-muted-foreground">Valor de procedimentos</div>
-                  <div className="text-xl font-semibold">{fmtCurrency(resumo.valor)}</div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {(() => {
+        const periodo = getPeriodoSelecionado()
+        if (!periodo) {
+          return (
+            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+              <CardContent className="p-6">
+                <p className="text-muted-foreground">Selecione pelo menos um mês de referência para visualizar os cards.</p>
+              </CardContent>
+            </Card>
+          )
+        }
+        return (
+          <CardsResumo 
+            dataInicio={periodo.dataInicioSelecionado} 
+            dataFim={periodo.dataFimSelecionado} 
+          />
+        )
+      })()}
 
       {/* Gráfico de Vidas Ativas */}
       <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">

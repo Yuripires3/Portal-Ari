@@ -187,177 +187,135 @@ export async function GET(request: NextRequest) {
       ...procedimentosValues,
     ]
 
-    // Resumo será calculado a partir dos dados da tabela "Resultados Detalhados"
-    // Buscar TODOS os CPFs que têm procedimentos no período e classificar pelo status_beneficiario
-    // Aplicar filtros de beneficiários para garantir consistência com os dados detalhados
-    // Se há mês de referência, usar apenas DATE(p.data_competencia) IN (...), senão usar range de datas
-    
-    // Criar versão das condições sem o prefixo 'b.' para usar na subquery
-    const beneficiarioConditionsForSubquery = beneficiarioConditions.map(cond => 
-      cond.replace(/\bb\./g, '')
-    )
-    
-    // Construir WHERE clause para beneficiários filtrados (sem prefixo b.)
-    const beneficiarioWhereClause = beneficiarioConditionsForSubquery.length > 0
-      ? `WHERE ${beneficiarioConditionsForSubquery.join(" AND ")}`
-      : ""
-    
-    // Criar subquery para pegar o status mais recente de cada beneficiário
-    const beneficiarioMaisRecenteSubquery = `
-      SELECT 
-        b1.cpf,
-        b1.status_beneficiario
-      FROM reg_beneficiarios b1
-      INNER JOIN (
-        SELECT 
+    // Query dedicada aos cards de sinistralidade usando CTEs
+    const procedimentosPeriodoFilters: string[] = []
+    const procedimentosPeriodoValues: any[] = []
+
+    if (mesesCompetenciaDatas.length > 0) {
+      procedimentosPeriodoFilters.push(
+        `DATE(p.data_competencia) IN (${mesesCompetenciaDatas.map(() => "?").join(",")})`
+      )
+      procedimentosPeriodoValues.push(...mesesCompetenciaDatas)
+    } else {
+      procedimentosPeriodoFilters.push("p.data_competencia >= ?")
+      procedimentosPeriodoFilters.push("p.data_competencia <= ?")
+      procedimentosPeriodoValues.push(dataInicio, dataFimNormalizada)
+    }
+
+    procedimentosPeriodoFilters.push("p.evento IS NOT NULL")
+
+    if (cpf) {
+      procedimentosPeriodoFilters.push("p.cpf = ?")
+      procedimentosPeriodoValues.push(cpf)
+    }
+
+    const procedimentosCardsWhereClause = procedimentosPeriodoFilters.length > 0
+      ? procedimentosPeriodoFilters.join(" AND ")
+      : "1=1"
+
+    const sinistralidadeCardsQuery = `
+      WITH beneficiarios_filtrados AS (
+        SELECT cpf, status_beneficiario
+        FROM (
+          SELECT 
+            b.cpf,
+            b.status_beneficiario,
+            ROW_NUMBER() OVER (
+              PARTITION BY b.cpf 
+              ORDER BY b.data_inicio_vigencia_beneficiario DESC
+            ) AS rn
+          FROM reg_beneficiarios b
+          WHERE ${beneficiarioConditions.join(" AND ")}
+        ) recentes
+        WHERE rn = 1
+      ),
+      procedimentos_filtrados AS (
+        SELECT
+          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes_label,
+          p.cpf,
+          p.valor_procedimento
+        FROM reg_procedimentos p
+        WHERE ${procedimentosCardsWhereClause}
+      ),
+      procedimentos_classificados AS (
+        SELECT
+          pf.mes_label,
+          pf.cpf,
+          pf.valor_procedimento,
+          CASE
+            WHEN bf.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(bf.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS categoria_status
+        FROM procedimentos_filtrados pf
+        LEFT JOIN beneficiarios_filtrados bf ON bf.cpf = pf.cpf
+      ),
+      status_por_cpf_mes AS (
+        SELECT
+          mes_label,
           cpf,
-          MAX(data_inicio_vigencia_beneficiario) as max_data
-        FROM reg_beneficiarios
-        ${beneficiarioWhereClause}
-        GROUP BY cpf
-      ) b2 ON b1.cpf = b2.cpf 
-        AND b1.data_inicio_vigencia_beneficiario = b2.max_data
-      ${beneficiarioWhereClause}
-    `
-    
-    const resumoSubquery = `
-      SELECT 
-        p.cpf,
-        COALESCE(MAX(b_filtrado.status_beneficiario), '0') as status_beneficiario,
-        -- Somar valor total dos procedimentos deste CPF
-        SUM(p.valor_procedimento) AS total_valor
-      FROM reg_procedimentos p
-      LEFT JOIN (${beneficiarioMaisRecenteSubquery}) b_filtrado ON b_filtrado.cpf = p.cpf
-      WHERE ${mesesCompetenciaDatas.length > 0
-        ? (procedimentosWhereOnlyClause ? procedimentosWhereOnlyClause : "p.evento IS NOT NULL")
-        : `p.data_competencia >= ? AND p.data_competencia <= ? AND p.evento IS NOT NULL`
-      }
-      GROUP BY p.cpf
-    `
-
-    const resumoQuery = `
+          CASE
+            WHEN SUM(CASE WHEN categoria_status = 'ativo' THEN 1 ELSE 0 END) > 0 THEN 'ativo'
+            WHEN SUM(CASE WHEN categoria_status = 'inativo' THEN 1 ELSE 0 END) > 0 THEN 'inativo'
+            ELSE 'vazio'
+          END AS status_final,
+          SUM(valor_procedimento) AS total_valor
+        FROM procedimentos_classificados
+        GROUP BY mes_label, cpf
+      )
       SELECT
-        COUNT(DISTINCT CASE WHEN LOWER(status_beneficiario) = 'ativo' THEN cpf END) AS ativos_quantidade,
-        COALESCE(SUM(CASE WHEN LOWER(status_beneficiario) = 'ativo' THEN total_valor END), 0) AS ativos_valor,
-        COUNT(DISTINCT CASE WHEN LOWER(status_beneficiario) = 'inativo' OR LOWER(status_beneficiario) = 'cancelado' THEN cpf END) AS inativos_quantidade,
-        COALESCE(SUM(CASE WHEN LOWER(status_beneficiario) = 'inativo' OR LOWER(status_beneficiario) = 'cancelado' THEN total_valor END), 0) AS inativos_valor,
-        COUNT(DISTINCT CASE WHEN status_beneficiario = '0' OR status_beneficiario IS NULL THEN cpf END) AS zero_quantidade,
-        COALESCE(SUM(CASE WHEN status_beneficiario = '0' OR status_beneficiario IS NULL THEN total_valor END), 0) AS zero_valor
-      FROM (${resumoSubquery}) resumo
+        status_final,
+        COUNT(*) AS beneficiarios_qtd,
+        COALESCE(SUM(total_valor), 0) AS total_valor
+      FROM status_por_cpf_mes
+      GROUP BY status_final
     `
 
-    // Parâmetros: a subquery beneficiarioMaisRecenteSubquery usa beneficiarioWhereClause duas vezes
-    // (primeiro na subquery interna MAX, depois na query principal), então precisamos duplicar os valores
-    const resumoParams = mesesCompetenciaDatas.length > 0
-      ? [
-          ...beneficiarioValues, // filtros de beneficiários (primeira vez na subquery interna MAX)
-          ...beneficiarioValues, // filtros de beneficiários (segunda vez na query principal b1)
-          ...procedimentosValues, // filtros de procedimentos (inclui meses de referência)
-        ]
-      : [
-          ...beneficiarioValues, // filtros de beneficiários (primeira vez na subquery interna MAX)
-          ...beneficiarioValues, // filtros de beneficiários (segunda vez na query principal b1)
-          dataInicio, // para p.data_competencia >= ?
-          dataFimNormalizada, // para p.data_competencia <= ?
-        ]
+    const sinistralidadeCardsParams = [
+      ...beneficiarioValues,
+      ...procedimentosPeriodoValues,
+    ]
 
-    const [resumoRows]: any = await connection.execute(resumoQuery, resumoParams)
-    const resumoRow = resumoRows?.[0] || {}
-    
+    const [sinistralidadeCardsRows]: any = await connection.execute(
+      sinistralidadeCardsQuery,
+      sinistralidadeCardsParams
+    )
+
+    const categoriaMap = new Map<string, { quantidade: number; valor: number }>()
+    ;(sinistralidadeCardsRows || []).forEach((row: any) => {
+      const key = row.status_final || row.categoria_status
+      categoriaMap.set(key, {
+        quantidade: Number(row.beneficiarios_qtd) || 0,
+        valor: Number(row.total_valor) || 0,
+      })
+    })
+
+    const ativosCategoria = categoriaMap.get("ativo") || { quantidade: 0, valor: 0 }
+    const inativosCategoria = categoriaMap.get("inativo") || { quantidade: 0, valor: 0 }
+    const naoLocalizadosCategoria = categoriaMap.get("vazio") || categoriaMap.get("nao_localizado") || { quantidade: 0, valor: 0 }
+
     const resumo = {
       ativos: {
-        quantidade: Number(resumoRow.ativos_quantidade) || 0,
-        valor: Number(resumoRow.ativos_valor) || 0,
+        quantidade: ativosCategoria.quantidade,
+        valor: ativosCategoria.valor,
       },
       inativos: {
-        quantidade: Number(resumoRow.inativos_quantidade) || 0,
-        valor: Number(resumoRow.inativos_valor) || 0,
+        quantidade: inativosCategoria.quantidade,
+        valor: inativosCategoria.valor,
       },
       zero: {
-        quantidade: Number(resumoRow.zero_quantidade) || 0,
-        valor: Number(resumoRow.zero_valor) || 0,
+        quantidade: naoLocalizadosCategoria.quantidade,
+        valor: naoLocalizadosCategoria.valor,
       },
-      // Manter cancelados para compatibilidade (soma de inativos + zero)
       cancelados: {
-        quantidade: (Number(resumoRow.inativos_quantidade) || 0) + (Number(resumoRow.zero_quantidade) || 0),
-        valor: (Number(resumoRow.inativos_valor) || 0) + (Number(resumoRow.zero_valor) || 0),
+        quantidade: inativosCategoria.quantidade,
+        valor: inativosCategoria.valor,
       },
     }
 
-    // Calcular total de TODOS os procedimentos no período (respeitando apenas filtros de procedimentos)
-    // Se há mês de referência, usar apenas DATE(p.data_competencia) IN (...), senão usar range de datas
-    const totalProcedimentosQuery = mesesCompetenciaDatas.length > 0
-      ? `
-        SELECT
-          COUNT(DISTINCT p.cpf) AS quantidade_total,
-          COALESCE(SUM(p.valor_procedimento), 0) AS valor_total
-        FROM reg_procedimentos p
-        WHERE ${procedimentosWhereOnlyClause ? procedimentosWhereOnlyClause : "p.evento IS NOT NULL"}
-      `
-      : `
-        SELECT
-          COUNT(DISTINCT p.cpf) AS quantidade_total,
-          COALESCE(SUM(p.valor_procedimento), 0) AS valor_total
-        FROM reg_procedimentos p
-        WHERE p.data_competencia >= ?
-          AND p.data_competencia <= ?
-          AND p.evento IS NOT NULL
-      `
-
-    const totalProcedimentosParams = mesesCompetenciaDatas.length > 0
-      ? [...procedimentosValues]
-      : [dataInicio, dataFimNormalizada]
-
-    const [totalProcedimentosRows]: any = await connection.execute(totalProcedimentosQuery, totalProcedimentosParams)
-
-    const totalProcedimentosRow = totalProcedimentosRows?.[0] || {}
-    const totalProcedimentos = {
-      quantidade: Number(totalProcedimentosRow.quantidade_total) || 0,
-      valor: Number(totalProcedimentosRow.valor_total) || 0,
-    }
-
-    // Calcular não identificados reais: apenas CPFs que NÃO existem em reg_beneficiarios (ASSIM SAÚDE)
-    // Se há mês de referência, usar apenas DATE(p.data_competencia) IN (...), senão usar range de datas
-    const naoIdentificadosQuery = mesesCompetenciaDatas.length > 0
-      ? `
-        SELECT
-          COUNT(DISTINCT p.cpf) AS quantidade,
-          COALESCE(SUM(p.valor_procedimento), 0) AS valor
-        FROM reg_procedimentos p
-        WHERE ${procedimentosWhereOnlyClause ? procedimentosWhereOnlyClause : "p.evento IS NOT NULL"}
-          AND NOT EXISTS (
-            SELECT 1
-            FROM reg_beneficiarios b_nao
-            WHERE b_nao.cpf = p.cpf
-              AND UPPER(b_nao.operadora) = 'ASSIM SAÚDE'
-          )
-      `
-      : `
-        SELECT
-          COUNT(DISTINCT p.cpf) AS quantidade,
-          COALESCE(SUM(p.valor_procedimento), 0) AS valor
-        FROM reg_procedimentos p
-        WHERE p.data_competencia >= ?
-          AND p.data_competencia <= ?
-          AND p.evento IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1
-            FROM reg_beneficiarios b_nao
-            WHERE b_nao.cpf = p.cpf
-              AND UPPER(b_nao.operadora) = 'ASSIM SAÚDE'
-          )
-      `
-
-    const naoIdentificadosParams = mesesCompetenciaDatas.length > 0
-      ? [...procedimentosValues]
-      : [dataInicio, dataFimNormalizada]
-
-    const [naoIdentificadosRows]: any = await connection.execute(naoIdentificadosQuery, naoIdentificadosParams)
-
-    const naoIdentificadosRow = naoIdentificadosRows?.[0] || {}
     const naoIdentificados = {
-      quantidade: Number(naoIdentificadosRow.quantidade) || 0,
-      valor: Number(naoIdentificadosRow.valor) || 0,
+      quantidade: naoLocalizadosCategoria.quantidade,
+      valor: naoLocalizadosCategoria.valor,
     }
 
     // Buscar dados detalhados dos procedimentos não identificados
