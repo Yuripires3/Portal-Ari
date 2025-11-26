@@ -29,6 +29,8 @@ const fetchNoStore = (input: string, init?: RequestInit) =>
 type VidasAtivasPorMes = {
   mes_referencia: string
   vidas_ativas: number
+  vidas_ativas_com_procedimento?: number
+  vidas_ativas_sem_procedimento?: number
 }
 
 export default function PainelBeneficiariosPage() {
@@ -473,26 +475,61 @@ export default function PainelBeneficiariosPage() {
             <p className="text-muted-foreground text-center py-8">Nenhum dado disponível</p>
           ) : (
             <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={vidasAtivas.map(item => ({ ...item, mes: fmtMes(item.mes_referencia) }))}>
+              <BarChart
+                data={vidasAtivas.map(item => {
+                  const comProc = item.vidas_ativas_com_procedimento ?? 0
+                  const semProc =
+                    item.vidas_ativas_sem_procedimento ?? Math.max((item.vidas_ativas || 0) - comProc, 0)
+
+                  return {
+                    ...item,
+                    mes: fmtMes(item.mes_referencia),
+                    vidas_ativas_com_procedimento: comProc,
+                    vidas_ativas_sem_procedimento: semProc,
+                  }
+                })}
+              >
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="mes" />
                 <YAxis tickFormatter={(value) => fmtNumber(value)} />
                 <Tooltip 
                   content={({ active, payload }) => {
                     if (!active || !payload || payload.length === 0) return null
-                    const data = payload[0].payload as VidasAtivasPorMes
+                    const raw = payload[0].payload as any
+                    const total =
+                      (raw.vidas_ativas as number | undefined) ??
+                      ((raw.vidas_ativas_sem_procedimento || 0) + (raw.vidas_ativas_com_procedimento || 0))
                     return (
                       <div className="bg-white dark:bg-zinc-900 p-3 border rounded-lg shadow-lg">
-                        <p className="font-semibold mb-2">{fmtMes(data.mes_referencia)}</p>
+                        <p className="font-semibold mb-2">{fmtMes(raw.mes_referencia)}</p>
+                        <p className="text-sm mb-1">
+                          <span className="font-semibold" style={{ color: "#002f67" }}>Ativas sem procedimento:</span>{" "}
+                          {fmtNumber(raw.vidas_ativas_sem_procedimento || 0)}
+                        </p>
+                        <p className="text-sm mb-1">
+                          <span className="font-semibold" style={{ color: "#CA8282" }}>Ativas com procedimento:</span>{" "}
+                          {fmtNumber(raw.vidas_ativas_com_procedimento || 0)}
+                        </p>
                         <p className="text-sm font-semibold">
-                          Vidas Ativas: {fmtNumber(data.vidas_ativas)}
+                          Total de vidas ativas: {fmtNumber(total || 0)}
                         </p>
                       </div>
                     )
                   }}
                 />
                 <Legend />
-                <Bar dataKey="vidas_ativas" name="Vidas Ativas" fill="#002f67" />
+                <Bar
+                  dataKey="vidas_ativas_sem_procedimento"
+                  name="Ativas sem procedimento"
+                  stackId="1"
+                  fill="#002f67"
+                />
+                <Bar
+                  dataKey="vidas_ativas_com_procedimento"
+                  name="Ativas com procedimento"
+                  stackId="1"
+                  fill="#CA8282"
+                />
               </BarChart>
             </ResponsiveContainer>
           )}

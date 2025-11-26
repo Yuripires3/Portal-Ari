@@ -79,14 +79,17 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Construir filtros WHERE
+    // Construir filtros WHERE (tabela de beneficiários, alias b)
     const whereConditions: string[] = []
     const whereValues: any[] = []
+
+    // Filtro fixo: considerar apenas beneficiários da operadora ASSIM SAÚDE
+    whereConditions.push("UPPER(b.operadora) = 'ASSIM SAÚDE'")
 
     if (operadorasParam) {
       const operadoras = operadorasParam.split(",").map(op => op.trim()).filter(Boolean)
       if (operadoras.length > 0) {
-        whereConditions.push(`operadora IN (${operadoras.map(() => "?").join(",")})`)
+        whereConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
         whereValues.push(...operadoras)
       }
     }
@@ -94,28 +97,36 @@ export async function GET(request: NextRequest) {
     if (entidadesParam) {
       const entidades = entidadesParam.split(",").map(e => e.trim()).filter(Boolean)
       if (entidades.length > 0) {
-        whereConditions.push(`entidade IN (${entidades.map(() => "?").join(",")})`)
+        whereConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
         whereValues.push(...entidades)
       }
     }
 
     if (tipo && tipo !== "Todos") {
-      whereConditions.push("tipo = ?")
+      whereConditions.push("b.tipo = ?")
       whereValues.push(tipo)
     }
 
-    const whereClause = whereConditions.length > 0 
-      ? `WHERE ${whereConditions.join(" AND ")}` 
+    const whereClauseBenef = whereConditions.length > 0 
+      ? `WHERE ${whereConditions.join(" AND ")}`
       : ""
 
-    // Para cada mês, contar vidas ativas
+    // Para cada mês, contar:
+    // - vidas ativas
+    // - vidas ativas com pelo menos um procedimento no mês
+    //
     // Beneficiário ativo em um mês M (YYYY-MM):
     // - data_inicio_vigencia_beneficiario <= último dia de M
     // - Se data_exclusao IS NULL: status_beneficiario deve ser 'ativo' (minúsculo)
     // - Se data_exclusao IS NOT NULL:
     //   - Se data_exclusao > CURDATE(): considerar ativo (data de exclusão é futura)
     //   - Se data_exclusao <= CURDATE(): verificar se data_exclusao > último dia de M (ainda estava ativo naquele mês)
-    const resultados: Array<{ mes_referencia: string; vidas_ativas: number }> = []
+    const resultados: Array<{
+      mes_referencia: string
+      vidas_ativas: number
+      vidas_ativas_com_procedimento: number
+      vidas_ativas_sem_procedimento: number
+    }> = []
 
     for (const mes of meses) {
       const [ano, mesNum] = mes.split("-")
@@ -124,42 +135,94 @@ export async function GET(request: NextRequest) {
       // Porque mês M em Date = mês M+1, e dia 0 = último dia do mês anterior (mês M)
       const anoInt = parseInt(ano)
       const mesInt = parseInt(mesNum) // mesInt está em formato 1-12
-      // Para pegar o último dia do mês mesInt (formato 1-12), usamos new Date(ano, mesInt + 1, 0)
+      // Para pegar o último dia do mês mesInt (formato 1-12), usamos new Date(ano, mesInt, 0)
       // JavaScript Date usa mês 0-indexed (0=janeiro, 1=fevereiro, ...)
-      // new Date(ano, mesInt + 1, 0) retorna o último dia do mês mesInt
-      // Exemplo: mesInt=1 (janeiro) -> new Date(2025, 2, 0) = último dia de janeiro (31/01/2025) ✓
-      // Exemplo: mesInt=2 (fevereiro) -> new Date(2025, 3, 0) = último dia de fevereiro (28/02/2025) ✓
-      // Exemplo: mesInt=12 (dezembro) -> new Date(2025, 13, 0) = último dia de dezembro (31/12/2025) ✓
-      const ultimoDiaMes = new Date(anoInt, mesInt + 1, 0)
+      // new Date(ano, mesInt, 0) retorna o último dia do mês mesInt
+      // Exemplo: mesInt=1 (janeiro) -> new Date(2025, 1, 0) = 31/01/2025
+      // Exemplo: mesInt=2 (fevereiro) -> new Date(2025, 2, 0) = 28/02/2025
+      // Exemplo: mesInt=12 (dezembro) -> new Date(2025, 12, 0) = 31/12/2025
+      const ultimoDiaMes = new Date(anoInt, mesInt, 0)
       const ultimoDiaMesStr = ultimoDiaMes.toISOString().split("T")[0]
 
-      // Construir query com filtros WHERE
-      const queryWhere = whereConditions.length > 0 
-        ? `${whereClause} AND` 
+      // Construir query para vidas ativas com filtros WHERE
+      const queryWhereAtivos = whereConditions.length > 0 
+        ? `${whereClauseBenef} AND` 
         : "WHERE"
 
-      const query = `
-        SELECT COUNT(DISTINCT id_beneficiario) as vidas_ativas
-        FROM reg_beneficiarios
-        ${queryWhere} data_inicio_vigencia_beneficiario <= ?
+      const queryAtivos = `
+        SELECT COUNT(DISTINCT b.id_beneficiario) as vidas_ativas
+        FROM reg_beneficiarios b
+        ${queryWhereAtivos} b.data_inicio_vigencia_beneficiario <= ?
         AND (
-          (data_exclusao IS NULL AND status_beneficiario = 'ativo')
-          OR (data_exclusao IS NOT NULL AND (
-            data_exclusao > CURDATE()
-            OR data_exclusao > ?
-          ))
+          (b.data_exclusao IS NULL AND b.status_beneficiario = 'ativo')
+          OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > ?)
         )
       `
 
-      const [rows]: any = await connection.execute(query, [
+      const [rowsAtivos]: any = await connection.execute(queryAtivos, [
         ...whereValues,
         ultimoDiaMesStr,
-        ultimoDiaMesStr
+        ultimoDiaMesStr,
       ])
+
+      const vidasAtivas = rowsAtivos[0]?.vidas_ativas || 0
+
+      // Query para vidas ativas com pelo menos um procedimento no mês de referência
+      // Usa a mesma lógica de identificação de "ativo" dos cards de sinistralidade:
+      // - considera apenas operadora ASSIM SAÚDE
+      // - status do beneficiário é o mais recente (por CPF), independente da data do procedimento
+      // - conta apenas CPFs cujo status_final seja "ativo"
+      const primeiroDiaMesStr = `${ano}-${String(mesInt).padStart(2, "0")}-01`
+
+      const queryComProcedimento = `
+        WITH procedimentos_mes AS (
+          SELECT
+            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+            p.cpf
+          FROM reg_procedimentos p
+          WHERE
+            UPPER(p.operadora) = 'ASSIM SAÚDE'
+            AND p.evento IS NOT NULL
+            AND DATE(p.data_competencia) BETWEEN ? AND ?
+        ),
+        beneficiarios_status AS (
+          SELECT
+            b.cpf,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.status_beneficiario
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS status_beneficiario
+          FROM reg_beneficiarios b
+          WHERE
+            UPPER(b.operadora) = 'ASSIM SAÚDE'
+          GROUP BY
+            b.cpf
+        )
+        SELECT COUNT(DISTINCT pr.cpf) AS vidas_com_procedimento
+        FROM procedimentos_mes pr
+        LEFT JOIN beneficiarios_status bs ON bs.cpf = pr.cpf
+        WHERE pr.mes = DATE_FORMAT(?, '%Y-%m')
+          AND LOWER(COALESCE(bs.status_beneficiario, '')) = 'ativo'
+      `
+
+      const [rowsComProc]: any = await connection.execute(queryComProcedimento, [
+        primeiroDiaMesStr,
+        ultimoDiaMesStr,
+        primeiroDiaMesStr,
+      ])
+
+      const vidasComProcedimento = rowsComProc[0]?.vidas_com_procedimento || 0
+      const vidasSemProcedimento = Math.max(vidasAtivas - vidasComProcedimento, 0)
 
       resultados.push({
         mes_referencia: mes,
-        vidas_ativas: rows[0]?.vidas_ativas || 0
+        vidas_ativas: vidasAtivas,
+        vidas_ativas_com_procedimento: vidasComProcedimento,
+        vidas_ativas_sem_procedimento: vidasSemProcedimento,
       })
     }
 
