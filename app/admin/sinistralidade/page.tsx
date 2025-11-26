@@ -1372,12 +1372,12 @@ export default function SinistralidadeDashboardPage() {
                       <div className="bg-white dark:bg-zinc-900 p-3 border rounded-lg shadow-lg">
                         <p className="font-semibold mb-2">{fmtMes(raw.mes_referencia)}</p>
                         <p className="text-sm mb-1">
-                          <span className="font-semibold" style={{ color: "#002f67" }}>Ativas sem procedimento:</span>{" "}
-                          {fmtNumber(raw.vidas_ativas_sem_procedimento || 0)}
+                          <span className="font-semibold" style={{ color: "#CA8282" }}>Com procedimento:</span>{" "}
+                          {fmtNumber(raw.vidas_ativas_com_procedimento || 0)}
                         </p>
                         <p className="text-sm mb-1">
-                          <span className="font-semibold" style={{ color: "#CA8282" }}>Ativas com procedimento:</span>{" "}
-                          {fmtNumber(raw.vidas_ativas_com_procedimento || 0)}
+                          <span className="font-semibold" style={{ color: "#002f67" }}>Sem procedimento:</span>{" "}
+                          {fmtNumber(raw.vidas_ativas_sem_procedimento || 0)}
                         </p>
                         <p className="text-sm font-semibold">
                           Total de vidas ativas: {fmtNumber(total || 0)}
@@ -1388,16 +1388,16 @@ export default function SinistralidadeDashboardPage() {
                 />
                 <Legend />
                 <Bar
-                  dataKey="vidas_ativas_sem_procedimento"
-                  name="Ativas sem procedimento"
-                  stackId="1"
-                  fill="#002f67"
-                />
-                <Bar
                   dataKey="vidas_ativas_com_procedimento"
-                  name="Ativas com procedimento"
+                  name="Com procedimento"
                   stackId="1"
                   fill="#CA8282"
+                />
+                <Bar
+                  dataKey="vidas_ativas_sem_procedimento"
+                  name="Sem procedimento"
+                  stackId="1"
+                  fill="#002f67"
                 />
               </BarChart>
             </ResponsiveContainer>
@@ -1427,19 +1427,19 @@ export default function SinistralidadeDashboardPage() {
               <div className="border rounded-md overflow-x-auto">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-10" />
-                      <TableHead>Operadora</TableHead>
-                      <TableHead>Plano</TableHead>
-                      <TableHead>CPF</TableHead>
-                      <TableHead>Nome</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Entidade</TableHead>
-                      <TableHead>Idade</TableHead>
-                      <TableHead>Procedimentos</TableHead>
-                      <TableHead>Gasto do Mês</TableHead>
-                      <TableHead>Gasto Anual</TableHead>
-                    </TableRow>
+                  <TableRow>
+                    <TableHead className="w-10" />
+                    <TableHead>Operadora</TableHead>
+                    <TableHead>Plano</TableHead>
+                    <TableHead>CPF</TableHead>
+                    <TableHead>Nome</TableHead>
+                    <TableHead>Idade</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Entidade</TableHead>
+                    <TableHead>Procedimentos</TableHead>
+                    <TableHead>Gasto do Mês</TableHead>
+                    <TableHead>Gasto Anual</TableHead>
+                  </TableRow>
                   </TableHeader>
                   <TableBody>
                     {dadosAgrupados.map(grupo => {
@@ -1463,9 +1463,9 @@ export default function SinistralidadeDashboardPage() {
                             <TableCell>{grupo.info?.PLANO || "-"}</TableCell>
                             <TableCell>{grupo.info?.CPF || "-"}</TableCell>
                             <TableCell>{grupo.info?.NOME || "-"}</TableCell>
+                            <TableCell>{grupo.info?.IDADE || "-"}</TableCell>
                             <TableCell>{grupo.info?.STATUS || "-"}</TableCell>
                             <TableCell>{grupo.info?.ENTIDADE || "-"}</TableCell>
-                            <TableCell>{grupo.info?.IDADE || "-"}</TableCell>
                             <TableCell>{grupo.procedimentos.length}</TableCell>
                             <TableCell>{fmtCurrency(grupo.totalValor)}</TableCell>
                             <TableCell>{fmtCurrency(grupo.gastoAnual)}</TableCell>

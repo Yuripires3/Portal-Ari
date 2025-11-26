@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react"
 import { SummaryCard } from "./SummaryCard"
+import { FaixaEtariaItem } from "./FaixaEtariaChart"
 
 export interface SinistralidadeCards {
   mes: string
@@ -13,6 +14,10 @@ export interface SinistralidadeCards {
   valor_inativo: number
   valor_nao_localizado: number
   valor_total_geral: number
+  faixa_etaria_ativo?: FaixaEtariaItem[]
+  faixa_etaria_inativo?: FaixaEtariaItem[]
+  faixa_etaria_nao_localizado?: FaixaEtariaItem[]
+  faixa_etaria_total?: FaixaEtariaItem[]
 }
 
 /**
@@ -93,6 +98,57 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
   const valorNaoLocalizados = dados.reduce((sum, linha) => sum + linha.valor_nao_localizado, 0)
   const valorTotalGeral = dados.reduce((sum, linha) => sum + linha.valor_total_geral, 0)
 
+  // Agregar faixa etária de todos os meses
+  const faixas = ["00 a 18", "19 a 23", "24 a 28", "29 a 33", "34 a 38", "39 a 43", "44 a 48", "49 a 53", "54 a 58", ">59"]
+  
+  const faixaEtariaAtivo: FaixaEtariaItem[] = faixas.map(faixa => ({
+    faixa,
+    vidas: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_ativo?.find(f => f.faixa === faixa)
+      return sum + (item?.vidas || 0)
+    }, 0),
+    valorGasto: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_ativo?.find(f => f.faixa === faixa)
+      return sum + (item?.valorGasto || 0)
+    }, 0),
+  }))
+  
+  const faixaEtariaInativo: FaixaEtariaItem[] = faixas.map(faixa => ({
+    faixa,
+    vidas: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_inativo?.find(f => f.faixa === faixa)
+      return sum + (item?.vidas || 0)
+    }, 0),
+    valorGasto: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_inativo?.find(f => f.faixa === faixa)
+      return sum + (item?.valorGasto || 0)
+    }, 0),
+  }))
+  
+  const faixaEtariaNaoLocalizado: FaixaEtariaItem[] = faixas.map(faixa => ({
+    faixa,
+    vidas: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_nao_localizado?.find(f => f.faixa === faixa)
+      return sum + (item?.vidas || 0)
+    }, 0),
+    valorGasto: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_nao_localizado?.find(f => f.faixa === faixa)
+      return sum + (item?.valorGasto || 0)
+    }, 0),
+  }))
+  
+  const faixaEtariaTotal: FaixaEtariaItem[] = faixas.map(faixa => ({
+    faixa,
+    vidas: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_total?.find(f => f.faixa === faixa)
+      return sum + (item?.vidas || 0)
+    }, 0),
+    valorGasto: dados.reduce((sum, linha) => {
+      const item = linha.faixa_etaria_total?.find(f => f.faixa === faixa)
+      return sum + (item?.valorGasto || 0)
+    }, 0),
+  }))
+
   // Grid responsivo: 4 cards em telas grandes (≥ 1280px), 2 em médias, 1 em pequenas
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
@@ -102,6 +158,8 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
         livesValue={totalAtivos}
         amountValue={valorAtivos}
         accentColorClass="text-emerald-600 dark:text-emerald-500"
+        faixaEtaria={faixaEtariaAtivo}
+        totalVidas={totalVidas}
       />
 
       {/* Card Inativos - Vermelho */}
@@ -110,6 +168,8 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
         livesValue={totalInativos}
         amountValue={valorInativos}
         accentColorClass="text-red-600 dark:text-red-500"
+        faixaEtaria={faixaEtariaInativo}
+        totalVidas={totalVidas}
       />
 
       {/* Card Não Localizados - Laranja */}
@@ -118,6 +178,8 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
         livesValue={totalNaoLocalizados}
         amountValue={valorNaoLocalizados}
         accentColorClass="text-orange-600 dark:text-orange-500"
+        faixaEtaria={faixaEtariaNaoLocalizado}
+        totalVidas={totalVidas}
       />
 
       {/* Card Total */}
@@ -126,6 +188,8 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
         livesValue={totalVidas}
         amountValue={valorTotalGeral}
         accentColorClass="text-black-600 dark:text-black-500"
+        faixaEtaria={faixaEtariaTotal}
+        totalVidas={totalVidas}
       />
     </div>
   )
