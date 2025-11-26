@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
       procedimentosValues.push(cpfFiltro)
     }
 
-    // Construir condições WHERE para beneficiários
+    // Construir condições WHERE para beneficiários (para filtros de entidade/tipo)
     const beneficiarioConditions: string[] = [
       "b.operadora = 'ASSIM SAÚDE'",
       "UPPER(b.plano) NOT LIKE '%DENT%'",
@@ -110,80 +110,73 @@ export async function GET(request: NextRequest) {
 
     const beneficiarioWhereClause = `WHERE ${beneficiarioConditions.join(" AND ")}`
 
-    // QUERY OTIMIZADA: Uma única query que retorna cards + faixa etária
-    // Usa CTEs e ROW_NUMBER para melhor performance (substitui GROUP_CONCAT lento)
+    // QUERY CORRIGIDA: Seguindo a estrutura correta fornecida
+    // Usa GROUP_CONCAT para pegar o status mais recente do beneficiário
     const queryStartTime = Date.now()
-    const sql = `
-      WITH procedimentos_agrupados AS (
-        SELECT
-          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-          p.cpf,
-          SUM(p.valor_procedimento) AS valor_total_cpf_mes
-        FROM reg_procedimentos p
-        WHERE ${procedimentosConditions.join(" AND ")}
-        GROUP BY DATE_FORMAT(p.data_competencia, '%Y-%m'), p.cpf
-      ),
-      -- Beneficiários que atendem aos filtros (entidade, tipo, etc)
-      beneficiarios_filtrados AS (
-        SELECT
-          b.cpf,
-          b.status_beneficiario,
-          b.idade,
-          ROW_NUMBER() OVER (
-            PARTITION BY b.cpf
+    
+    // Construir subquery de beneficiários com filtros (se houver)
+    const beneficiariosSubquery = `
+      SELECT
+        b.cpf,
+        SUBSTRING_INDEX(
+          GROUP_CONCAT(
+            b.status_beneficiario
             ORDER BY b.data_inicio_vigencia_beneficiario DESC
-          ) AS rn
-        FROM reg_beneficiarios b
-        ${beneficiarioWhereClause}
-      ),
-      beneficiarios_latest AS (
-        SELECT cpf, status_beneficiario, idade
-        FROM beneficiarios_filtrados
-        WHERE rn = 1
-      ),
-      procedimentos_com_status AS (
+          ),
+          ',',
+          1
+        ) AS status_beneficiario,
+        SUBSTRING_INDEX(
+          GROUP_CONCAT(
+            CAST(b.idade AS CHAR)
+            ORDER BY b.data_inicio_vigencia_beneficiario DESC
+          ),
+          ',',
+          1
+        ) AS idade
+      FROM reg_beneficiarios b
+      ${beneficiarioWhereClause}
+      GROUP BY b.cpf
+    `
+    
+    const sql = `
+      WITH procedimentos_com_status AS (
         SELECT
           pr.mes,
           pr.cpf,
           pr.valor_total_cpf_mes,
           CASE
-            WHEN bl.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(bl.status_beneficiario) = 'ativo' THEN 'ativo'
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
           END AS status_final,
-          bl.idade
-        FROM procedimentos_agrupados pr
-        LEFT JOIN beneficiarios_latest bl ON bl.cpf = pr.cpf
-        ${entidades.length > 0 || tipoFiltro ? `
-        -- Se há filtros de entidade/tipo, excluir procedimentos que têm beneficiário mas não atende aos filtros
-        -- Verificar se o CPF tem beneficiário que não está em beneficiarios_filtrados
+          CAST(b.idade AS UNSIGNED) AS idade
+        FROM (
+          SELECT
+            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+            p.cpf,
+            SUM(p.valor_procedimento) AS valor_total_cpf_mes
+          FROM reg_procedimentos p
+          WHERE ${procedimentosConditions.join(" AND ")}
+          GROUP BY
+            DATE_FORMAT(p.data_competencia, '%Y-%m'),
+            p.cpf
+        ) AS pr
         LEFT JOIN (
-          SELECT DISTINCT b.cpf
-          FROM reg_beneficiarios b
-          WHERE b.operadora = 'ASSIM SAÚDE'
-            AND UPPER(b.plano) NOT LIKE '%DENT%'
-            AND UPPER(b.plano) NOT LIKE '%AESP%'
-            ${entidades.length > 0 ? `AND (b.entidade NOT IN (${entidades.map(() => "?").join(",")}) OR b.entidade IS NULL)` : ""}
-            ${tipoFiltro ? "AND (b.tipo != ? OR b.tipo IS NULL)" : ""}
-            ${cpfFiltro ? "AND b.cpf = ?" : ""}
-            AND NOT EXISTS (
-              SELECT 1 FROM beneficiarios_filtrados bf2 
-              WHERE bf2.cpf = b.cpf AND bf2.rn = 1
-            )
-        ) AS beneficiarios_fora_filtro ON beneficiarios_fora_filtro.cpf = pr.cpf
-        WHERE beneficiarios_fora_filtro.cpf IS NULL
-        ` : ""}
+          ${beneficiariosSubquery}
+        ) AS b
+          ON b.cpf = pr.cpf
       ),
       cards_agregados AS (
         SELECT
           mes,
-          SUM(CASE WHEN status_final = 'ativo' THEN 1 ELSE 0 END) AS ativo,
+          SUM(CASE WHEN status_final = 'ativo'   THEN 1 ELSE 0 END) AS ativo,
           SUM(CASE WHEN status_final = 'inativo' THEN 1 ELSE 0 END) AS inativo,
-          SUM(CASE WHEN status_final = 'vazio' THEN 1 ELSE 0 END) AS nao_localizado,
+          SUM(CASE WHEN status_final = 'vazio'   THEN 1 ELSE 0 END) AS nao_localizado,
           COUNT(*) AS total_vidas,
-          SUM(CASE WHEN status_final = 'ativo' THEN valor_total_cpf_mes ELSE 0 END) AS valor_ativo,
+          SUM(CASE WHEN status_final = 'ativo'   THEN valor_total_cpf_mes ELSE 0 END) AS valor_ativo,
           SUM(CASE WHEN status_final = 'inativo' THEN valor_total_cpf_mes ELSE 0 END) AS valor_inativo,
-          SUM(CASE WHEN status_final = 'vazio' THEN valor_total_cpf_mes ELSE 0 END) AS valor_nao_localizado,
+          SUM(CASE WHEN status_final = 'vazio'   THEN valor_total_cpf_mes ELSE 0 END) AS valor_nao_localizado,
           SUM(valor_total_cpf_mes) AS valor_total_geral
         FROM procedimentos_com_status
         GROUP BY mes
@@ -207,7 +200,6 @@ export async function GET(request: NextRequest) {
           COUNT(DISTINCT cpf) AS vidas,
           SUM(valor_total_cpf_mes) AS valor_gasto
         FROM procedimentos_com_status
-        -- Excluir status 'vazio' (não localizados) da faixa etária, pois não temos idade
         WHERE status_final != 'vazio'
         GROUP BY mes, status_final, faixa
       )
@@ -230,22 +222,9 @@ export async function GET(request: NextRequest) {
       ORDER BY c.mes, f.status_final, f.faixa
     `
 
-    // Preparar valores para beneficiarios_excluidos
-    const beneficiariosExcluidosValues: any[] = []
-    if (entidades.length > 0) {
-      beneficiariosExcluidosValues.push(...entidades)
-    }
-    if (tipoFiltro) {
-      beneficiariosExcluidosValues.push(tipoFiltro)
-    }
-    if (cpfFiltro) {
-      beneficiariosExcluidosValues.push(cpfFiltro)
-    }
-
     const [rows]: any = await connection.execute(sql, [
       ...procedimentosValues, 
-      ...beneficiarioValues,
-      ...beneficiariosExcluidosValues
+      ...beneficiarioValues
     ])
     const queryDuration = logPerformance("SQL Query Execution", queryStartTime)
 
