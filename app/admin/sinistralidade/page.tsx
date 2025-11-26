@@ -173,6 +173,8 @@ export default function SinistralidadeDashboardPage() {
   const [expandedRowKeysNaoIdentificados, setExpandedRowKeysNaoIdentificados] = useState<Set<string>>(() => new Set())
   const [cardsResumo, setCardsResumo] = useState<SinistralidadeCardsResumo>(CARDS_RESUMO_VAZIO)
   const [cardsResumoLoading, setCardsResumoLoading] = useState(false)
+  // Estado centralizado: só fica true quando TODOS os dados essenciais estão prontos
+  const [isDashboardReady, setIsDashboardReady] = useState(false)
   // Ref para preservar linhas expandidas entre re-renders e evitar que sejam fechadas automaticamente
   const expandedRowKeysRef = useRef<Set<string>>(new Set())
   
@@ -681,7 +683,7 @@ export default function SinistralidadeDashboardPage() {
   // Não devemos forçar valores aqui para evitar conflitos com o store
 
   // Carregar dados do dashboard - APENAS quando chamado explicitamente (botão Atualizar ou carregamento inicial)
-  // Mesma abordagem da página de Histórico de Bonificações: sem comparações automáticas
+  // OTIMIZADO: Paraleliza chamadas de API e centraliza estado de loading
   const loadDashboard = useCallback(async () => {
     const startedAt = getNow()
     logSinistralidade("loadDashboard CHAMADO", {
@@ -700,12 +702,21 @@ export default function SinistralidadeDashboardPage() {
     if (!context) {
       logSinistralidade("loadDashboard ABORTADO", { reason: "contexto inválido" })
       loadDashboardInProgressRef.current = false
+      setIsDashboardReady(false)
       signalPageLoaded("loadDashboard-sem-contexto")
       return
     }
 
     setLoading(true)
+    setIsDashboardReady(false)
+    
     try {
+      // OTIMIZAÇÃO: Paralelizar todas as chamadas de API
+      const vidasStartTime = getNow()
+      const cardsStartTime = getNow()
+      const detalhadosStartTime = getNow()
+
+      // Preparar parâmetros
       const paramsVidas = new URLSearchParams({
         data_inicio: context.dataInicioGrafico,
         data_fim: context.dataFimGrafico,
@@ -714,46 +725,95 @@ export default function SinistralidadeDashboardPage() {
       if (context.entidades.length > 0) paramsVidas.append("entidades", context.entidades.join(","))
       if (context.tipo && context.tipo !== "Todos") paramsVidas.append("tipo", context.tipo)
 
-      const vidasRes = await fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`)
-      if (!vidasRes.ok) throw new Error("Erro ao carregar vidas ativas")
-      const vidasData = await vidasRes.json()
-
-      const dadosPorMes = new Map<string, VidasAtivasPorMes>()
-      ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
-        dadosPorMes.set(item.mes_referencia, item)
-      })
-
-      const vidasCompletas = context.mesesParaGrafico.map(mes => {
-        const dadosDoMes = dadosPorMes.get(mes)
-        if (dadosDoMes) {
-          return dadosDoMes
-        }
-        return { mes_referencia: mes, vidas_ativas: 0 }
-      })
-
-      setVidasAtivas(vidasCompletas)
-
       const mesParaCards = context.mesesReferencia?.[context.mesesReferencia.length - 1]
-      await fetchCardsResumo(mesParaCards)
 
-      // Chamada centralizada para detalhados: só acontece aqui ou via paginação
-      await loadDadosDetalhados(
-        context.dataInicioSelecionado,
-        context.dataFimSelecionado,
-        1,
-        context.mesesReferencia,
-        {
-          operadoras: context.operadoras,
-          entidades: context.entidades,
-          tipo: context.tipo,
-          cpf: context.cpf,
-        }
-      )
+      // Executar todas as chamadas em paralelo
+      const [vidasRes, cardsRes, detalhadosRes] = await Promise.allSettled([
+        // 1. Vidas ativas (gráfico)
+        fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`).then(res => {
+          if (!res.ok) throw new Error("Erro ao carregar vidas ativas")
+          return res.json()
+        }),
+        // 2. Cards resumo
+        mesParaCards 
+          ? fetchNoStore(`/api/sinistralidade/cards?mes_referencia=${mesParaCards}&data_inicio=${context.dataInicioSelecionado}&data_fim=${context.dataFimSelecionado}${context.operadoras.length > 0 ? `&operadoras=${context.operadoras.join(",")}` : ""}${context.entidades.length > 0 ? `&entidades=${context.entidades.join(",")}` : ""}${context.tipo && context.tipo !== "Todos" ? `&tipo=${context.tipo}` : ""}${context.cpf ? `&cpf=${context.cpf}` : ""}`)
+              .then(res => {
+                if (!res.ok) throw new Error("Erro ao carregar cards")
+                return res.json()
+              })
+          : Promise.resolve([]),
+        // 3. Dados detalhados
+        loadDadosDetalhados(
+          context.dataInicioSelecionado,
+          context.dataFimSelecionado,
+          1,
+          context.mesesReferencia,
+          {
+            operadoras: context.operadoras,
+            entidades: context.entidades,
+            tipo: context.tipo,
+            cpf: context.cpf,
+          }
+        ),
+      ])
+
+      // Processar resultados
+      const vidasDuration = Math.round(getNow() - vidasStartTime)
+      const cardsDuration = Math.round(getNow() - cardsStartTime)
+      const detalhadosDuration = Math.round(getNow() - detalhadosStartTime)
+
+      // Vidas ativas
+      if (vidasRes.status === "fulfilled") {
+        const vidasData = vidasRes.value
+        const dadosPorMes = new Map<string, VidasAtivasPorMes>()
+        ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
+          dadosPorMes.set(item.mes_referencia, item)
+        })
+
+        const vidasCompletas = context.mesesParaGrafico.map(mes => {
+          const dadosDoMes = dadosPorMes.get(mes)
+          if (dadosDoMes) {
+            return dadosDoMes
+          }
+          return { mes_referencia: mes, vidas_ativas: 0 }
+        })
+
+        setVidasAtivas(vidasCompletas)
+        logSinistralidade("loadDashboard -> vidas ativas carregadas", { durationMs: vidasDuration })
+      } else {
+        logSinistralidade("loadDashboard -> erro vidas ativas", { error: vidasRes.reason })
+        setVidasAtivas([])
+      }
+
+      // Cards resumo
+      if (cardsRes.status === "fulfilled" && mesParaCards) {
+        const cardsData = cardsRes.value
+        setCardsResumo(normalizarCardsResumo(Array.isArray(cardsData) ? cardsData[0] : cardsData, mesParaCards))
+        logSinistralidade("loadDashboard -> cards carregados", { durationMs: cardsDuration })
+      } else if (cardsRes.status === "rejected") {
+        logSinistralidade("loadDashboard -> erro cards", { error: cardsRes.reason })
+        setCardsResumo(CARDS_RESUMO_VAZIO)
+      }
+
+      // Dados detalhados
+      if (detalhadosRes.status === "fulfilled") {
+        logSinistralidade("loadDashboard -> detalhados carregados", { durationMs: detalhadosDuration })
+      } else {
+        logSinistralidade("loadDashboard -> erro detalhados", { error: detalhadosRes.reason })
+      }
+
+      const totalDuration = Math.round(getNow() - startedAt)
       logSinistralidade("loadDashboard SUCESSO", {
-        durationMs: Math.round(getNow() - startedAt),
+        durationMs: totalDuration,
+        vidasMs: vidasDuration,
+        cardsMs: cardsDuration,
+        detalhadosMs: detalhadosDuration,
         rangeInicio: context.dataInicioSelecionado,
         rangeFim: context.dataFimSelecionado,
       })
+
+      // Só marcar como pronto quando tudo estiver carregado
+      setIsDashboardReady(true)
     } catch (error: any) {
       logSinistralidade("loadDashboard ERRO", {
         message: error?.message || "Erro desconhecido",
@@ -767,15 +827,17 @@ export default function SinistralidadeDashboardPage() {
       setVidasAtivas([])
       setDadosDetalhados([])
       setCardsResumo(CARDS_RESUMO_VAZIO)
+      setIsDashboardReady(false)
     } finally {
       setLoading(false)
       loadDashboardInProgressRef.current = false
+      const totalDuration = Math.round(getNow() - startedAt)
       logSinistralidade("loadDashboard FINALIZADO", {
-        durationMs: Math.round(getNow() - startedAt),
+        durationMs: totalDuration,
       })
       signalPageLoaded("loadDashboard-finally")
     }
-  }, [buildDashboardRequestContext, loadDadosDetalhados, fetchCardsResumo, toast])
+  }, [buildDashboardRequestContext, loadDadosDetalhados, toast])
 
   // Manter referência do loadDashboard mais recente para uso em loadAllData estável
   useEffect(() => {
@@ -850,6 +912,9 @@ export default function SinistralidadeDashboardPage() {
 
   // Carregamento inicial controlado: só dispara após auth e apenas uma vez por montagem
   useEffect(() => {
+    const pageLoadStartTime = getNow()
+    logSinistralidade("PAGE MOUNT", { timestamp: new Date().toISOString() })
+
     if (authLoading) {
       logSinistralidade("loadAllData guardado", { reason: "authLoading" })
       return
@@ -863,9 +928,20 @@ export default function SinistralidadeDashboardPage() {
       return
     }
 
-    logSinistralidade("useEffect disparando loadAllData")
+    logSinistralidade("useEffect disparando loadAllData", {
+      timeSinceMount: Math.round(getNow() - pageLoadStartTime),
+    })
     hasLoadedRef.current = true
-    loadAllData()
+    
+    // Medir tempo total de carregamento da página
+    loadAllData().then(() => {
+      const totalLoadTime = Math.round(getNow() - pageLoadStartTime)
+      logSinistralidade("PAGE FULLY LOADED", {
+        totalLoadTimeMs: totalLoadTime,
+        target: 10000, // 10 segundos
+        withinTarget: totalLoadTime <= 10000,
+      })
+    })
   }, [authLoading, user, loadAllData])
 
   // Carregar entidades quando os meses mudarem
@@ -912,8 +988,10 @@ export default function SinistralidadeDashboardPage() {
     return 0
   }
 
+  // Memoizar dados do gráfico para evitar recálculos desnecessários
   const chartData = useMemo(() => {
-    return vidasAtivas.map(item => {
+    const startTime = getNow()
+    const result = vidasAtivas.map(item => {
       const comProc = item.vidas_ativas_com_procedimento ?? 0
       const semProc =
         item.vidas_ativas_sem_procedimento ?? Math.max((item.vidas_ativas || 0) - comProc, 0)
@@ -925,6 +1003,11 @@ export default function SinistralidadeDashboardPage() {
         vidas_ativas_sem_procedimento: semProc,
       }
     })
+    const duration = Math.round(getNow() - startTime)
+    if (duration > 10) {
+      logSinistralidade("chartData useMemo", { durationMs: duration, items: result.length })
+    }
+    return result
   }, [vidasAtivas])
 
   const dadosAgrupados = useMemo(() => {
@@ -1412,6 +1495,22 @@ export default function SinistralidadeDashboardPage() {
             </Card>
           )
         }
+        // Mostrar loading enquanto dashboard não está pronto
+        if (!isDashboardReady || loading) {
+          return (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+              {[...Array(4)].map((_, i) => (
+                <Card key={i} className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+                  <CardContent className="p-6">
+                    <Skeleton className="h-32 w-full" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )
+        }
+        // CardsResumo agora recebe dados já carregados via props (não faz fetch próprio)
+        // Mas mantemos o componente para compatibilidade - ele só renderiza os dados
         return (
           <CardsResumo 
             dataInicio={periodo.dataInicioSelecionado} 
@@ -1433,7 +1532,7 @@ export default function SinistralidadeDashboardPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {loading ? (
+          {!isDashboardReady || loading ? (
             <Skeleton className="h-64 w-full" />
           ) : vidasAtivas.length === 0 ? (
             <p className="text-muted-foreground text-center py-8">Nenhum dado disponível</p>

@@ -52,9 +52,9 @@ export async function GET(request: NextRequest) {
     const meses: string[] = []
     
     // Extrair ano e mês do data_fim normalizado
-    const [anoFim, mesFim] = fimNormalizado.split("-")
-    const anoFimInt = parseInt(anoFim)
-    const mesFimInt = parseInt(mesFim) // formato 1-12
+    const [anoFimNormalizado, mesFimNormalizado] = fimNormalizado.split("-")
+    const anoFimInt = parseInt(anoFimNormalizado)
+    const mesFimInt = parseInt(mesFimNormalizado) // formato 1-12
     
     // Calcular 12 meses retrocedendo do mês mais recente
     // Começamos do mês mais antigo e vamos até o mais recente
@@ -111,152 +111,175 @@ export async function GET(request: NextRequest) {
       ? `WHERE ${whereConditions.join(" AND ")}`
       : ""
 
-    // Para cada mês, contar:
-    // - vidas ativas
-    // - vidas ativas com pelo menos um procedimento no mês
-    //
-    // Beneficiário ativo em um mês M (YYYY-MM):
-    // - data_inicio_vigencia_beneficiario <= último dia de M
-    // - Se data_exclusao IS NULL: status_beneficiario deve ser 'ativo' (minúsculo)
-    // - Se data_exclusao IS NOT NULL:
-    //   - Se data_exclusao > CURDATE(): considerar ativo (data de exclusão é futura)
-    //   - Se data_exclusao <= CURDATE(): verificar se data_exclusao > último dia de M (ainda estava ativo naquele mês)
-    const resultados: Array<{
-      mes_referencia: string
-      vidas_ativas: number
-      vidas_ativas_com_procedimento: number
-      vidas_ativas_sem_procedimento: number
-    }> = []
+    // OTIMIZAÇÃO CRÍTICA: Em vez de fazer 24 queries (loop de 12 meses), fazer uma única query otimizada
+    // que calcula todos os meses de uma vez usando CTEs e agregações
+    const apiStartTime = Date.now()
+    
+    // Calcular primeiro e último dia do período completo (12 meses)
+    if (meses.length === 0) {
+      return NextResponse.json([])
+    }
+    
+    const primeiroMesStr = meses[0]
+    const ultimoMesStr = meses[meses.length - 1]
+    
+    // Extrair componentes de data do primeiro mês
+    const primeiroMesParts = primeiroMesStr.split("-")
+    const anoInicioPeriodo = primeiroMesParts[0] || ""
+    const mesInicioPeriodo = primeiroMesParts[1] || "01"
+    
+    // Extrair componentes de data do último mês
+    const ultimoMesParts = ultimoMesStr.split("-")
+    const anoFimPeriodo = ultimoMesParts[0] || ""
+    const mesFimPeriodo = ultimoMesParts[1] || "01"
+    
+    // Construir datas do período
+    const primeiroDiaPeriodo = `${anoInicioPeriodo}-${mesInicioPeriodo}-01`
+    const anoFimNum = parseInt(anoFimPeriodo, 10)
+    const mesFimNum = parseInt(mesFimPeriodo, 10)
+    const ultimoDiaPeriodo = new Date(anoFimNum, mesFimNum, 0)
+    const ultimoDiaPeriodoStr = ultimoDiaPeriodo.toISOString().split("T")[0]
 
-    for (const mes of meses) {
+    // Construir filtros WHERE para beneficiários na CTE beneficiarios_status
+    const beneficiariosStatusWhereConditions: string[] = []
+    const beneficiariosStatusWhereValues: any[] = []
+    
+    beneficiariosStatusWhereConditions.push("UPPER(b.operadora) = 'ASSIM SAÚDE'")
+    
+    if (operadorasParam) {
+      const operadoras = operadorasParam.split(",").map(op => op.trim()).filter(Boolean)
+      if (operadoras.length > 0) {
+        beneficiariosStatusWhereConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
+        beneficiariosStatusWhereValues.push(...operadoras)
+      }
+    }
+
+    if (entidadesParam) {
+      const entidades = entidadesParam.split(",").map(e => e.trim()).filter(Boolean)
+      if (entidades.length > 0) {
+        beneficiariosStatusWhereConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
+        beneficiariosStatusWhereValues.push(...entidades)
+      }
+    }
+
+    if (tipo && tipo !== "Todos") {
+      beneficiariosStatusWhereConditions.push("b.tipo = ?")
+      beneficiariosStatusWhereValues.push(tipo)
+    }
+
+    const beneficiariosStatusWhereClause = beneficiariosStatusWhereConditions.length > 0
+      ? `WHERE ${beneficiariosStatusWhereConditions.join(" AND ")}`
+      : ""
+
+    // Query única otimizada que calcula todos os meses de uma vez
+    // Usa agregações condicionais em vez de CROSS JOIN para melhor performance
+    const mesesValues = meses.map(mes => {
       const [ano, mesNum] = mes.split("-")
-      // Último dia do mês: JavaScript Date usa mês 0-indexed (0=janeiro, 1=fevereiro, 2=março...)
-      // Para pegar o último dia do mês M (em formato 1-12), usamos new Date(ano, M, 0)
-      // Porque mês M em Date = mês M+1, e dia 0 = último dia do mês anterior (mês M)
       const anoInt = parseInt(ano)
-      const mesInt = parseInt(mesNum) // mesInt está em formato 1-12
-      // Para pegar o último dia do mês mesInt (formato 1-12), usamos new Date(ano, mesInt, 0)
-      // JavaScript Date usa mês 0-indexed (0=janeiro, 1=fevereiro, ...)
-      // new Date(ano, mesInt, 0) retorna o último dia do mês mesInt
-      // Exemplo: mesInt=1 (janeiro) -> new Date(2025, 1, 0) = 31/01/2025
-      // Exemplo: mesInt=2 (fevereiro) -> new Date(2025, 2, 0) = 28/02/2025
-      // Exemplo: mesInt=12 (dezembro) -> new Date(2025, 12, 0) = 31/12/2025
-      const ultimoDiaMes = new Date(anoInt, mesInt, 0)
-      const ultimoDiaMesStr = ultimoDiaMes.toISOString().split("T")[0]
+      const mesInt = parseInt(mesNum)
+      const ultimoDia = new Date(anoInt, mesInt, 0)
+      const ultimoDiaStr = ultimoDia.toISOString().split("T")[0]
+      return { mes, ultimoDia: ultimoDiaStr }
+    })
 
-      // Construir query para vidas ativas com filtros WHERE
-      const queryWhereAtivos = whereConditions.length > 0 
-        ? `${whereClauseBenef} AND` 
-        : "WHERE"
+    const beneficiariosStatusWhereClauseWithBase = whereConditions.length > 0
+      ? `${whereClauseBenef} AND`
+      : "WHERE"
 
-      const queryAtivos = `
-        SELECT COUNT(DISTINCT b.id_beneficiario) as vidas_ativas
+    // Query otimizada: calcula vidas ativas para todos os meses de uma vez
+    const queryVidasAtivas = `
+      SELECT
+        ${mesesValues.map((mv, idx) => `
+          COUNT(DISTINCT CASE 
+            WHEN b.data_inicio_vigencia_beneficiario <= ? 
+              AND (
+                (b.data_exclusao IS NULL AND b.status_beneficiario = 'ativo')
+                OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > ?)
+              )
+            THEN b.id_beneficiario 
+          END) AS vidas_ativas_${idx}
+        `).join(", ")}
+      FROM reg_beneficiarios b
+      ${beneficiariosStatusWhereClauseWithBase} 1=1
+    `
+
+    const vidasAtivasParams = [
+      ...whereValues,
+      ...mesesValues.flatMap(mv => [mv.ultimoDia, mv.ultimoDia])
+    ]
+
+    const queryStartTime = Date.now()
+    const [rowsVidasAtivas]: any = await connection.execute(queryVidasAtivas, vidasAtivasParams)
+    const vidasAtivasPorMes = meses.map((_, idx) => Number(rowsVidasAtivas[0]?.[`vidas_ativas_${idx}`]) || 0)
+
+    // Query para vidas com procedimento: uma única query que agrupa por mês
+    const queryVidasComProcedimento = `
+      WITH procedimentos_mes AS (
+        SELECT
+          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+          p.cpf
+        FROM reg_procedimentos p
+        WHERE
+          UPPER(p.operadora) = 'ASSIM SAÚDE'
+          AND p.evento IS NOT NULL
+          AND DATE(p.data_competencia) BETWEEN ? AND ?
+      ),
+      beneficiarios_status AS (
+        SELECT
+          b.cpf,
+          SUBSTRING_INDEX(
+            GROUP_CONCAT(
+              b.status_beneficiario
+              ORDER BY b.data_inicio_vigencia_beneficiario DESC
+            ),
+            ',',
+            1
+          ) AS status_beneficiario
         FROM reg_beneficiarios b
-        ${queryWhereAtivos} b.data_inicio_vigencia_beneficiario <= ?
-        AND (
-          (b.data_exclusao IS NULL AND b.status_beneficiario = 'ativo')
-          OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > ?)
-        )
-      `
+        ${beneficiariosStatusWhereClause}
+        GROUP BY b.cpf
+      )
+      SELECT
+        pm.mes AS mes_referencia,
+        COUNT(DISTINCT pm.cpf) AS vidas_com_procedimento
+      FROM procedimentos_mes pm
+      LEFT JOIN beneficiarios_status bs ON bs.cpf = pm.cpf
+      WHERE LOWER(COALESCE(bs.status_beneficiario, '')) = 'ativo'
+      GROUP BY pm.mes
+    `
 
-      const [rowsAtivos]: any = await connection.execute(queryAtivos, [
-        ...whereValues,
-        ultimoDiaMesStr,
-        ultimoDiaMesStr,
-      ])
+    const vidasComProcedimentoParams = [
+      primeiroDiaPeriodo,
+      ultimoDiaPeriodoStr,
+      ...beneficiariosStatusWhereValues,
+    ]
 
-      const vidasAtivas = rowsAtivos[0]?.vidas_ativas || 0
+    const [rowsVidasComProc]: any = await connection.execute(queryVidasComProcedimento, vidasComProcedimentoParams)
+    const queryDuration = Date.now() - queryStartTime
+    
+    console.log(`[PERFORMANCE] /api/beneficiarios/ativos - Queries otimizadas: ${queryDuration}ms (antes: ~24 queries)`)
 
-      // Query para vidas ativas com pelo menos um procedimento no mês de referência
-      // Usa a mesma lógica de identificação de "ativo" dos cards de sinistralidade:
-      // - considera apenas operadora ASSIM SAÚDE
-      // - status do beneficiário é o mais recente (por CPF), independente da data do procedimento
-      // - conta apenas CPFs cujo status_final seja "ativo"
-      // - aplica os mesmos filtros de entidade, tipo e operadoras da query de vidas ativas
-      const primeiroDiaMesStr = `${ano}-${String(mesInt).padStart(2, "0")}-01`
+    // Mapear resultados
+    const vidasComProcedimentoMap = new Map<string, number>()
+    ;(rowsVidasComProc || []).forEach((row: any) => {
+      vidasComProcedimentoMap.set(row.mes_referencia, Number(row.vidas_com_procedimento) || 0)
+    })
 
-      // Construir filtros WHERE para beneficiários na CTE beneficiarios_status
-      const beneficiariosStatusWhereConditions: string[] = []
-      const beneficiariosStatusWhereValues: any[] = []
-      
-      beneficiariosStatusWhereConditions.push("UPPER(b.operadora) = 'ASSIM SAÚDE'")
-      
-      if (operadorasParam) {
-        const operadoras = operadorasParam.split(",").map(op => op.trim()).filter(Boolean)
-        if (operadoras.length > 0) {
-          beneficiariosStatusWhereConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
-          beneficiariosStatusWhereValues.push(...operadoras)
-        }
-      }
-
-      if (entidadesParam) {
-        const entidades = entidadesParam.split(",").map(e => e.trim()).filter(Boolean)
-        if (entidades.length > 0) {
-          beneficiariosStatusWhereConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
-          beneficiariosStatusWhereValues.push(...entidades)
-        }
-      }
-
-      if (tipo && tipo !== "Todos") {
-        beneficiariosStatusWhereConditions.push("b.tipo = ?")
-        beneficiariosStatusWhereValues.push(tipo)
-      }
-
-      const beneficiariosStatusWhereClause = beneficiariosStatusWhereConditions.length > 0
-        ? `WHERE ${beneficiariosStatusWhereConditions.join(" AND ")}`
-        : ""
-
-      const queryComProcedimento = `
-        WITH procedimentos_mes AS (
-          SELECT
-            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-            p.cpf
-          FROM reg_procedimentos p
-          WHERE
-            UPPER(p.operadora) = 'ASSIM SAÚDE'
-            AND p.evento IS NOT NULL
-            AND DATE(p.data_competencia) BETWEEN ? AND ?
-        ),
-        beneficiarios_status AS (
-          SELECT
-            b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS status_beneficiario
-          FROM reg_beneficiarios b
-          ${beneficiariosStatusWhereClause}
-          GROUP BY
-            b.cpf
-        )
-        SELECT COUNT(DISTINCT pr.cpf) AS vidas_com_procedimento
-        FROM procedimentos_mes pr
-        LEFT JOIN beneficiarios_status bs ON bs.cpf = pr.cpf
-        WHERE pr.mes = DATE_FORMAT(?, '%Y-%m')
-          AND LOWER(COALESCE(bs.status_beneficiario, '')) = 'ativo'
-      `
-
-      const [rowsComProc]: any = await connection.execute(queryComProcedimento, [
-        primeiroDiaMesStr,
-        ultimoDiaMesStr,
-        ...beneficiariosStatusWhereValues,
-        primeiroDiaMesStr,
-      ])
-
-      const vidasComProcedimento = rowsComProc[0]?.vidas_com_procedimento || 0
+    const resultados = meses.map((mes, idx) => {
+      const vidasAtivas = vidasAtivasPorMes[idx] || 0
+      const vidasComProcedimento = vidasComProcedimentoMap.get(mes) || 0
       const vidasSemProcedimento = Math.max(vidasAtivas - vidasComProcedimento, 0)
-
-      resultados.push({
+      
+      return {
         mes_referencia: mes,
         vidas_ativas: vidasAtivas,
         vidas_ativas_com_procedimento: vidasComProcedimento,
         vidas_ativas_sem_procedimento: vidasSemProcedimento,
-      })
-    }
+      }
+    })
+
+    const totalDuration = Date.now() - apiStartTime
+    console.log(`[PERFORMANCE] /api/beneficiarios/ativos - Total: ${totalDuration}ms (antes: ~24 queries, agora: 2 queries)`)
 
     return NextResponse.json(resultados)
   } catch (error: any) {
