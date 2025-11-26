@@ -5,9 +5,17 @@ export const fetchCache = "force-no-store"
 import { NextRequest, NextResponse } from "next/server"
 import { getDBConnection } from "@/lib/db"
 
+// Função auxiliar para log de performance
+const logPerformance = (label: string, startTime: number) => {
+  const duration = Date.now() - startTime
+  console.log(`[PERFORMANCE] ${label}: ${duration}ms`)
+  return duration
+}
+
 /**
  * GET /api/sinistralidade/cards
- * Retorna cards de sinistralidade agrupados por mês
+ * Retorna cards de sinistralidade agrupados por mês com faixa etária
+ * OTIMIZADO: Query única combinada, cálculos no backend, logs de performance
  * 
  * Parâmetros:
  * - data_inicio: YYYY-MM-DD (opcional se mes_referencia for fornecido)
@@ -15,6 +23,7 @@ import { getDBConnection } from "@/lib/db"
  * - mes_referencia: YYYY-MM (opcional, converte para data_inicio e data_fim)
  */
 export async function GET(request: NextRequest) {
+  const apiStartTime = Date.now()
   let connection: any = null
 
   try {
@@ -50,7 +59,9 @@ export async function GET(request: NextRequest) {
       )
     }
 
+    const connectionStartTime = Date.now()
     connection = await getDBConnection()
+    logPerformance("DB Connection", connectionStartTime)
 
     // Processar filtros
     const operadoras = operadorasParam ? operadorasParam.split(",").map(op => op.trim()).filter(Boolean) : []
@@ -59,6 +70,8 @@ export async function GET(request: NextRequest) {
     const cpfFiltro = cpf ? cpf.trim() : null
 
     // Construir condições WHERE para procedimentos
+    // IMPORTANTE: Filtros de entidade e tipo não se aplicam diretamente aos procedimentos
+    // mas serão aplicados via JOIN com beneficiários
     const procedimentosConditions: string[] = [
       "p.operadora = 'ASSIM SAÚDE'",
       "p.evento IS NOT NULL",
@@ -66,6 +79,7 @@ export async function GET(request: NextRequest) {
     ]
     const procedimentosValues: any[] = [dataInicio, dataFim]
 
+    // CPF sempre se aplica aos procedimentos
     if (cpfFiltro) {
       procedimentosConditions.push("p.cpf = ?")
       procedimentosValues.push(cpfFiltro)
@@ -73,7 +87,9 @@ export async function GET(request: NextRequest) {
 
     // Construir condições WHERE para beneficiários
     const beneficiarioConditions: string[] = [
-      "b.operadora = 'ASSIM SAÚDE'"
+      "b.operadora = 'ASSIM SAÚDE'",
+      "UPPER(b.plano) NOT LIKE '%DENT%'",
+      "UPPER(b.plano) NOT LIKE '%AESP%'"
     ]
     const beneficiarioValues: any[] = []
 
@@ -92,197 +108,202 @@ export async function GET(request: NextRequest) {
       beneficiarioValues.push(cpfFiltro)
     }
 
-    // Excluir planos odontológicos
-    beneficiarioConditions.push(`(
-      UPPER(b.plano) NOT LIKE '%DENT%' 
-      AND UPPER(b.plano) NOT LIKE '%AESP%' 
-    )`)
+    const beneficiarioWhereClause = `WHERE ${beneficiarioConditions.join(" AND ")}`
 
-    const beneficiarioWhereClause = beneficiarioConditions.length > 0
-      ? `WHERE ${beneficiarioConditions.join(" AND ")}`
-      : ""
-
-    // Função para calcular faixa etária baseada na idade
-    const getFaixaEtaria = (idade: number | null): string => {
-      if (idade === null || idade === undefined || isNaN(idade)) return ">59"
-      if (idade <= 18) return "00 a 18"
-      if (idade <= 23) return "19 a 23"
-      if (idade <= 28) return "24 a 28"
-      if (idade <= 33) return "29 a 33"
-      if (idade <= 38) return "34 a 38"
-      if (idade <= 43) return "39 a 43"
-      if (idade <= 48) return "44 a 48"
-      if (idade <= 53) return "49 a 53"
-      if (idade <= 58) return "54 a 58"
-      return ">59"
-    }
-
+    // QUERY OTIMIZADA: Uma única query que retorna cards + faixa etária
+    // Usa CTEs e ROW_NUMBER para melhor performance (substitui GROUP_CONCAT lento)
+    const queryStartTime = Date.now()
     const sql = `
-      SELECT
-        m.mes AS mes,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS nao_localizado,
-        COUNT(*) AS total_vidas,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_nao_localizado,
-        SUM(m.valor_total_cpf_mes) AS valor_total_geral
-      FROM (
+      WITH procedimentos_agrupados AS (
         SELECT
-          pr.mes,
-          pr.cpf,
-          pr.valor_total_cpf_mes,
-          CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END AS status_final
-        FROM (
-          SELECT
-            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-            p.cpf,
-            SUM(p.valor_procedimento) AS valor_total_cpf_mes
-          FROM reg_procedimentos p
-          WHERE ${procedimentosConditions.join(" AND ")}
-          GROUP BY
-            DATE_FORMAT(p.data_competencia, '%Y-%m'),
-            p.cpf
-        ) AS pr
-        LEFT JOIN (
-          SELECT
-            b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS status_beneficiario
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClause}
-          GROUP BY
-            b.cpf
-        ) AS b
-          ON b.cpf = pr.cpf
-      ) AS m
-      GROUP BY
-        m.mes
-      ORDER BY
-        m.mes
-    `
-
-    const [rows]: any = await connection.execute(sql, [...procedimentosValues, ...beneficiarioValues])
-
-    // Query para faixa etária por status e mês, incluindo valor gasto
-    const faixaEtariaSql = `
-      SELECT
-        m.mes AS mes,
-        m.status_final,
-        b_idade.idade,
-        COUNT(DISTINCT m.cpf) AS vidas,
-        SUM(m.valor_total_cpf_mes) AS valor_gasto
-      FROM (
-        SELECT
-          pr.mes,
-          pr.cpf,
-          pr.valor_total_cpf_mes,
-          CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END AS status_final
-        FROM (
-          SELECT
-            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-            p.cpf,
-            SUM(p.valor_procedimento) AS valor_total_cpf_mes
-          FROM reg_procedimentos p
-          WHERE ${procedimentosConditions.join(" AND ")}
-          GROUP BY
-            DATE_FORMAT(p.data_competencia, '%Y-%m'),
-            p.cpf
-        ) AS pr
-        LEFT JOIN (
-          SELECT
-            b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS status_beneficiario
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClause}
-          GROUP BY
-            b.cpf
-        ) AS b
-          ON b.cpf = pr.cpf
-      ) AS m
-      LEFT JOIN (
+          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+          p.cpf,
+          SUM(p.valor_procedimento) AS valor_total_cpf_mes
+        FROM reg_procedimentos p
+        WHERE ${procedimentosConditions.join(" AND ")}
+        GROUP BY DATE_FORMAT(p.data_competencia, '%Y-%m'), p.cpf
+      ),
+      -- Beneficiários que atendem aos filtros (entidade, tipo, etc)
+      beneficiarios_filtrados AS (
         SELECT
           b.cpf,
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(
-              b.idade
-              ORDER BY b.data_inicio_vigencia_beneficiario DESC
-            ),
-            ',',
-            1
-          ) AS idade
+          b.status_beneficiario,
+          b.idade,
+          ROW_NUMBER() OVER (
+            PARTITION BY b.cpf
+            ORDER BY b.data_inicio_vigencia_beneficiario DESC
+          ) AS rn
         FROM reg_beneficiarios b
         ${beneficiarioWhereClause}
-        GROUP BY
-          b.cpf
-      ) AS b_idade
-        ON b_idade.cpf = m.cpf
-      GROUP BY
-        m.mes,
-        m.status_final,
-        b_idade.idade
+      ),
+      beneficiarios_latest AS (
+        SELECT cpf, status_beneficiario, idade
+        FROM beneficiarios_filtrados
+        WHERE rn = 1
+      ),
+      procedimentos_com_status AS (
+        SELECT
+          pr.mes,
+          pr.cpf,
+          pr.valor_total_cpf_mes,
+          CASE
+            WHEN bl.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(bl.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS status_final,
+          bl.idade
+        FROM procedimentos_agrupados pr
+        LEFT JOIN beneficiarios_latest bl ON bl.cpf = pr.cpf
+        ${entidades.length > 0 || tipoFiltro ? `
+        -- Se há filtros de entidade/tipo, excluir procedimentos que têm beneficiário mas não atende aos filtros
+        -- Verificar se o CPF tem beneficiário que não está em beneficiarios_filtrados
+        LEFT JOIN (
+          SELECT DISTINCT b.cpf
+          FROM reg_beneficiarios b
+          WHERE b.operadora = 'ASSIM SAÚDE'
+            AND UPPER(b.plano) NOT LIKE '%DENT%'
+            AND UPPER(b.plano) NOT LIKE '%AESP%'
+            ${entidades.length > 0 ? `AND (b.entidade NOT IN (${entidades.map(() => "?").join(",")}) OR b.entidade IS NULL)` : ""}
+            ${tipoFiltro ? "AND (b.tipo != ? OR b.tipo IS NULL)" : ""}
+            ${cpfFiltro ? "AND b.cpf = ?" : ""}
+            AND NOT EXISTS (
+              SELECT 1 FROM beneficiarios_filtrados bf2 
+              WHERE bf2.cpf = b.cpf AND bf2.rn = 1
+            )
+        ) AS beneficiarios_fora_filtro ON beneficiarios_fora_filtro.cpf = pr.cpf
+        WHERE beneficiarios_fora_filtro.cpf IS NULL
+        ` : ""}
+      ),
+      cards_agregados AS (
+        SELECT
+          mes,
+          SUM(CASE WHEN status_final = 'ativo' THEN 1 ELSE 0 END) AS ativo,
+          SUM(CASE WHEN status_final = 'inativo' THEN 1 ELSE 0 END) AS inativo,
+          SUM(CASE WHEN status_final = 'vazio' THEN 1 ELSE 0 END) AS nao_localizado,
+          COUNT(*) AS total_vidas,
+          SUM(CASE WHEN status_final = 'ativo' THEN valor_total_cpf_mes ELSE 0 END) AS valor_ativo,
+          SUM(CASE WHEN status_final = 'inativo' THEN valor_total_cpf_mes ELSE 0 END) AS valor_inativo,
+          SUM(CASE WHEN status_final = 'vazio' THEN valor_total_cpf_mes ELSE 0 END) AS valor_nao_localizado,
+          SUM(valor_total_cpf_mes) AS valor_total_geral
+        FROM procedimentos_com_status
+        GROUP BY mes
+      ),
+      faixa_etaria_raw AS (
+        SELECT
+          mes,
+          status_final,
+          CASE
+            WHEN idade IS NULL OR idade <= 18 THEN '00 a 18'
+            WHEN idade <= 23 THEN '19 a 23'
+            WHEN idade <= 28 THEN '24 a 28'
+            WHEN idade <= 33 THEN '29 a 33'
+            WHEN idade <= 38 THEN '34 a 38'
+            WHEN idade <= 43 THEN '39 a 43'
+            WHEN idade <= 48 THEN '44 a 48'
+            WHEN idade <= 53 THEN '49 a 53'
+            WHEN idade <= 58 THEN '54 a 58'
+            ELSE '>59'
+          END AS faixa,
+          COUNT(DISTINCT cpf) AS vidas,
+          SUM(valor_total_cpf_mes) AS valor_gasto
+        FROM procedimentos_com_status
+        -- Excluir status 'vazio' (não localizados) da faixa etária, pois não temos idade
+        WHERE status_final != 'vazio'
+        GROUP BY mes, status_final, faixa
+      )
+      SELECT
+        c.mes,
+        c.ativo,
+        c.inativo,
+        c.nao_localizado,
+        c.total_vidas,
+        c.valor_ativo,
+        c.valor_inativo,
+        c.valor_nao_localizado,
+        c.valor_total_geral,
+        f.status_final,
+        f.faixa,
+        f.vidas AS faixa_vidas,
+        f.valor_gasto AS faixa_valor_gasto
+      FROM cards_agregados c
+      LEFT JOIN faixa_etaria_raw f ON f.mes = c.mes
+      ORDER BY c.mes, f.status_final, f.faixa
     `
 
-    const [faixaEtariaRows]: any = await connection.execute(faixaEtariaSql, [...procedimentosValues, ...beneficiarioValues, ...beneficiarioValues])
+    // Preparar valores para beneficiarios_excluidos
+    const beneficiariosExcluidosValues: any[] = []
+    if (entidades.length > 0) {
+      beneficiariosExcluidosValues.push(...entidades)
+    }
+    if (tipoFiltro) {
+      beneficiariosExcluidosValues.push(tipoFiltro)
+    }
+    if (cpfFiltro) {
+      beneficiariosExcluidosValues.push(cpfFiltro)
+    }
 
-    // Processar faixa etária por mês e status (vidas e valor gasto)
+    const [rows]: any = await connection.execute(sql, [
+      ...procedimentosValues, 
+      ...beneficiarioValues,
+      ...beneficiariosExcluidosValues
+    ])
+    const queryDuration = logPerformance("SQL Query Execution", queryStartTime)
+
+    // Processar resultados: agrupar por mês e status
+    const processStartTime = Date.now()
+    const dadosPorMes = new Map<string, any>()
     const faixaEtariaPorMes = new Map<string, Map<string, Map<string, { vidas: number; valorGasto: number }>>>()
     
-    ;(faixaEtariaRows || []).forEach((row: any) => {
+    // Processar linhas retornadas
+    ;(rows || []).forEach((row: any) => {
       const mes = row.mes
-      const status = row.status_final || "vazio"
-      const idade = row.idade ? Number(row.idade) : null
-      const faixa = getFaixaEtaria(idade)
-      const vidas = Number(row.vidas) || 0
-      const valorGasto = Number(row.valor_gasto) || 0
-
-      if (!faixaEtariaPorMes.has(mes)) {
-        faixaEtariaPorMes.set(mes, new Map())
-      }
-      const statusMap = faixaEtariaPorMes.get(mes)!
       
-      if (!statusMap.has(status)) {
-        statusMap.set(status, new Map())
+      // Inicializar dados do mês se não existir
+      if (!dadosPorMes.has(mes)) {
+        dadosPorMes.set(mes, {
+          mes,
+          ativo: Number(row.ativo) || 0,
+          inativo: Number(row.inativo) || 0,
+          nao_localizado: Number(row.nao_localizado) || 0,
+          total_vidas: Number(row.total_vidas) || 0,
+          valor_ativo: Number(row.valor_ativo) || 0,
+          valor_inativo: Number(row.valor_inativo) || 0,
+          valor_nao_localizado: Number(row.valor_nao_localizado) || 0,
+          valor_total_geral: Number(row.valor_total_geral) || 0,
+        })
       }
-      const faixaMap = statusMap.get(status)!
       
-      const atual = faixaMap.get(faixa) || { vidas: 0, valorGasto: 0 }
-      faixaMap.set(faixa, {
-        vidas: atual.vidas + vidas,
-        valorGasto: atual.valorGasto + valorGasto,
-      })
+      // Processar faixa etária se existir
+      if (row.status_final && row.faixa) {
+        if (!faixaEtariaPorMes.has(mes)) {
+          faixaEtariaPorMes.set(mes, new Map())
+        }
+        const statusMap = faixaEtariaPorMes.get(mes)!
+        
+        if (!statusMap.has(row.status_final)) {
+          statusMap.set(row.status_final, new Map())
+        }
+        const faixaMap = statusMap.get(row.status_final)!
+        
+        const vidas = Number(row.faixa_vidas) || 0
+        const valorGasto = Number(row.faixa_valor_gasto) || 0
+        
+        const atual = faixaMap.get(row.faixa) || { vidas: 0, valorGasto: 0 }
+        faixaMap.set(row.faixa, {
+          vidas: atual.vidas + vidas,
+          valorGasto: atual.valorGasto + valorGasto,
+        })
+      }
     })
 
-    // Formatar os resultados para garantir tipos numéricos
-    const formattedRows = (rows || []).map((row: any) => {
-      const mes = row.mes
+    // Formatar resultados finais com faixa etária
+    const faixas = ["00 a 18", "19 a 23", "24 a 28", "29 a 33", "34 a 38", "39 a 43", "44 a 48", "49 a 53", "54 a 58", ">59"]
+    
+    const formattedRows = Array.from(dadosPorMes.values()).map((dadosMes: any) => {
+      const mes = dadosMes.mes
       const statusMap = faixaEtariaPorMes.get(mes) || new Map()
       
       // Criar arrays de faixa etária para cada status
-      const faixas = ["00 a 18", "19 a 23", "24 a 28", "29 a 33", "34 a 38", "39 a 43", "44 a 48", "49 a 53", "54 a 58", ">59"]
-      
       const faixaEtariaAtivo = faixas.map(faixa => {
         const dados = statusMap.get("ativo")?.get(faixa) || { vidas: 0, valorGasto: 0 }
         return {
@@ -301,37 +322,27 @@ export async function GET(request: NextRequest) {
         }
       })
       
-      const faixaEtariaNaoLocalizado = faixas.map(faixa => {
-        const dados = statusMap.get("vazio")?.get(faixa) || { vidas: 0, valorGasto: 0 }
-        return {
-          faixa,
-          vidas: dados.vidas,
-          valorGasto: dados.valorGasto,
-        }
-      })
+      // Faixa etária de Não Localizados sempre zerada (não temos idade para identificar)
+      const faixaEtariaNaoLocalizado = faixas.map(faixa => ({
+        faixa,
+        vidas: 0,
+        valorGasto: 0,
+      }))
       
-      // Total geral: somar todas as faixas de todos os status
+      // Total geral: somar apenas ativos e inativos (não localizados não têm faixa etária)
       const faixaEtariaTotal = faixas.map(faixa => {
         const ativo = statusMap.get("ativo")?.get(faixa) || { vidas: 0, valorGasto: 0 }
         const inativo = statusMap.get("inativo")?.get(faixa) || { vidas: 0, valorGasto: 0 }
-        const vazio = statusMap.get("vazio")?.get(faixa) || { vidas: 0, valorGasto: 0 }
+        // Não localizados sempre têm valores zerados (não temos idade)
         return {
           faixa,
-          vidas: ativo.vidas + inativo.vidas + vazio.vidas,
-          valorGasto: ativo.valorGasto + inativo.valorGasto + vazio.valorGasto,
+          vidas: ativo.vidas + inativo.vidas,
+          valorGasto: ativo.valorGasto + inativo.valorGasto,
         }
       })
 
       return {
-        mes: row.mes,
-        ativo: Number(row.ativo) || 0,
-        inativo: Number(row.inativo) || 0,
-        nao_localizado: Number(row.nao_localizado) || 0,
-        total_vidas: Number(row.total_vidas) || 0,
-        valor_ativo: Number(row.valor_ativo) || 0,
-        valor_inativo: Number(row.valor_inativo) || 0,
-        valor_nao_localizado: Number(row.valor_nao_localizado) || 0,
-        valor_total_geral: Number(row.valor_total_geral) || 0,
+        ...dadosMes,
         faixa_etaria_ativo: faixaEtariaAtivo,
         faixa_etaria_inativo: faixaEtariaInativo,
         faixa_etaria_nao_localizado: faixaEtariaNaoLocalizado,
@@ -339,8 +350,14 @@ export async function GET(request: NextRequest) {
       }
     })
 
+    const processDuration = logPerformance("Data Processing", processStartTime)
+    const totalDuration = logPerformance("Total API Request", apiStartTime)
+    
+    console.log(`[PERFORMANCE SUMMARY] Query: ${queryDuration}ms | Processing: ${processDuration}ms | Total: ${totalDuration}ms`)
+
     return NextResponse.json(formattedRows)
   } catch (error: any) {
+    const errorDuration = logPerformance("API Error (Total)", apiStartTime)
     console.error("Erro ao gerar cards de sinistralidade:", error)
     return NextResponse.json(
       { error: error.message || "Erro ao gerar cards de sinistralidade", stack: error.stack },

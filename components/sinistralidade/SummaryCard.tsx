@@ -1,8 +1,10 @@
 /**
  * Componente reutilizável para cards de resumo de sinistralidade
  * Exibe título, quantidade de vidas e valores com cores temáticas
+ * OTIMIZADO: Memoizado para evitar re-renderizações
  */
 
+import { memo, useMemo } from "react"
 import { FaixaEtariaChart, FaixaEtariaItem } from "./FaixaEtariaChart"
 
 interface SummaryCardProps {
@@ -16,7 +18,7 @@ interface SummaryCardProps {
   totalVidas?: number // Total geral de vidas para calcular porcentagem
 }
 
-export function SummaryCard({
+function SummaryCardComponent({
   title,
   livesLabel = "Vidas",
   livesValue,
@@ -26,10 +28,12 @@ export function SummaryCard({
   faixaEtaria,
   totalVidas,
 }: SummaryCardProps) {
-  // Calcular porcentagem em relação ao total
-  const porcentagem = totalVidas && totalVidas > 0
-    ? (livesValue / totalVidas) * 100
-    : 0
+  // Memoizar cálculo de porcentagem
+  const porcentagem = useMemo(() => {
+    return totalVidas && totalVidas > 0
+      ? (livesValue / totalVidas) * 100
+      : 0
+  }, [livesValue, totalVidas])
 
   return (
     <div
@@ -83,4 +87,30 @@ export function SummaryCard({
     </div>
   )
 }
+
+// Memoizar componente para evitar re-renderizações desnecessárias
+export const SummaryCard = memo(SummaryCardComponent, (prevProps, nextProps) => {
+  if (prevProps.title !== nextProps.title) return false
+  if (prevProps.livesValue !== nextProps.livesValue) return false
+  if (prevProps.amountValue !== nextProps.amountValue) return false
+  if (prevProps.totalVidas !== nextProps.totalVidas) return false
+  
+  // Comparação de faixaEtaria
+  if (prevProps.faixaEtaria?.length !== nextProps.faixaEtaria?.length) return false
+  if (!prevProps.faixaEtaria || !nextProps.faixaEtaria) {
+    return prevProps.faixaEtaria === nextProps.faixaEtaria
+  }
+  
+  // Comparação profunda do array
+  for (let i = 0; i < prevProps.faixaEtaria.length; i++) {
+    if (
+      prevProps.faixaEtaria[i].faixa !== nextProps.faixaEtaria[i].faixa ||
+      prevProps.faixaEtaria[i].vidas !== nextProps.faixaEtaria[i].vidas ||
+      prevProps.faixaEtaria[i].valorGasto !== nextProps.faixaEtaria[i].valorGasto
+    ) {
+      return false
+    }
+  }
+  return true
+})
 

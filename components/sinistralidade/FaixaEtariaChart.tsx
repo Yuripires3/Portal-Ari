@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useMemo, memo } from "react"
 
 export type FaixaEtariaItem = {
   faixa: string // '00 a 18', '19 a 23', ...
@@ -18,14 +18,18 @@ interface FaixaEtariaChartProps {
  * Exibe barras horizontais empilhadas verticalmente, sem eixos ou grid
  * Formato: rótulo à esquerda, barra com largura proporcional, número dentro da barra
  * Tooltip ao passar o mouse mostra valor gasto e porcentagem
+ * OTIMIZADO: Memoizado para evitar re-renderizações
  */
-export function FaixaEtariaChart({ data, totalVidas }: FaixaEtariaChartProps) {
-  if (!data || data.length === 0) return null
-
+function FaixaEtariaChartComponent({ data, totalVidas }: FaixaEtariaChartProps) {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null)
 
-  // Calcular o máximo para usar como referência de largura
-  const maxVidas = Math.max(...data.map((d) => d.vidas || 0)) || 1
+  // Memoizar cálculos para evitar recálculos desnecessários
+  const maxVidas = useMemo(() => {
+    if (!data || data.length === 0) return 1
+    return Math.max(...data.map((d) => d.vidas || 0)) || 1
+  }, [data])
+
+  if (!data || data.length === 0) return null
 
   return (
     <div className="w-full space-y-2">
@@ -90,4 +94,23 @@ export function FaixaEtariaChart({ data, totalVidas }: FaixaEtariaChartProps) {
     </div>
   )
 }
+
+// Memoizar componente para evitar re-renderizações desnecessárias
+export const FaixaEtariaChart = memo(FaixaEtariaChartComponent, (prevProps, nextProps) => {
+  if (prevProps.totalVidas !== nextProps.totalVidas) return false
+  if (prevProps.data?.length !== nextProps.data?.length) return false
+  if (!prevProps.data || !nextProps.data) return prevProps.data === nextProps.data
+  
+  // Comparação profunda dos arrays
+  for (let i = 0; i < prevProps.data.length; i++) {
+    if (
+      prevProps.data[i].faixa !== nextProps.data[i].faixa ||
+      prevProps.data[i].vidas !== nextProps.data[i].vidas ||
+      prevProps.data[i].valorGasto !== nextProps.data[i].valorGasto
+    ) {
+      return false
+    }
+  }
+  return true
+})
 
