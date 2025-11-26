@@ -182,11 +182,13 @@ export async function GET(request: NextRequest) {
       return { mes, ultimoDia: ultimoDiaStr }
     })
 
-    const beneficiariosStatusWhereClauseWithBase = whereConditions.length > 0
-      ? `${whereClauseBenef} AND`
+    // Query otimizada: calcula vidas ativas para todos os meses de uma vez
+    // IMPORTANTE: Usar os mesmos filtros (beneficiariosStatusWhereClause) que são usados na query de procedimentos
+    // para garantir consistência entre vidas ativas totais e vidas com procedimento
+    const beneficiariosStatusWhereClauseWithBase = beneficiariosStatusWhereConditions.length > 0
+      ? `${beneficiariosStatusWhereClause} AND`
       : "WHERE"
 
-    // Query otimizada: calcula vidas ativas para todos os meses de uma vez
     const queryVidasAtivas = `
       SELECT
         ${mesesValues.map((mv, idx) => `
@@ -204,7 +206,7 @@ export async function GET(request: NextRequest) {
     `
 
     const vidasAtivasParams = [
-      ...whereValues,
+      ...beneficiariosStatusWhereValues,
       ...mesesValues.flatMap(mv => [mv.ultimoDia, mv.ultimoDia])
     ]
 
@@ -213,51 +215,66 @@ export async function GET(request: NextRequest) {
     const vidasAtivasPorMes = meses.map((_, idx) => Number(rowsVidasAtivas[0]?.[`vidas_ativas_${idx}`]) || 0)
 
     // Query para vidas com procedimento: uma única query que agrupa por mês
+    // CORREÇÃO CRÍTICA: Garantir que apenas procedimentos de beneficiários que atendem aos filtros
+    // (incluindo entidade) e estavam ativos no momento do procedimento sejam contados
+    // A subquery verifica se existe um beneficiário ativo da entidade filtrada no momento do procedimento
     const queryVidasComProcedimento = `
-      WITH procedimentos_mes AS (
-        SELECT
-          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-          p.cpf
-        FROM reg_procedimentos p
-        WHERE
-          UPPER(p.operadora) = 'ASSIM SAÚDE'
-          AND p.evento IS NOT NULL
-          AND DATE(p.data_competencia) BETWEEN ? AND ?
-      ),
-      beneficiarios_status AS (
-        SELECT
-          b.cpf,
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(
-              b.status_beneficiario
-              ORDER BY b.data_inicio_vigencia_beneficiario DESC
-            ),
-            ',',
-            1
-          ) AS status_beneficiario
-        FROM reg_beneficiarios b
-        ${beneficiariosStatusWhereClause}
-        GROUP BY b.cpf
-      )
       SELECT
-        pm.mes AS mes_referencia,
-        COUNT(DISTINCT pm.cpf) AS vidas_com_procedimento
-      FROM procedimentos_mes pm
-      LEFT JOIN beneficiarios_status bs ON bs.cpf = pm.cpf
-      WHERE LOWER(COALESCE(bs.status_beneficiario, '')) = 'ativo'
-      GROUP BY pm.mes
+        DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes_referencia,
+        COUNT(DISTINCT p.cpf) AS vidas_com_procedimento
+      FROM reg_procedimentos p
+      WHERE
+        UPPER(p.operadora) = 'ASSIM SAÚDE'
+        AND p.evento IS NOT NULL
+        AND DATE(p.data_competencia) BETWEEN ? AND ?
+        AND EXISTS (
+          SELECT 1
+          FROM reg_beneficiarios b
+          WHERE
+            b.cpf = p.cpf
+            ${beneficiariosStatusWhereConditions.length > 0 ? `AND ${beneficiariosStatusWhereConditions.join(' AND ')}` : ''}
+            AND b.data_inicio_vigencia_beneficiario <= LAST_DAY(p.data_competencia)
+            AND (
+              (b.data_exclusao IS NULL AND b.status_beneficiario = 'ativo')
+              OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > LAST_DAY(p.data_competencia))
+            )
+            AND NOT EXISTS (
+              SELECT 1
+              FROM reg_beneficiarios b2
+              WHERE
+                b2.cpf = p.cpf
+                ${beneficiariosStatusWhereConditions.length > 0 ? `AND ${beneficiariosStatusWhereConditions.map(c => c.replace('b.', 'b2.')).join(' AND ')}` : ''}
+                AND b2.data_inicio_vigencia_beneficiario <= LAST_DAY(p.data_competencia)
+                AND b2.data_inicio_vigencia_beneficiario > b.data_inicio_vigencia_beneficiario
+            )
+        )
+      GROUP BY DATE_FORMAT(p.data_competencia, '%Y-%m')
     `
 
+    // IMPORTANTE: Ordem dos parâmetros deve corresponder à ordem de uso na query
+    // 1. Primeiro as datas (usadas no BETWEEN da cláusula WHERE dos procedimentos)
+    // 2. Depois os valores de beneficiariosStatusWhereValues (usados na primeira subquery EXISTS)
+    // 3. Depois os valores de beneficiariosStatusWhereValues novamente (usados na subquery NOT EXISTS)
     const vidasComProcedimentoParams = [
       primeiroDiaPeriodo,
       ultimoDiaPeriodoStr,
       ...beneficiariosStatusWhereValues,
+      ...beneficiariosStatusWhereValues, // Duplicar para a subquery NOT EXISTS
     ]
 
     const [rowsVidasComProc]: any = await connection.execute(queryVidasComProcedimento, vidasComProcedimentoParams)
     const queryDuration = Date.now() - queryStartTime
     
     console.log(`[PERFORMANCE] /api/beneficiarios/ativos - Queries otimizadas: ${queryDuration}ms (antes: ~24 queries)`)
+    
+    // Debug: log dos filtros aplicados
+    if (entidadesParam) {
+      console.log(`[DEBUG] Filtro de entidade aplicado: ${entidadesParam}`)
+      console.log(`[DEBUG] beneficiariosStatusWhereConditions:`, beneficiariosStatusWhereConditions)
+      console.log(`[DEBUG] beneficiariosStatusWhereValues:`, beneficiariosStatusWhereValues)
+      console.log(`[DEBUG] Vidas ativas por mês:`, vidasAtivasPorMes)
+      console.log(`[DEBUG] Vidas com procedimento:`, rowsVidasComProc)
+    }
 
     // Mapear resultados
     const vidasComProcedimentoMap = new Map<string, number>()
@@ -269,6 +286,11 @@ export async function GET(request: NextRequest) {
       const vidasAtivas = vidasAtivasPorMes[idx] || 0
       const vidasComProcedimento = vidasComProcedimentoMap.get(mes) || 0
       const vidasSemProcedimento = Math.max(vidasAtivas - vidasComProcedimento, 0)
+      
+      // Debug: log quando há diferença suspeita (apenas se houver filtro de entidade)
+      if (entidadesParam && vidasSemProcedimento === 0 && vidasAtivas > 0) {
+        console.log(`[DEBUG] Mes ${mes}: vidasAtivas=${vidasAtivas}, vidasComProcedimento=${vidasComProcedimento}, vidasSemProcedimento=${vidasSemProcedimento}`)
+      }
       
       return {
         mes_referencia: mes,
