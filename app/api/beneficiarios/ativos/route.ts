@@ -172,7 +172,39 @@ export async function GET(request: NextRequest) {
       // - considera apenas operadora ASSIM SAÚDE
       // - status do beneficiário é o mais recente (por CPF), independente da data do procedimento
       // - conta apenas CPFs cujo status_final seja "ativo"
+      // - aplica os mesmos filtros de entidade, tipo e operadoras da query de vidas ativas
       const primeiroDiaMesStr = `${ano}-${String(mesInt).padStart(2, "0")}-01`
+
+      // Construir filtros WHERE para beneficiários na CTE beneficiarios_status
+      const beneficiariosStatusWhereConditions: string[] = []
+      const beneficiariosStatusWhereValues: any[] = []
+      
+      beneficiariosStatusWhereConditions.push("UPPER(b.operadora) = 'ASSIM SAÚDE'")
+      
+      if (operadorasParam) {
+        const operadoras = operadorasParam.split(",").map(op => op.trim()).filter(Boolean)
+        if (operadoras.length > 0) {
+          beneficiariosStatusWhereConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
+          beneficiariosStatusWhereValues.push(...operadoras)
+        }
+      }
+
+      if (entidadesParam) {
+        const entidades = entidadesParam.split(",").map(e => e.trim()).filter(Boolean)
+        if (entidades.length > 0) {
+          beneficiariosStatusWhereConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
+          beneficiariosStatusWhereValues.push(...entidades)
+        }
+      }
+
+      if (tipo && tipo !== "Todos") {
+        beneficiariosStatusWhereConditions.push("b.tipo = ?")
+        beneficiariosStatusWhereValues.push(tipo)
+      }
+
+      const beneficiariosStatusWhereClause = beneficiariosStatusWhereConditions.length > 0
+        ? `WHERE ${beneficiariosStatusWhereConditions.join(" AND ")}`
+        : ""
 
       const queryComProcedimento = `
         WITH procedimentos_mes AS (
@@ -197,8 +229,7 @@ export async function GET(request: NextRequest) {
               1
             ) AS status_beneficiario
           FROM reg_beneficiarios b
-          WHERE
-            UPPER(b.operadora) = 'ASSIM SAÚDE'
+          ${beneficiariosStatusWhereClause}
           GROUP BY
             b.cpf
         )
@@ -212,6 +243,7 @@ export async function GET(request: NextRequest) {
       const [rowsComProc]: any = await connection.execute(queryComProcedimento, [
         primeiroDiaMesStr,
         ultimoDiaMesStr,
+        ...beneficiariosStatusWhereValues,
         primeiroDiaMesStr,
       ])
 

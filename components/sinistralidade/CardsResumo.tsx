@@ -24,7 +24,21 @@ export interface SinistralidadeCards {
  * Componente de cards de resumo de sinistralidade
  * Exibe 4 cards: Ativos, Inativos, Não Localizados e Total
  */
-export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataFim: string }) {
+export function CardsResumo({ 
+  dataInicio, 
+  dataFim,
+  operadoras,
+  entidades,
+  tipo,
+  cpf
+}: { 
+  dataInicio: string
+  dataFim: string
+  operadoras?: string[]
+  entidades?: string[]
+  tipo?: string
+  cpf?: string
+}) {
   const [dados, setDados] = useState<SinistralidadeCards[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -39,8 +53,27 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
       try {
         setLoading(true)
         setError(null)
+        
+        const params = new URLSearchParams({
+          data_inicio: dataInicio,
+          data_fim: dataFim,
+        })
+        
+        if (operadoras && operadoras.length > 0) {
+          params.append("operadoras", operadoras.join(","))
+        }
+        if (entidades && entidades.length > 0) {
+          params.append("entidades", entidades.join(","))
+        }
+        if (tipo && tipo !== "Todos") {
+          params.append("tipo", tipo)
+        }
+        if (cpf) {
+          params.append("cpf", cpf)
+        }
+        
         const res = await fetch(
-          `/api/sinistralidade/cards?data_inicio=${dataInicio}&data_fim=${dataFim}`,
+          `/api/sinistralidade/cards?${params}`,
           { cache: "no-store" }
         )
         
@@ -60,7 +93,7 @@ export function CardsResumo({ dataInicio, dataFim }: { dataInicio: string; dataF
     }
     
     load()
-  }, [dataInicio, dataFim])
+  }, [dataInicio, dataFim, operadoras, entidades, tipo, cpf])
 
   if (loading) {
     return (

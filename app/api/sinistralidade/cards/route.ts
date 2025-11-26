@@ -22,6 +22,10 @@ export async function GET(request: NextRequest) {
     let dataInicio = searchParams.get("data_inicio")
     let dataFim = searchParams.get("data_fim")
     const mesReferencia = searchParams.get("mes_referencia")
+    const operadorasParam = searchParams.get("operadoras")
+    const entidadesParam = searchParams.get("entidades")
+    const tipo = searchParams.get("tipo")
+    const cpf = searchParams.get("cpf")
 
     // Se mes_referencia for fornecido, converter para data_inicio e data_fim
     if (mesReferencia) {
@@ -47,6 +51,56 @@ export async function GET(request: NextRequest) {
     }
 
     connection = await getDBConnection()
+
+    // Processar filtros
+    const operadoras = operadorasParam ? operadorasParam.split(",").map(op => op.trim()).filter(Boolean) : []
+    const entidades = entidadesParam ? entidadesParam.split(",").map(e => e.trim()).filter(Boolean) : []
+    const tipoFiltro = tipo && tipo !== "Todos" ? tipo : null
+    const cpfFiltro = cpf ? cpf.trim() : null
+
+    // Construir condições WHERE para procedimentos
+    const procedimentosConditions: string[] = [
+      "p.operadora = 'ASSIM SAÚDE'",
+      "p.evento IS NOT NULL",
+      "DATE(p.data_competencia) BETWEEN ? AND ?"
+    ]
+    const procedimentosValues: any[] = [dataInicio, dataFim]
+
+    if (cpfFiltro) {
+      procedimentosConditions.push("p.cpf = ?")
+      procedimentosValues.push(cpfFiltro)
+    }
+
+    // Construir condições WHERE para beneficiários
+    const beneficiarioConditions: string[] = [
+      "b.operadora = 'ASSIM SAÚDE'"
+    ]
+    const beneficiarioValues: any[] = []
+
+    if (entidades.length > 0) {
+      beneficiarioConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
+      beneficiarioValues.push(...entidades)
+    }
+
+    if (tipoFiltro) {
+      beneficiarioConditions.push("b.tipo = ?")
+      beneficiarioValues.push(tipoFiltro)
+    }
+
+    if (cpfFiltro) {
+      beneficiarioConditions.push("b.cpf = ?")
+      beneficiarioValues.push(cpfFiltro)
+    }
+
+    // Excluir planos odontológicos
+    beneficiarioConditions.push(`(
+      UPPER(b.plano) NOT LIKE '%DENT%' 
+      AND UPPER(b.plano) NOT LIKE '%AESP%' 
+    )`)
+
+    const beneficiarioWhereClause = beneficiarioConditions.length > 0
+      ? `WHERE ${beneficiarioConditions.join(" AND ")}`
+      : ""
 
     // Função para calcular faixa etária baseada na idade
     const getFaixaEtaria = (idade: number | null): string => {
@@ -90,10 +144,7 @@ export async function GET(request: NextRequest) {
             p.cpf,
             SUM(p.valor_procedimento) AS valor_total_cpf_mes
           FROM reg_procedimentos p
-          WHERE
-            p.operadora = 'ASSIM SAÚDE'
-            AND p.evento IS NOT NULL
-            AND DATE(p.data_competencia) BETWEEN ? AND ?
+          WHERE ${procedimentosConditions.join(" AND ")}
           GROUP BY
             DATE_FORMAT(p.data_competencia, '%Y-%m'),
             p.cpf
@@ -110,8 +161,7 @@ export async function GET(request: NextRequest) {
               1
             ) AS status_beneficiario
           FROM reg_beneficiarios b
-          WHERE
-            b.operadora = 'ASSIM SAÚDE'
+          ${beneficiarioWhereClause}
           GROUP BY
             b.cpf
         ) AS b
@@ -123,7 +173,7 @@ export async function GET(request: NextRequest) {
         m.mes
     `
 
-    const [rows]: any = await connection.execute(sql, [dataInicio, dataFim])
+    const [rows]: any = await connection.execute(sql, [...procedimentosValues, ...beneficiarioValues])
 
     // Query para faixa etária por status e mês, incluindo valor gasto
     const faixaEtariaSql = `
@@ -149,10 +199,7 @@ export async function GET(request: NextRequest) {
             p.cpf,
             SUM(p.valor_procedimento) AS valor_total_cpf_mes
           FROM reg_procedimentos p
-          WHERE
-            p.operadora = 'ASSIM SAÚDE'
-            AND p.evento IS NOT NULL
-            AND DATE(p.data_competencia) BETWEEN ? AND ?
+          WHERE ${procedimentosConditions.join(" AND ")}
           GROUP BY
             DATE_FORMAT(p.data_competencia, '%Y-%m'),
             p.cpf
@@ -169,8 +216,7 @@ export async function GET(request: NextRequest) {
               1
             ) AS status_beneficiario
           FROM reg_beneficiarios b
-          WHERE
-            b.operadora = 'ASSIM SAÚDE'
+          ${beneficiarioWhereClause}
           GROUP BY
             b.cpf
         ) AS b
@@ -188,8 +234,7 @@ export async function GET(request: NextRequest) {
             1
           ) AS idade
         FROM reg_beneficiarios b
-        WHERE
-          b.operadora = 'ASSIM SAÚDE'
+        ${beneficiarioWhereClause}
         GROUP BY
           b.cpf
       ) AS b_idade
@@ -200,7 +245,7 @@ export async function GET(request: NextRequest) {
         b_idade.idade
     `
 
-    const [faixaEtariaRows]: any = await connection.execute(faixaEtariaSql, [dataInicio, dataFim])
+    const [faixaEtariaRows]: any = await connection.execute(faixaEtariaSql, [...procedimentosValues, ...beneficiarioValues, ...beneficiarioValues])
 
     // Processar faixa etária por mês e status (vidas e valor gasto)
     const faixaEtariaPorMes = new Map<string, Map<string, Map<string, { vidas: number; valorGasto: number }>>>()

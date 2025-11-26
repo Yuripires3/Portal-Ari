@@ -243,8 +243,12 @@ export default function SinistralidadeDashboardPage() {
   }, [operadoras, operadorasDisponiveis])
 
   // Operadoras disponíveis para seleção (excluindo as já selecionadas)
+  // Filtrar para mostrar apenas ASSIM SAÚDE
   const operadorasDisponiveisParaSelecao = useMemo(() => {
-    return operadorasDisponiveis.filter(op => !operadoras.includes(op))
+    const apenasAssimSaude = operadorasDisponiveis.filter(
+      (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
+    )
+    return apenasAssimSaude.filter((op: string) => !operadoras.includes(op))
   }, [operadorasDisponiveis, operadoras])
 
   // Texto do placeholder baseado nas operadoras selecionadas
@@ -557,6 +561,64 @@ export default function SinistralidadeDashboardPage() {
     }
   }, [toast])
 
+  // Carregar entidades com vidas nos meses selecionados
+  const carregarEntidadesPorMeses = useCallback(async (meses: string[]) => {
+    if (!meses || meses.length === 0) {
+      setEntidadesDisponiveis([])
+      setEntidadesPorOperadora({})
+      return
+    }
+
+    try {
+      // Calcular período
+      const mesesOrdenados = [...meses].sort()
+      const primeiroMes = mesesOrdenados[0]
+      const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
+
+      const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
+      const dataInicio = `${anoInicioSel}-${mesInicioSel}-01`
+
+      const [anoFimSel, mesFimSel] = ultimoMes.split("-")
+      const anoFimNum = parseInt(anoFimSel)
+      const mesFimNum = parseInt(mesFimSel)
+      const ultimoDiaDate = new Date(anoFimNum, mesFimNum, 0)
+      const dataFim = ultimoDiaDate.toISOString().split("T")[0]
+
+      // Buscar entidades que têm procedimentos nos meses selecionados
+      const params = new URLSearchParams({
+        data_inicio: dataInicio,
+        data_fim: dataFim,
+        operadora: "ASSIM SAÚDE",
+      })
+
+      const res = await fetchNoStore(`/api/beneficiarios/entidades-por-mes?${params}`)
+      if (!res.ok) {
+        console.error("Erro ao carregar entidades por mês")
+        return
+      }
+
+      const data = await res.json()
+      const entidadesComDados = data.entidades || []
+
+      // Filtrar apenas entidades de ASSIM SAÚDE (já vem filtrado da API, mas garantir)
+      const entidadesAssimSaude = entidadesComDados.filter((ent: string) => Boolean(ent))
+
+      setEntidadesDisponiveis(entidadesAssimSaude)
+      
+      // Atualizar mapeamento de entidades por operadora
+      const entidadesPorOperadoraFiltrado: Record<string, string[]> = {}
+      const operadoraKey = operadorasDisponiveis.find(
+        (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
+      )
+      if (operadoraKey) {
+        entidadesPorOperadoraFiltrado[operadoraKey] = entidadesAssimSaude
+      }
+      setEntidadesPorOperadora(entidadesPorOperadoraFiltrado)
+    } catch (error: any) {
+      console.error("Erro ao carregar entidades por meses:", error)
+    }
+  }, [operadorasDisponiveis])
+
   // Carregar dados de vidas ativas
   const getPeriodoSelecionado = useCallback(() => {
     if (!mesesReferencia || mesesReferencia.length === 0) return null
@@ -735,9 +797,15 @@ export default function SinistralidadeDashboardPage() {
         const res = await fetchNoStore("/api/beneficiarios/filtros")
         if (!res.ok) throw new Error("Erro ao carregar filtros")
         const data = await res.json()
-        setOperadorasDisponiveis(data.operadoras || [])
-        setEntidadesDisponiveis(data.entidades || [])
-        setEntidadesPorOperadora(data.entidadesPorOperadora || {})
+        // Filtrar para mostrar apenas ASSIM SAÚDE
+        const operadorasFiltradas = (data.operadoras || []).filter(
+          (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
+        )
+        setOperadorasDisponiveis(operadorasFiltradas)
+        // Entidades serão carregadas baseadas nos meses selecionados
+        // Por enquanto, manter vazio até que os meses sejam selecionados
+        setEntidadesDisponiveis([])
+        setEntidadesPorOperadora({})
         setTiposDisponiveis(data.tipos || [])
         setLoadingFiltros(false)
         logSinistralidade("loadAllData -> filtros atualizados", {
@@ -799,6 +867,16 @@ export default function SinistralidadeDashboardPage() {
     hasLoadedRef.current = true
     loadAllData()
   }, [authLoading, user, loadAllData])
+
+  // Carregar entidades quando os meses mudarem
+  useEffect(() => {
+    if (mesesReferencia.length > 0) {
+      carregarEntidadesPorMeses(mesesReferencia)
+    } else {
+      setEntidadesDisponiveis([])
+      setEntidadesPorOperadora({})
+    }
+  }, [mesesReferencia, carregarEntidadesPorMeses])
 
   // REMOVIDO: useEffect que recarregava automaticamente quando filtros mudavam
   // A página fica congelada até o usuário clicar no botão "Atualizar"
@@ -1337,7 +1415,11 @@ export default function SinistralidadeDashboardPage() {
         return (
           <CardsResumo 
             dataInicio={periodo.dataInicioSelecionado} 
-            dataFim={periodo.dataFimSelecionado} 
+            dataFim={periodo.dataFimSelecionado}
+            operadoras={operadorasValidas}
+            entidades={entidades}
+            tipo={tipoValido}
+            cpf={cpf}
           />
         )
       })()}
