@@ -51,10 +51,13 @@ export function FaixaEtariaChart({ data, totalVidas }: FaixaEtariaChartProps) {
             <div className="flex-1 relative">
               {/* Fundo da barra (muted) */}
               <div className="h-8 bg-muted rounded-sm">
-                {/* Barra preenchida (slate-900) */}
+                {/* Barra preenchida (azul #333b5f - mesma cor do gráfico de Bonificações) */}
                 <div
-                  className="h-8 bg-slate-900 rounded-sm flex items-center justify-center transition-all"
-                  style={{ width: `${widthPercent}%` }}
+                  className="h-8 rounded-sm flex items-center justify-center transition-all"
+                  style={{ 
+                    width: `${widthPercent}%`,
+                    backgroundColor: "#333b5f"
+                  }}
                 >
                   {/* Número de vidas centralizado dentro da barra */}
                   {item.vidas > 0 && (
@@ -68,18 +71,13 @@ export function FaixaEtariaChart({ data, totalVidas }: FaixaEtariaChartProps) {
               {/* Tooltip */}
               {isHovered && (
                 <div className="absolute z-50 bottom-full left-0 mb-2 bg-white dark:bg-zinc-900 p-3 border rounded-lg shadow-lg min-w-[220px]">
-                  <p className="font-semibold mb-2 text-sm">{item.faixa}</p>
                   <div className="space-y-1.5 text-xs">
-                    <p>
-                      <span className="font-semibold">Vidas:</span>{" "}
-                      {item.vidas.toLocaleString("pt-BR")}
-                    </p>
                     <p>
                       <span className="font-semibold">Valor Gasto:</span>{" "}
                       R$ {valorGasto.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </p>
                     <p>
-                      <span className="font-semibold">Porcentagem:</span>{" "}
+                      <span className="font-semibold">% do Total de Vidas:</span>{" "}
                       {porcentagem.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                     </p>
                   </div>

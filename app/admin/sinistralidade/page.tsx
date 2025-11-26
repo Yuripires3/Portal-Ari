@@ -1376,7 +1376,7 @@ export default function SinistralidadeDashboardPage() {
                           {fmtNumber(raw.vidas_ativas_com_procedimento || 0)}
                         </p>
                         <p className="text-sm mb-1">
-                          <span className="font-semibold" style={{ color: "#002f67" }}>Sem procedimento:</span>{" "}
+                          <span className="font-semibold" style={{ color: "#333b5f" }}>Sem procedimento:</span>{" "}
                           {fmtNumber(raw.vidas_ativas_sem_procedimento || 0)}
                         </p>
                         <p className="text-sm font-semibold">
@@ -1397,7 +1397,7 @@ export default function SinistralidadeDashboardPage() {
                   dataKey="vidas_ativas_sem_procedimento"
                   name="Sem procedimento"
                   stackId="1"
-                  fill="#002f67"
+                  fill="#333b5f"
                 />
               </BarChart>
             </ResponsiveContainer>
