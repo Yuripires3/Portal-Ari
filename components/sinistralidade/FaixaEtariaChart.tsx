@@ -84,7 +84,7 @@ function FaixaEtariaChartComponent({ data, totalVidas }: FaixaEtariaChartProps) 
                       <span className="font-semibold">% do Total de Vidas:</span>{" "}
                       {porcentagem.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                     </p>
-                  </div>
+                  </div>vsc
                 </div>
               )}
             </div>
