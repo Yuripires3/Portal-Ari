@@ -22,6 +22,7 @@ import { useAuth } from "@/components/auth/auth-provider"
 
 const sinistralidadeSubmenu = [
   { label: "Dashboard", href: "/admin/sinistralidade", icon: LayoutDashboard },
+  { label: "Análise de Beneficiários", href: "/admin/sinistralidade/analise-beneficiarios", icon: Users },
 ]
 
 const bonificacoesSubmenu = [

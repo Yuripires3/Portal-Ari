@@ -1,8 +1,8 @@
 "use client"
 
-import { useEffect, useState, useMemo, useCallback, Fragment, useRef } from "react"
+import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -10,145 +10,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useAuth } from "@/components/auth/auth-provider"
 import { useBeneficiariosFilters } from "@/lib/beneficiarios-filters-store"
 import { useToast } from "@/hooks/use-toast"
-import { Filter, RefreshCw, ChevronDown, ChevronLeft, ChevronRight } from "lucide-react"
-import { Skeleton } from "@/components/ui/skeleton"
-import { signalPageLoaded } from "@/components/ui/page-loading"
-import {
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer,
-} from "recharts"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+import { Filter, RefreshCw, ChevronDown, Users, UserX, UserCheck, Activity, ChevronRight } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
-import { CardsResumo } from "@/components/sinistralidade/CardsResumo"
+import { Skeleton } from "@/components/ui/skeleton"
+import { useEntidadesPorMes } from "@/hooks/useEntidadesPorMes"
+import { useTiposPorMes } from "@/hooks/useTiposPorMes"
+import { filterAssimSaude, validateFilters, normalizeCpf } from "@/lib/beneficiarios-filters-utils"
+import { PlanDistributionList } from "@/components/sinistralidade/PlanDistributionList"
 
-/**
- * Logs + métricas para rastrear GETs duplicados:
- * - logSinistralidade centraliza prefixo + timestamp.
- * - fetchNoStore mede delta entre requisições e duração de cada resposta.
- * - signalPageLoaded é disparado após cada ciclo de carregamento para informar o PageLoading.
- * Causa raiz identificada anteriormente: Vercel Analytics em dev + PageLoading sem signal
- * mantinham a página em transição e reexecutavam a montagem. Os logs ajudam a provar
- * se outro fator (StrictMode, filtros, etc.) está disparando os loads.
- */
-
-const getNow = () => {
-  if (typeof performance !== "undefined" && typeof performance.now === "function") {
-    return performance.now()
-  }
-  return Date.now()
-}
-
-const logSinistralidade = (message: string, payload?: Record<string, unknown>) => {
-  console.log(`[SINISTRALIDADE] ${message}`, {
-    ts: new Date().toISOString(),
-    ...payload,
-  })
-}
-
-let lastFetchTimestamp = getNow()
-
-const fetchNoStore = (input: string, init?: RequestInit) => {
-  const startedAt = getNow()
-  const deltaSinceLast = startedAt - lastFetchTimestamp
-  lastFetchTimestamp = startedAt
-
-  logSinistralidade("FETCH START", {
-    url: input,
-    deltaSincePreviousMs: Math.round(deltaSinceLast),
-  })
-
-  return fetch(input, { ...init, cache: "no-store" }).then((response) => {
-    const finishedAt = getNow()
-    logSinistralidade("FETCH END", {
-      url: input,
-      status: response.status,
-      durationMs: Math.round(finishedAt - startedAt),
-    })
-    return response
-  })
-}
-
-logSinistralidade("MODULE EVALUATED", {
-  environment: typeof window === "undefined" ? "server" : "client",
-})
-
-// Removido: Guards complexos - usando abordagem simples como Histórico de Bonificações
-
-type VidasAtivasPorMes = {
-  mes_referencia: string
-  vidas_ativas: number
-  vidas_ativas_com_procedimento?: number
-  vidas_ativas_sem_procedimento?: number
-}
-
-type AppliedFiltersSnapshot = {
-  mesesReferencia: string[]
-  dataInicioSelecionado: string
-  dataFimSelecionado: string
-  operadoras: string[]
-  entidades: string[]
-  tipo: string
-  cpf: string
-}
-
-type DashboardRequestContext = AppliedFiltersSnapshot & {
-  dataInicioGrafico: string
-  dataFimGrafico: string
-  mesesParaGrafico: string[]
-}
-
-type SinistralidadeCardMetric = {
-  quantidade: number
-  valor: number
-}
-
-type SinistralidadeCardsResumo = {
-  mes: string
-  ativo: SinistralidadeCardMetric
-  inativo: SinistralidadeCardMetric
-  naoLocalizado: SinistralidadeCardMetric
-  total: SinistralidadeCardMetric
-}
-
-const CARDS_RESUMO_VAZIO: SinistralidadeCardsResumo = {
-  mes: "",
-  ativo: { quantidade: 0, valor: 0 },
-  inativo: { quantidade: 0, valor: 0 },
-  naoLocalizado: { quantidade: 0, valor: 0 },
-  total: { quantidade: 0, valor: 0 },
-}
-
-const normalizarCardsResumo = (input: any, mesFallback: string): SinistralidadeCardsResumo => ({
-  mes: input?.mes || mesFallback,
-  ativo: {
-    quantidade: Number(input?.ativo) || 0,
-    valor: Number(input?.ativo_valor) || 0,
-  },
-  inativo: {
-    quantidade: Number(input?.inativo) || 0,
-    valor: Number(input?.inativo_valor) || 0,
-  },
-  naoLocalizado: {
-    quantidade: Number(input?.nao_localizado) || 0,
-    valor: Number(input?.nao_localizado_valor) || 0,
-  },
-  total: {
-    quantidade: Number(input?.total_geral) || 0,
-    valor: Number(input?.total_valor) || 0,
-  },
-})
+const fetchNoStore = (input: string, init?: RequestInit) =>
+  fetch(input, { ...init, cache: "no-store" })
 
 export default function SinistralidadeDashboardPage() {
-  useEffect(() => {
-    logSinistralidade("CLIENTE MONTADO")
-  }, [])
-
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
@@ -157,48 +30,132 @@ export default function SinistralidadeDashboardPage() {
   const [entidadeSelectKey, setEntidadeSelectKey] = useState(0)
   const [mesesDropdownOpen, setMesesDropdownOpen] = useState(false)
   const [operadorasDisponiveis, setOperadorasDisponiveis] = useState<string[]>([])
-  const [entidadesDisponiveis, setEntidadesDisponiveis] = useState<string[]>([])
-  const [entidadesPorOperadora, setEntidadesPorOperadora] = useState<Record<string, string[]>>({})
-  const [tiposDisponiveis, setTiposDisponiveis] = useState<string[]>([])
+  const [entidadesPorOperadoraGlobal, setEntidadesPorOperadoraGlobal] = useState<Record<string, string[]>>({})
   const [loadingFiltros, setLoadingFiltros] = useState(true)
-  const [vidasAtivas, setVidasAtivas] = useState<VidasAtivasPorMes[]>([])
-  const [dadosDetalhados, setDadosDetalhados] = useState<any[]>([])
-  const [dadosNaoIdentificados, setDadosNaoIdentificados] = useState<any[]>([])
-  const [totalRegistros, setTotalRegistros] = useState(0)
-  const [totalPaginas, setTotalPaginas] = useState(1)
-  const [loading, setLoading] = useState(false)
-  const [loadingDetalhados, setLoadingDetalhados] = useState(false)
-  const [paginaAtual, setPaginaAtual] = useState(1)
-  const [expandedRowKeys, setExpandedRowKeys] = useState<Set<string>>(() => new Set())
-  const [expandedRowKeysNaoIdentificados, setExpandedRowKeysNaoIdentificados] = useState<Set<string>>(() => new Set())
-  const [cardsResumo, setCardsResumo] = useState<SinistralidadeCardsResumo>(CARDS_RESUMO_VAZIO)
-  const [cardsResumoLoading, setCardsResumoLoading] = useState(false)
-  // Estado centralizado: só fica true quando TODOS os dados essenciais estão prontos
-  const [isDashboardReady, setIsDashboardReady] = useState(false)
-  // Ref para preservar linhas expandidas entre re-renders e evitar que sejam fechadas automaticamente
-  const expandedRowKeysRef = useRef<Set<string>>(new Set())
   
-  // Sincronizar ref com state
-  useEffect(() => {
-    expandedRowKeysRef.current = expandedRowKeys
-  }, [expandedRowKeys])
+  // Estados para cards de status de vidas
+  const [cardsStatusVidas, setCardsStatusVidas] = useState<{
+    consolidado: {
+      ativo: number
+      inativo: number
+      nao_localizado: number
+      total_vidas: number
+      valor_ativo: number
+      valor_inativo: number
+      valor_nao_localizado: number
+      valor_total_geral: number
+      por_plano?: {
+        ativo: Array<{ plano: string; vidas: number; valor: number }>
+        inativo: Array<{ plano: string; vidas: number; valor: number }>
+        nao_localizado: Array<{ plano: string; vidas: number; valor: number }>
+        total: Array<{ plano: string; vidas: number; valor: number }>
+      }
+    }
+    por_entidade?: {
+      ativo: Array<{
+        entidade: string
+        vidas: number
+        valor_total: number
+        pct_vidas: number
+        pct_valor: number
+        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      }>
+      inativo: Array<{
+        entidade: string
+        vidas: number
+        valor_total: number
+        pct_vidas: number
+        pct_valor: number
+        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      }>
+      nao_localizado: Array<{
+        entidade: string
+        vidas: number
+        valor_total: number
+        pct_vidas: number
+        pct_valor: number
+        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      }>
+      total: Array<{
+        entidade: string
+        vidas: number
+        valor_total: number
+        pct_vidas: number
+        pct_valor: number
+        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      }>
+    }
+  } | null>(null)
+  const [loadingCardsStatus, setLoadingCardsStatus] = useState(false)
   
-  const hasLoadedRef = useRef(false)
-  const loadAllDataCalledRef = useRef(0)
-  const loadDashboardInProgressRef = useRef(false)
-  const latestLoadDashboardRef = useRef<(() => Promise<void>) | null>(null)
-  const linhasPorPagina = 20
+  // Estados para controlar expansão dos drilldowns de planos
+  const [planosExpandidos, setPlanosExpandidos] = useState<Set<string>>(new Set())
+  const [planosEntidadeExpandidos, setPlanosEntidadeExpandidos] = useState<Set<string>>(new Set())
+  
+  const togglePlanos = useCallback((key: string) => {
+    setPlanosExpandidos(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
+  
+  const togglePlanosEntidade = useCallback((key: string) => {
+    setPlanosEntidadeExpandidos(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }, [])
 
-  // Ler filtros diretamente do store - seguindo padrão do DashboardContent
-  const mesesReferencia = Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0
-    ? filters.mesesReferencia
-    : filters?.mesReferencia
-    ? [filters.mesReferencia]
-    : []
-  const operadoras = Array.isArray(filters?.operadoras) ? filters.operadoras : []
-  const entidades = Array.isArray(filters?.entidades) ? filters.entidades : []
-  const tipo = filters?.tipo || "Todos"
-  const cpf = filters?.cpf || ""
+  // Ler filtros diretamente do store (com fallbacks seguros)
+  const mesesReferencia = useMemo(() => {
+    if (Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0) {
+      return filters.mesesReferencia
+    }
+    if (filters?.mesReferencia) {
+      return [filters.mesReferencia]
+    }
+    return []
+  }, [filters?.mesesReferencia, filters?.mesReferencia])
+
+  const operadoras = useMemo(() => 
+    Array.isArray(filters?.operadoras) ? filters.operadoras : [],
+    [filters?.operadoras]
+  )
+  
+  const entidades = useMemo(() => 
+    Array.isArray(filters?.entidades) ? filters.entidades : [],
+    [filters?.entidades]
+  )
+  
+  const tipo = useMemo(() => filters?.tipo || "Todos", [filters?.tipo])
+  const cpf = useMemo(() => filters?.cpf || "", [filters?.cpf])
+
+  // Usar hook otimizado para carregar entidades por mês
+  const {
+    entidadesDisponiveis,
+    entidadesPorOperadora,
+    loading: loadingEntidades,
+    error: errorEntidades,
+    refresh: refreshEntidades,
+  } = useEntidadesPorMes(mesesReferencia, operadorasDisponiveis)
+
+  // Usar hook otimizado para carregar tipos por mês
+  const {
+    tiposDisponiveis,
+    loading: loadingTipos,
+    error: errorTipos,
+    refresh: refreshTipos,
+  } = useTiposPorMes(mesesReferencia, operadorasDisponiveis)
 
   // Gerar lista de anos (últimos 5 anos até o ano atual)
   const anosDisponiveis = useMemo(() => {
@@ -231,7 +188,6 @@ export default function SinistralidadeDashboardPage() {
 
   const redirectCheckedRef = useRef(false)
   useEffect(() => {
-    // Evitar múltiplos redirects
     if (redirectCheckedRef.current) return
     if (!authLoading && user && user.role !== "admin") {
       redirectCheckedRef.current = true
@@ -239,17 +195,15 @@ export default function SinistralidadeDashboardPage() {
     }
   }, [authLoading, user, router])
 
-  // Filtrar operadoras válidas (que estão na lista disponível)
+  // Filtrar operadoras válidas (memoizado)
   const operadorasValidas = useMemo(() => {
     return operadoras.filter(op => operadorasDisponiveis.includes(op))
   }, [operadoras, operadorasDisponiveis])
 
   // Operadoras disponíveis para seleção (excluindo as já selecionadas)
-  // Filtrar para mostrar apenas ASSIM SAÚDE
+  // Filtrar para mostrar apenas ASSIM SAÚDE (usando utilitário centralizado)
   const operadorasDisponiveisParaSelecao = useMemo(() => {
-    const apenasAssimSaude = operadorasDisponiveis.filter(
-      (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
-    )
+    const apenasAssimSaude = filterAssimSaude(operadorasDisponiveis)
     return apenasAssimSaude.filter((op: string) => !operadoras.includes(op))
   }, [operadorasDisponiveis, operadoras])
 
@@ -258,15 +212,13 @@ export default function SinistralidadeDashboardPage() {
     if (loadingFiltros) return "Carregando..."
     if (operadorasValidas.length === 0) return "Todas"
     if (operadorasValidas.length === 1) return operadorasValidas[0]
-    // Se houver múltiplas, mostrar os nomes separados por vírgula (máximo 2 para não ficar muito longo)
     if (operadorasValidas.length <= 2) {
       return operadorasValidas.join(", ")
     }
-    // Se houver mais de 2, mostrar as primeiras 2 + contador
     return `${operadorasValidas.slice(0, 2).join(", ")} +${operadorasValidas.length - 2}`
   }, [loadingFiltros, operadorasValidas])
 
-  // Garantir que o valor do tipo está na lista disponível
+  // Garantir que o valor do tipo está na lista disponível (memoizado)
   const tipoValido = useMemo(() => {
     if (!tipo || tipo === "Todos") {
       return "Todos"
@@ -274,50 +226,73 @@ export default function SinistralidadeDashboardPage() {
     return tiposDisponiveis.includes(tipo) ? tipo : "Todos"
   }, [tipo, tiposDisponiveis])
 
-  // Filtrar operadoras válidas (que estão na lista disponível)
-
-  const entidadesBase = useMemo(() => {
-    // Se houver operadoras selecionadas, mostrar entidades dessas operadoras
-    if (operadorasValidas.length > 0) {
-      const entidadesFiltradas = new Set<string>()
-      operadorasValidas.forEach(op => {
-        if (entidadesPorOperadora[op]) {
-          entidadesPorOperadora[op].forEach(ent => entidadesFiltradas.add(ent))
-        }
-      })
-      return Array.from(entidadesFiltradas)
+  // Mostrar erros se houver
+  useEffect(() => {
+    if (errorEntidades) {
+      console.error("Erro ao carregar entidades:", errorEntidades)
     }
+    if (errorTipos) {
+      console.error("Erro ao carregar tipos:", errorTipos)
+    }
+  }, [errorEntidades, errorTipos])
+
+  // Filtrar entidades baseado nas operadoras selecionadas E período (meses)
+  // O hook useEntidadesPorMes já retorna entidades filtradas por:
+  // - Período (meses de referência selecionados)
+  // - Operadora ASSIM SAÚDE (hardcoded na API)
+  // 
+  // Quando há operadoras selecionadas, usar apenas entidadesDisponiveis que já estão
+  // filtradas por período E operadora. Não precisamos usar entidadesPorOperadoraGlobal
+  // porque o hook já faz esse filtro.
+  const entidadesBase = useMemo(() => {
+    // Se há operadoras selecionadas, usar apenas entidadesDisponiveis
+    // que já estão filtradas por período (meses) E operadora ASSIM SAÚDE
+    if (operadorasValidas.length > 0) {
+      // entidadesDisponiveis já vem filtrada por período e operadora da API
+      // Apenas garantir que está ordenada
+      return [...entidadesDisponiveis].sort()
+    }
+    
+    // Se não há operadoras selecionadas, mostrar todas as entidades disponíveis para os meses
     return entidadesDisponiveis
-  }, [operadorasValidas, entidadesDisponiveis, entidadesPorOperadora])
+  }, [operadorasValidas, entidadesDisponiveis])
 
   const entidadesDisponiveisParaSelecao = useMemo(() => {
     return entidadesBase.filter(ent => !entidades.includes(ent))
   }, [entidadesBase, entidades])
 
-  const toggleOperadora = (op: string) => {
+  // Callbacks memoizados para evitar re-renders desnecessários
+  const toggleOperadora = useCallback((op: string) => {
+    const novasOperadoras = operadoras.includes(op)
+      ? operadoras.filter(o => o !== op)
+      : [...operadoras, op]
+    
+    // Filtrar entidades para manter apenas as que estão disponíveis para o período atual
+    // e pertencem às operadoras selecionadas (entidadesDisponiveis já está filtrada por período e operadora)
+    const entidadesValidas = novasOperadoras.length > 0
+      ? entidades.filter(ent => entidadesDisponiveis.includes(ent))
+      : []
+    
     updateFilters({
-      operadoras: operadoras.includes(op)
-        ? operadoras.filter(o => o !== op)
-        : [...operadoras, op],
-      entidades: [] // Resetar entidades quando mudar operadoras
+      operadoras: novasOperadoras,
+      entidades: entidadesValidas
     })
     setEntidadeSelectKey(prev => prev + 1)
-  }
+  }, [operadoras, entidades, entidadesDisponiveis, updateFilters])
 
-  const toggleEntidade = (ent: string) => {
+  const toggleEntidade = useCallback((ent: string) => {
     updateFilters({
       entidades: entidades.includes(ent)
         ? entidades.filter(e => e !== ent)
         : [...entidades, ent]
     })
-  }
+  }, [entidades, updateFilters])
 
-  const toggleMes = (mesValue: string) => {
+  const toggleMes = useCallback((mesValue: string) => {
     const novosMeses = mesesReferencia.includes(mesValue)
       ? mesesReferencia.filter(m => m !== mesValue)
       : [...mesesReferencia, mesValue]
     
-    // Garantir que nunca fique vazio - se tentar remover o último, não permite
     if (novosMeses.length === 0) {
       toast({
         title: "Atenção",
@@ -327,10 +302,10 @@ export default function SinistralidadeDashboardPage() {
       return
     }
 
-    // Ordenar os meses
-    const mesesOrdenados = novosMeses.sort()
+    // Ordenar meses em ordem cronológica
+    const mesesOrdenados = [...novosMeses].sort()
     updateFilters({ mesesReferencia: mesesOrdenados })
-  }
+  }, [mesesReferencia, updateFilters, toast])
 
   const getTextoMesesSelecionados = () => {
     if (mesesReferencia.length === 0) return "Selecione os meses"
@@ -342,8 +317,7 @@ export default function SinistralidadeDashboardPage() {
     return `${mesesReferencia.length} meses selecionados`
   }
 
-  const clearFilters = () => {
-    // Usar o mês atual como padrão
+  const clearFilters = useCallback(() => {
     const hoje = new Date()
     const ano = hoje.getFullYear()
     const mes = String(hoje.getMonth() + 1).padStart(2, "0")
@@ -356,528 +330,165 @@ export default function SinistralidadeDashboardPage() {
       cpf: "",
     })
     setEntidadeSelectKey(prev => prev + 1)
-  }
+  }, [updateFilters])
 
-  // Correção de filtros inválidos - apenas uma vez após filtros carregarem
-  const filtrosInvalidosCorrigidosRef = useRef(false)
-  const correcaoEmAndamentoRef = useRef(false)
+  // Função para atualizar/recarregar dados
+  const handleRefresh = useCallback(() => {
+    refreshEntidades()
+    refreshTipos()
+  }, [refreshEntidades, refreshTipos])
+
+  // Função para formatar valores monetários
+  const fmtBRL = useCallback((valor: number) => {
+    return new Intl.NumberFormat("pt-BR", {
+      style: "currency",
+      currency: "BRL",
+    }).format(valor)
+  }, [])
+
+  // Função para formatar números
+  const fmtNumber = useCallback((valor: number) => {
+    return new Intl.NumberFormat("pt-BR").format(valor)
+  }, [])
+
+  // Carregar cards de status de vidas
   useEffect(() => {
-    // Evitar execução se já estiver corrigindo ou se já foi corrigido
-    if (loadingFiltros || filtrosInvalidosCorrigidosRef.current || correcaoEmAndamentoRef.current) {
+    if (mesesReferencia.length === 0) {
+      setCardsStatusVidas(null)
+      return
+    }
+
+    let cancelled = false
+    setLoadingCardsStatus(true)
+
+    const loadCardsStatus = async () => {
+      try {
+        const params = new URLSearchParams({
+          meses_referencia: mesesReferencia.join(","),
+        })
+
+        if (operadoras.length > 0) {
+          params.append("operadoras", operadoras.join(","))
+        }
+
+        if (entidades.length > 0) {
+          params.append("entidades", entidades.join(","))
+        }
+
+        if (tipo && tipo !== "Todos") {
+          params.append("tipo", tipo)
+        }
+
+        if (cpf) {
+          params.append("cpf", cpf)
+        }
+
+        const res = await fetchNoStore(`/api/sinistralidade/cards-status-vidas?${params}`)
+        
+        if (cancelled) return
+
+        if (!res.ok) {
+          throw new Error("Erro ao carregar cards de status")
+        }
+
+        const data = await res.json()
+        
+        if (cancelled) return
+
+        setCardsStatusVidas(data)
+      } catch (error: any) {
+        if (cancelled) return
+        console.error("Erro ao carregar cards de status:", error)
+        toast({
+          title: "Erro",
+          description: "Não foi possível carregar cards de status",
+          variant: "destructive",
+        })
+      } finally {
+        if (!cancelled) {
+          setLoadingCardsStatus(false)
+        }
+      }
+    }
+
+    loadCardsStatus()
+
+    return () => {
+      cancelled = true
+    }
+  }, [mesesReferencia, operadoras, entidades, tipo, cpf, toast])
+
+  // Validação automática de filtros (usando utilitário centralizado)
+  const validacaoExecutadaRef = useRef(false)
+  useEffect(() => {
+    if (loadingFiltros || loadingTipos || validacaoExecutadaRef.current) {
       return
     }
     
-    const operadorasInvalidas = operadoras.filter(op => !operadorasDisponiveis.includes(op))
-    const tipoInvalido = tipo && tipo !== "Todos" && !tiposDisponiveis.includes(tipo)
+    const updates = validateFilters(filters, {
+      operadorasDisponiveis,
+      tiposDisponiveis,
+    })
     
-    // Só corrigir se realmente houver algo inválido
-    if (operadorasInvalidas.length > 0 || tipoInvalido) {
-      correcaoEmAndamentoRef.current = true
-      filtrosInvalidosCorrigidosRef.current = true
+    // Validar entidades selecionadas contra operadoras selecionadas E período
+    // entidadesDisponiveis já está filtrada por período (meses) e operadora ASSIM SAÚDE
+    if (operadoras.length > 0 && entidadesDisponiveis.length > 0) {
+      const entidadesValidas = entidades.filter(ent => 
+        entidadesDisponiveis.includes(ent)
+      )
       
-      // Fazer todas as correções de uma vez para evitar múltiplos updates
-      const updates: Partial<{ operadoras: string[]; entidades: string[]; tipo: string }> = {}
-      if (operadorasInvalidas.length > 0) {
-        updates.operadoras = operadoras.filter(op => operadorasDisponiveis.includes(op))
-        updates.entidades = []
+      if (entidadesValidas.length !== entidades.length) {
+        updates.entidades = entidadesValidas
       }
-      if (tipoInvalido) {
+    }
+    
+    // Validar tipo selecionado contra tipos disponíveis para o período
+    // tiposDisponiveis já está filtrado por período (meses) e operadora ASSIM SAÚDE
+    if (tipo && tipo !== "Todos" && tiposDisponiveis.length > 0) {
+      if (!tiposDisponiveis.includes(tipo)) {
         updates.tipo = "Todos"
       }
-      
-      if (Object.keys(updates).length > 0) {
-        updateFilters(updates)
-        if (updates.entidades !== undefined) {
-          setEntidadeSelectKey(prev => prev + 1)
-        }
+    }
+    
+    if (Object.keys(updates).length > 0) {
+      validacaoExecutadaRef.current = true
+      updateFilters(updates)
+      if (updates.entidades !== undefined) {
+        setEntidadeSelectKey(prev => prev + 1)
       }
-      
-      // Resetar flag após um pequeno delay para permitir que o update seja processado
-      setTimeout(() => {
-        correcaoEmAndamentoRef.current = false
-      }, 100)
     } else {
-      filtrosInvalidosCorrigidosRef.current = true
+      validacaoExecutadaRef.current = true
     }
-  }, [loadingFiltros, operadoras, operadorasDisponiveis, tipo, tiposDisponiveis, updateFilters])
+  }, [loadingFiltros, loadingTipos, filters, operadorasDisponiveis, tiposDisponiveis, operadoras, entidades, entidadesDisponiveis, tipo, updateFilters])
 
-  // Função auxiliar para calcular os 12 meses: o mês mais recente filtrado + 11 meses anteriores
-  const calcular12MesesParaGrafico = (mesMaisRecente: string): string[] => {
-    const [anoFim, mesFim] = mesMaisRecente.split("-")
-    const meses: string[] = []
-    
-    // Converter para número para facilitar cálculos
-    let ano = parseInt(anoFim)
-    let mes = parseInt(mesFim) // mes está em formato 1-12 (novembro = 11)
-    
-    // Gerar os 12 meses: o mês mais recente filtrado + os 11 meses anteriores
-    // Começamos pelo mês mais recente e vamos retrocedendo
-    for (let i = 0; i < 12; i++) {
-      // Adicionar o mês atual no início do array (para manter ordem cronológica crescente)
-      meses.unshift(`${ano}-${String(mes).padStart(2, "0")}`)
-      
-      // Retroceder um mês para a próxima iteração
-      mes--
-      if (mes < 1) {
-        mes = 12
-        ano--
-      }
-    }
-    
-    // Resultado: array com 12 meses em ordem crescente
-    // Exemplo para Nov 2025: ["2024-12", "2025-01", ..., "2025-11"]
-    return meses
-  }
-
-  // Carregar dados detalhados
-  const loadDadosDetalhados = useCallback(async (
-    dataInicio: string,
-    dataFim: string,
-    pagina: number = 1,
-    mesesFiltrados?: string[],
-    overrides?: {
-      operadoras?: string[]
-      entidades?: string[]
-      tipo?: string
-      cpf?: string
-    }
-  ): Promise<boolean> => {
-    const startedAt = getNow()
-    logSinistralidade("loadDadosDetalhados CHAMADO", { dataInicio, dataFim, pagina })
-
-    setLoadingDetalhados(true)
-    try {
-      const params = new URLSearchParams({
-        data_inicio: dataInicio,
-        data_fim: dataFim,
-        pagina: pagina.toString(),
-        limite: "20",
-      })
-      const operadorasFiltro = overrides?.operadoras ?? operadorasValidas
-      const entidadesFiltro = overrides?.entidades ?? entidades
-      const tipoFiltro = overrides?.tipo ?? tipoValido
-      const cpfFiltro = overrides?.cpf ?? cpf
-
-      if (operadorasFiltro.length > 0) params.append("operadoras", operadorasFiltro.join(","))
-      if (entidadesFiltro.length > 0) params.append("entidades", entidadesFiltro.join(","))
-      if (tipoFiltro && tipoFiltro !== "Todos") params.append("tipo", tipoFiltro)
-      if (cpfFiltro) params.append("cpf", cpfFiltro)
-      if (mesesFiltrados && mesesFiltrados.length > 0) params.append("meses_referencia", mesesFiltrados.join(","))
-
-      const res = await fetchNoStore(`/api/beneficiarios/detalhados?${params}`)
-      if (!res.ok) throw new Error("Erro ao carregar dados detalhados")
-      
-      const data = await res.json()
-      const novosDados = data.dados || []
-      
-      // Preservar linhas expandidas ao atualizar dados detalhados (paginação)
-      // Função auxiliar para gerar key do grupo (mesma lógica usada em dadosAgrupados)
-      const getGrupoKey = (row: any) => {
-        if (row?.CPF) return `cpf:${row.CPF}`
-        if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
-        const parts = [
-          row?.OPERADORA || "SEM-OPERADORA",
-          row?.PLANO || "SEM-PLANO",
-          row?.NOME || "SEM-NOME",
-          row?.ENTIDADE || "SEM-ENTIDADE",
-          row?.STATUS || "SEM-STATUS",
-        ]
-        return `fallback:${parts.join("|")}`
-      }
-      
-      // Preservar keys expandidas que ainda existem nos novos dados
-      const keysExpandidasAtuais = expandedRowKeysRef.current
-      if (keysExpandidasAtuais.size > 0 && novosDados.length > 0) {
-        const novasKeys = new Set<string>()
-        novosDados.forEach((row: any) => {
-          const key = getGrupoKey(row)
-          if (keysExpandidasAtuais.has(key)) {
-            novasKeys.add(key)
-          }
-        })
-        
-        // Preservar todas as keys que ainda existem nos novos dados
-        if (novasKeys.size > 0) {
-          setExpandedRowKeys(novasKeys)
-          expandedRowKeysRef.current = novasKeys
-        }
-      }
-      
-      setDadosDetalhados(novosDados)
-      setDadosNaoIdentificados(data.naoIdentificadosDetalhes || [])
-      setTotalRegistros(data.total || 0)
-      setTotalPaginas(data.totalPaginas || 1)
-      if (pagina === 1) {
-        setPaginaAtual(1) // Resetar apenas se for primeira página
-      }
-      logSinistralidade("loadDadosDetalhados SUCESSO", {
-        pagina,
-        registros: novosDados.length,
-        totalRegistros: data.total || 0,
-        durationMs: Math.round(getNow() - startedAt),
-      })
-      return true
-    } catch (error: any) {
-      logSinistralidade("loadDadosDetalhados ERRO", {
-        message: error?.message || "Erro desconhecido",
-      })
-      console.error("Erro ao carregar dados detalhados:", error)
-      toast({
-        title: "Erro",
-        description: error.message || "Não foi possível carregar dados detalhados",
-        variant: "destructive"
-      })
-      return false
-    } finally {
-      logSinistralidade("loadDadosDetalhados FINALIZADO", {
-        pagina,
-        durationMs: Math.round(getNow() - startedAt),
-      })
-      setLoadingDetalhados(false)
-    }
-  }, [operadorasValidas, entidades, tipoValido, cpf, toast])
-
-  const fetchCardsResumo = useCallback(async (mesReferencia: string | null | undefined) => {
-    if (!mesReferencia) {
-      setCardsResumo(CARDS_RESUMO_VAZIO)
-      return
-    }
-
-    setCardsResumoLoading(true)
-    try {
-      const params = new URLSearchParams({ mes_referencia: mesReferencia })
-      const res = await fetchNoStore(`/api/sinistralidade/cards?${params}`)
-      if (!res.ok) throw new Error("Erro ao carregar cards de sinistralidade")
-      const data = await res.json()
-      setCardsResumo(normalizarCardsResumo(data, mesReferencia))
-    } catch (error: any) {
-      console.error("Erro ao carregar cards de sinistralidade:", error)
-      toast({
-        title: "Erro",
-        description: error?.message || "Não foi possível carregar os cards de sinistralidade",
-        variant: "destructive",
-      })
-      setCardsResumo(CARDS_RESUMO_VAZIO)
-    } finally {
-      setCardsResumoLoading(false)
-    }
-  }, [toast])
-
-  // Carregar entidades com vidas nos meses selecionados
-  const carregarEntidadesPorMeses = useCallback(async (meses: string[]) => {
-    if (!meses || meses.length === 0) {
-      setEntidadesDisponiveis([])
-      setEntidadesPorOperadora({})
-      return
-    }
-
-    try {
-      // Calcular período
-      const mesesOrdenados = [...meses].sort()
-      const primeiroMes = mesesOrdenados[0]
-      const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
-
-      const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
-      const dataInicio = `${anoInicioSel}-${mesInicioSel}-01`
-
-      const [anoFimSel, mesFimSel] = ultimoMes.split("-")
-      const anoFimNum = parseInt(anoFimSel)
-      const mesFimNum = parseInt(mesFimSel)
-      const ultimoDiaDate = new Date(anoFimNum, mesFimNum, 0)
-      const dataFim = ultimoDiaDate.toISOString().split("T")[0]
-
-      // Buscar entidades que têm procedimentos nos meses selecionados
-      const params = new URLSearchParams({
-        data_inicio: dataInicio,
-        data_fim: dataFim,
-        operadora: "ASSIM SAÚDE",
-      })
-
-      const res = await fetchNoStore(`/api/beneficiarios/entidades-por-mes?${params}`)
-      if (!res.ok) {
-        console.error("Erro ao carregar entidades por mês")
-        return
-      }
-
-      const data = await res.json()
-      const entidadesComDados = data.entidades || []
-
-      // Filtrar apenas entidades de ASSIM SAÚDE (já vem filtrado da API, mas garantir)
-      const entidadesAssimSaude = entidadesComDados.filter((ent: string) => Boolean(ent))
-
-      setEntidadesDisponiveis(entidadesAssimSaude)
-      
-      // Atualizar mapeamento de entidades por operadora
-      const entidadesPorOperadoraFiltrado: Record<string, string[]> = {}
-      const operadoraKey = operadorasDisponiveis.find(
-        (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
-      )
-      if (operadoraKey) {
-        entidadesPorOperadoraFiltrado[operadoraKey] = entidadesAssimSaude
-      }
-      setEntidadesPorOperadora(entidadesPorOperadoraFiltrado)
-    } catch (error: any) {
-      console.error("Erro ao carregar entidades por meses:", error)
-    }
-  }, [operadorasDisponiveis])
-
-  // Carregar dados de vidas ativas
-  const getPeriodoSelecionado = useCallback(() => {
-    if (!mesesReferencia || mesesReferencia.length === 0) return null
-    const mesesOrdenados = [...mesesReferencia].sort()
-    const primeiroMes = mesesOrdenados[0]
-    const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
-
-    const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
-    const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
-
-    const [anoFimSel, mesFimSel] = ultimoMes.split("-")
-    const anoFimNum = parseInt(anoFimSel)
-    const mesFimNum = parseInt(mesFimSel)
-    // JavaScript usa mês 0‑based; para pegar o último dia de um mês em formato 1-12,
-    // usamos new Date(ano, mes, 0)
-    const ultimoDiaDate = new Date(anoFimNum, mesFimNum, 0)
-    const dataFimSelecionado = ultimoDiaDate.toISOString().split("T")[0]
-
-    return {
-      mesesOrdenados,
-      dataInicioSelecionado,
-      dataFimSelecionado,
-    }
-  }, [mesesReferencia])
-
-  const buildDashboardRequestContext = useCallback((): DashboardRequestContext | null => {
-    const periodo = getPeriodoSelecionado()
-    if (!periodo) return null
-
-    const { mesesOrdenados, dataInicioSelecionado, dataFimSelecionado } = periodo
-    const mesMaisRecente = mesesOrdenados[mesesOrdenados.length - 1]
-
-    const mesesParaGrafico = calcular12MesesParaGrafico(mesMaisRecente)
-
-    const [anoInicioGrafico, mesInicioGrafico] = mesesParaGrafico[0].split("-")
-    const dataInicioGrafico = `${anoInicioGrafico}-${mesInicioGrafico}-01`
-
-    const [anoFimGrafico, mesFimGrafico] = mesMaisRecente.split("-")
-    const anoNum = parseInt(anoFimGrafico)
-    const mesNum = parseInt(mesFimGrafico)
-    const ultimoDiaGraficoDate = new Date(anoNum, mesNum, 0)
-    const dataFimGrafico = ultimoDiaGraficoDate.toISOString().split("T")[0]
-
-    return {
-      mesesReferencia: mesesOrdenados,
-      dataInicioSelecionado,
-      dataFimSelecionado,
-      operadoras: operadorasValidas,
-      entidades,
-      tipo: tipoValido,
-      cpf,
-      dataInicioGrafico,
-      dataFimGrafico,
-      mesesParaGrafico,
-    }
-  }, [getPeriodoSelecionado, calcular12MesesParaGrafico, operadorasValidas, entidades, tipoValido, cpf])
-
-  // REMOVIDO: useEffect que forçava mês padrão
-  // O store já cuida de fornecer valores padrão quando necessário
-  // Não devemos forçar valores aqui para evitar conflitos com o store
-
-  // Carregar dados do dashboard - APENAS quando chamado explicitamente (botão Atualizar ou carregamento inicial)
-  // OTIMIZADO: Paraleliza chamadas de API e centraliza estado de loading
-  const loadDashboard = useCallback(async () => {
-    const startedAt = getNow()
-    logSinistralidade("loadDashboard CHAMADO", {
-      inProgress: loadDashboardInProgressRef.current,
-    })
-
-    if (loadDashboardInProgressRef.current) {
-      logSinistralidade("loadDashboard IGNORADO", {
-        reason: "já em progresso",
-      })
-      return
-    }
-    loadDashboardInProgressRef.current = true
-
-    const context = buildDashboardRequestContext()
-    if (!context) {
-      logSinistralidade("loadDashboard ABORTADO", { reason: "contexto inválido" })
-      loadDashboardInProgressRef.current = false
-      setIsDashboardReady(false)
-      signalPageLoaded("loadDashboard-sem-contexto")
-      return
-    }
-
-    setLoading(true)
-    setIsDashboardReady(false)
-    
-    try {
-      // OTIMIZAÇÃO: Paralelizar todas as chamadas de API
-      const vidasStartTime = getNow()
-      const cardsStartTime = getNow()
-      const detalhadosStartTime = getNow()
-
-      // Preparar parâmetros
-      const paramsVidas = new URLSearchParams({
-        data_inicio: context.dataInicioGrafico,
-        data_fim: context.dataFimGrafico,
-      })
-      if (context.operadoras.length > 0) paramsVidas.append("operadoras", context.operadoras.join(","))
-      if (context.entidades.length > 0) paramsVidas.append("entidades", context.entidades.join(","))
-      if (context.tipo && context.tipo !== "Todos") paramsVidas.append("tipo", context.tipo)
-
-      const mesParaCards = context.mesesReferencia?.[context.mesesReferencia.length - 1]
-
-      // Executar todas as chamadas em paralelo
-      const [vidasRes, cardsRes, detalhadosRes] = await Promise.allSettled([
-        // 1. Vidas ativas (gráfico)
-        fetchNoStore(`/api/beneficiarios/ativos?${paramsVidas}`).then(res => {
-          if (!res.ok) throw new Error("Erro ao carregar vidas ativas")
-          return res.json()
-        }),
-        // 2. Cards resumo
-        mesParaCards 
-          ? fetchNoStore(`/api/sinistralidade/cards?mes_referencia=${mesParaCards}&data_inicio=${context.dataInicioSelecionado}&data_fim=${context.dataFimSelecionado}${context.operadoras.length > 0 ? `&operadoras=${context.operadoras.join(",")}` : ""}${context.entidades.length > 0 ? `&entidades=${context.entidades.join(",")}` : ""}${context.tipo && context.tipo !== "Todos" ? `&tipo=${context.tipo}` : ""}${context.cpf ? `&cpf=${context.cpf}` : ""}`)
-              .then(res => {
-                if (!res.ok) throw new Error("Erro ao carregar cards")
-                return res.json()
-              })
-          : Promise.resolve([]),
-        // 3. Dados detalhados
-        loadDadosDetalhados(
-          context.dataInicioSelecionado,
-          context.dataFimSelecionado,
-          1,
-          context.mesesReferencia,
-          {
-            operadoras: context.operadoras,
-            entidades: context.entidades,
-            tipo: context.tipo,
-            cpf: context.cpf,
-          }
-        ),
-      ])
-
-      // Processar resultados
-      const vidasDuration = Math.round(getNow() - vidasStartTime)
-      const cardsDuration = Math.round(getNow() - cardsStartTime)
-      const detalhadosDuration = Math.round(getNow() - detalhadosStartTime)
-
-      // Vidas ativas
-      if (vidasRes.status === "fulfilled") {
-        const vidasData = vidasRes.value
-        const dadosPorMes = new Map<string, VidasAtivasPorMes>()
-        ;(vidasData || []).forEach((item: VidasAtivasPorMes) => {
-          dadosPorMes.set(item.mes_referencia, item)
-        })
-
-        const vidasCompletas = context.mesesParaGrafico.map(mes => {
-          const dadosDoMes = dadosPorMes.get(mes)
-          if (dadosDoMes) {
-            return dadosDoMes
-          }
-          return { mes_referencia: mes, vidas_ativas: 0 }
-        })
-
-        setVidasAtivas(vidasCompletas)
-        logSinistralidade("loadDashboard -> vidas ativas carregadas", { durationMs: vidasDuration })
-      } else {
-        logSinistralidade("loadDashboard -> erro vidas ativas", { error: vidasRes.reason })
-        setVidasAtivas([])
-      }
-
-      // Cards resumo
-      if (cardsRes.status === "fulfilled" && mesParaCards) {
-        const cardsData = cardsRes.value
-        setCardsResumo(normalizarCardsResumo(Array.isArray(cardsData) ? cardsData[0] : cardsData, mesParaCards))
-        logSinistralidade("loadDashboard -> cards carregados", { durationMs: cardsDuration })
-      } else if (cardsRes.status === "rejected") {
-        logSinistralidade("loadDashboard -> erro cards", { error: cardsRes.reason })
-        setCardsResumo(CARDS_RESUMO_VAZIO)
-      }
-
-      // Dados detalhados
-      if (detalhadosRes.status === "fulfilled") {
-        logSinistralidade("loadDashboard -> detalhados carregados", { durationMs: detalhadosDuration })
-      } else {
-        logSinistralidade("loadDashboard -> erro detalhados", { error: detalhadosRes.reason })
-      }
-
-      const totalDuration = Math.round(getNow() - startedAt)
-      logSinistralidade("loadDashboard SUCESSO", {
-        durationMs: totalDuration,
-        vidasMs: vidasDuration,
-        cardsMs: cardsDuration,
-        detalhadosMs: detalhadosDuration,
-        rangeInicio: context.dataInicioSelecionado,
-        rangeFim: context.dataFimSelecionado,
-      })
-
-      // Só marcar como pronto quando tudo estiver carregado
-      setIsDashboardReady(true)
-    } catch (error: any) {
-      logSinistralidade("loadDashboard ERRO", {
-        message: error?.message || "Erro desconhecido",
-      })
-      console.error("Erro ao carregar dashboard:", error)
-      toast({
-        title: "Erro",
-        description: error.message || "Não foi possível carregar dados do dashboard",
-        variant: "destructive"
-      })
-      setVidasAtivas([])
-      setDadosDetalhados([])
-      setCardsResumo(CARDS_RESUMO_VAZIO)
-      setIsDashboardReady(false)
-    } finally {
-      setLoading(false)
-      loadDashboardInProgressRef.current = false
-      const totalDuration = Math.round(getNow() - startedAt)
-      logSinistralidade("loadDashboard FINALIZADO", {
-        durationMs: totalDuration,
-      })
-      signalPageLoaded("loadDashboard-finally")
-    }
-  }, [buildDashboardRequestContext, loadDadosDetalhados, toast])
-
-  // Manter referência do loadDashboard mais recente para uso em loadAllData estável
+  // Carregar filtros disponíveis (apenas uma vez)
   useEffect(() => {
-    latestLoadDashboardRef.current = loadDashboard
-    logSinistralidade("latestLoadDashboardRef atualizado")
-  }, [loadDashboard])
-  
-  // Carregar todos os dados necessários na inicialização (primeiro filtros, depois dashboard)
-  const loadAllData = useCallback(async () => {
-    const startedAt = getNow()
-    loadAllDataCalledRef.current += 1
-    logSinistralidade("loadAllData CHAMADO", { count: loadAllDataCalledRef.current })
-
-    setLoading(true)
-    let dashboardExecutado = false
-    try {
-      logSinistralidade("loadAllData -> carregando filtros disponíveis")
+    let cancelled = false
+    
+    const loadFiltros = async () => {
       try {
         const res = await fetchNoStore("/api/beneficiarios/filtros")
         if (!res.ok) throw new Error("Erro ao carregar filtros")
         const data = await res.json()
-        // Filtrar para mostrar apenas ASSIM SAÚDE
-        const operadorasFiltradas = (data.operadoras || []).filter(
-          (op: string) => op.toUpperCase() === "ASSIM SAÚDE" || op.toUpperCase() === "ASSIM SAUDE"
-        )
+        
+        if (cancelled) return
+        
+        // Filtrar apenas ASSIM SAÚDE usando utilitário centralizado
+        const operadorasFiltradas = filterAssimSaude(data.operadoras || [])
         setOperadorasDisponiveis(operadorasFiltradas)
-        // Entidades serão carregadas baseadas nos meses selecionados
-        // Por enquanto, manter vazio até que os meses sejam selecionados
-        setEntidadesDisponiveis([])
-        setEntidadesPorOperadora({})
-        setTiposDisponiveis(data.tipos || [])
+        
+        // Filtrar entidadesPorOperadora para mostrar apenas ASSIM SAÚDE
+        const entidadesPorOperadoraFiltrado: Record<string, string[]> = {}
+        operadorasFiltradas.forEach(op => {
+          if (data.entidadesPorOperadora && data.entidadesPorOperadora[op]) {
+            entidadesPorOperadoraFiltrado[op] = data.entidadesPorOperadora[op]
+          }
+        })
+        setEntidadesPorOperadoraGlobal(entidadesPorOperadoraFiltrado)
+        
         setLoadingFiltros(false)
-        logSinistralidade("loadAllData -> filtros atualizados", {
-          operadoras: (data.operadoras || []).length,
-          entidades: (data.entidades || []).length,
-        })
       } catch (error: any) {
-        logSinistralidade("loadAllData -> erro ao carregar filtros", {
-          message: error?.message || "Erro desconhecido",
-        })
+        if (cancelled) return
         console.error("Erro ao carregar filtros:", error)
         toast({
           title: "Erro",
@@ -886,330 +497,14 @@ export default function SinistralidadeDashboardPage() {
         })
         setLoadingFiltros(false)
       }
-      
-      if (latestLoadDashboardRef.current) {
-        logSinistralidade("loadAllData -> disparando loadDashboard")
-        await latestLoadDashboardRef.current()
-        dashboardExecutado = true
-      }
-
-      logSinistralidade("loadAllData SUCESSO", {
-        durationMs: Math.round(getNow() - startedAt),
-      })
-    } catch (error: any) {
-      logSinistralidade("loadAllData ERRO", {
-        message: error?.message || "Erro desconhecido",
-      })
-      console.error("Erro ao carregar dados:", error)
-      hasLoadedRef.current = false // permite nova tentativa se algo falhar
-    } finally {
-      setLoading(false)
-      if (!dashboardExecutado) {
-        signalPageLoaded("loadAllData-sem-dashboard")
-      }
+    }
+    
+    loadFiltros()
+    
+    return () => {
+      cancelled = true
     }
   }, [toast])
-
-  // Carregamento inicial controlado: só dispara após auth e apenas uma vez por montagem
-  useEffect(() => {
-    const pageLoadStartTime = getNow()
-    logSinistralidade("PAGE MOUNT", { timestamp: new Date().toISOString() })
-
-    if (authLoading) {
-      logSinistralidade("loadAllData guardado", { reason: "authLoading" })
-      return
-    }
-    if (!user || user.role !== "admin") {
-      logSinistralidade("loadAllData guardado", { reason: "sem usuário admin" })
-      return
-    }
-    if (hasLoadedRef.current) {
-      logSinistralidade("loadAllData guardado", { reason: "já carregado" })
-      return
-    }
-
-    logSinistralidade("useEffect disparando loadAllData", {
-      timeSinceMount: Math.round(getNow() - pageLoadStartTime),
-    })
-    hasLoadedRef.current = true
-    
-    // Medir tempo total de carregamento da página
-    loadAllData().then(() => {
-      const totalLoadTime = Math.round(getNow() - pageLoadStartTime)
-      logSinistralidade("PAGE FULLY LOADED", {
-        totalLoadTimeMs: totalLoadTime,
-        target: 10000, // 10 segundos
-        withinTarget: totalLoadTime <= 10000,
-      })
-    })
-  }, [authLoading, user, loadAllData])
-
-  // Carregar entidades quando os meses mudarem
-  useEffect(() => {
-    if (mesesReferencia.length > 0) {
-      carregarEntidadesPorMeses(mesesReferencia)
-    } else {
-      setEntidadesDisponiveis([])
-      setEntidadesPorOperadora({})
-    }
-  }, [mesesReferencia, carregarEntidadesPorMeses])
-
-  // REMOVIDO: useEffect que recarregava automaticamente quando filtros mudavam
-  // A página fica congelada até o usuário clicar no botão "Atualizar"
-  // Mesma abordagem da página de Histórico de Bonificações - sem reloads automáticos
-
-  const fmtNumber = (v: number) => 
-    new Intl.NumberFormat("pt-BR").format(v)
-
-  const fmtCurrency = (v: number | null | undefined) => {
-    if (v === null || v === undefined) return "-"
-    return new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" }).format(v)
-  }
-
-  const fmtDate = (value?: string | null) => {
-    if (!value) return "-"
-    const date = new Date(value)
-    if (isNaN(date.getTime())) return value
-    return date.toLocaleDateString("pt-BR")
-  }
-
-  const fmtMes = (mes: string) => {
-    const [ano, mesNum] = mes.split("-")
-    const date = new Date(parseInt(ano), parseInt(mesNum) - 1, 1)
-    return date.toLocaleDateString("pt-BR", { month: "short", year: "numeric" })
-  }
-
-  const parseValor = (valor: any): number => {
-    if (typeof valor === "number") return valor
-    if (typeof valor === "string") {
-      const parsed = Number(valor.replace(",", "."))
-      return isNaN(parsed) ? 0 : parsed
-    }
-    return 0
-  }
-
-  // Memoizar dados do gráfico para evitar recálculos desnecessários
-  const chartData = useMemo(() => {
-    const startTime = getNow()
-    const result = vidasAtivas.map(item => {
-      const comProc = item.vidas_ativas_com_procedimento ?? 0
-      const semProc =
-        item.vidas_ativas_sem_procedimento ?? Math.max((item.vidas_ativas || 0) - comProc, 0)
-
-      return {
-        ...item,
-        mes: fmtMes(item.mes_referencia),
-        vidas_ativas_com_procedimento: comProc,
-        vidas_ativas_sem_procedimento: semProc,
-      }
-    })
-    const duration = Math.round(getNow() - startTime)
-    if (duration > 10) {
-      logSinistralidade("chartData useMemo", { durationMs: duration, items: result.length })
-    }
-    return result
-  }, [vidasAtivas])
-
-  const dadosAgrupados = useMemo(() => {
-    const getGrupoKey = (row: any) => {
-      if (row?.CPF) return `cpf:${row.CPF}`
-      if (row?.ID_BENEFICIARIO) return `id:${row.ID_BENEFICIARIO}`
-      const parts = [
-        row?.OPERADORA || "SEM-OPERADORA",
-        row?.PLANO || "SEM-PLANO",
-        row?.NOME || "SEM-NOME",
-        row?.ENTIDADE || "SEM-ENTIDADE",
-        row?.STATUS || "SEM-STATUS",
-      ]
-      return `fallback:${parts.join("|")}`
-    }
-
-    const grupos = new Map<
-      string,
-      {
-        key: string
-        info: any
-        procedimentos: {
-          evento?: string | null
-          descricao?: string | null
-          especialidade?: string | null
-          valor: number
-          data_competencia?: string | null
-          data_atendimento?: string | null
-        }[]
-        totalValor: number
-        gastoAnual: number
-      }
-    >()
-
-    dadosDetalhados.forEach(row => {
-      const key = getGrupoKey(row)
-      const valorProcedimento = parseValor(row.VALOR)
-      const gastoAnual = parseValor(row.GASTO_ANUAL)
-      if (!grupos.has(key)) {
-        grupos.set(key, {
-          key,
-          info: row,
-          procedimentos: [],
-          totalValor: 0,
-          gastoAnual,
-        })
-      }
-      const grupo = grupos.get(key)!
-      if (gastoAnual > 0) {
-        grupo.gastoAnual = gastoAnual
-      }
-        grupo.procedimentos.push({
-        evento: row.EVENTO,
-        descricao: row.DESCRICAO,
-        especialidade: row.ESPECIALIDADE,
-        valor: valorProcedimento,
-        data_competencia: row.DATA_COMPETENCIA,
-        data_atendimento: row.DATA_ATENDIMENTO,
-      })
-      grupo.totalValor += valorProcedimento
-    })
-
-    return Array.from(grupos.values())
-      .map(grupo => ({
-        ...grupo,
-        info: {
-          ...grupo.info,
-          NOME: grupo.info?.NOME
-            ? grupo.info.NOME
-                .toLowerCase()
-                .split(" ")
-                .filter(Boolean)
-                .map((part: string) => part.charAt(0).toUpperCase() + part.slice(1))
-                .join(" ")
-            : grupo.info?.NOME,
-        },
-      }))
-      .sort((a, b) => {
-        if (b.gastoAnual !== a.gastoAnual) {
-          return b.gastoAnual - a.gastoAnual
-        }
-        return b.totalValor - a.totalValor
-      })
-  }, [dadosDetalhados])
-
-  // Agrupar dados não identificados por CPF
-  const dadosNaoIdentificadosAgrupados = useMemo(() => {
-    const grupos = new Map<
-      string,
-      {
-        key: string
-        cpf: string
-        procedimentos: {
-          evento?: string | null
-          descricao?: string | null
-          especialidade?: string | null
-          valor: number
-          data_competencia?: string | null
-          data_atendimento?: string | null
-        }[]
-        totalValor: number
-      }
-    >()
-
-    dadosNaoIdentificados.forEach(row => {
-      const cpf = row.CPF || "SEM-CPF"
-      const key = `nao-identificado-${cpf}`
-      const valorProcedimento = parseValor(row.VALOR)
-      
-      if (!grupos.has(key)) {
-        grupos.set(key, {
-          key,
-          cpf,
-          procedimentos: [],
-          totalValor: 0,
-        })
-      }
-      const grupo = grupos.get(key)!
-      grupo.procedimentos.push({
-        evento: row.EVENTO,
-        descricao: row.DESCRICAO,
-        especialidade: row.ESPECIALIDADE,
-        valor: valorProcedimento,
-        data_competencia: row.DATA_COMPETENCIA,
-        data_atendimento: row.DATA_ATENDIMENTO,
-      })
-      grupo.totalValor += valorProcedimento
-    })
-
-    return Array.from(grupos.values())
-      .sort((a, b) => b.totalValor - a.totalValor)
-  }, [dadosNaoIdentificados])
-
-  // REMOVIDO: useEffect que fechava linhas expandidas automaticamente
-  // As linhas expandidas agora ficam abertas até o usuário fechar manualmente
-  // Não há mais reloads automáticos que fecham as linhas
-
-  const toggleExpandRow = (key: string) => {
-    setExpandedRowKeys(prev => {
-      const next = new Set(prev)
-      if (next.has(key)) {
-        next.delete(key)
-      } else {
-        next.add(key)
-      }
-      // Atualizar ref também para garantir persistência
-      expandedRowKeysRef.current = next
-      return next
-    })
-  }
-
-  const recarregarPaginaDetalhados = useCallback(async (paginaDestino: number) => {
-    if (mesesReferencia.length === 0) {
-      logSinistralidade("recarregarPaginaDetalhados abortado", { reason: "sem meses", paginaDestino })
-      return false
-    }
-
-    logSinistralidade("recarregarPaginaDetalhados CHAMADO", { paginaDestino })
-
-    // Calcular período selecionado
-    const mesesOrdenados = [...mesesReferencia].sort()
-    const primeiroMes = mesesOrdenados[0]
-    const ultimoMes = mesesOrdenados[mesesOrdenados.length - 1]
-
-    const [anoInicioSel, mesInicioSel] = primeiroMes.split("-")
-    const dataInicioSelecionado = `${anoInicioSel}-${mesInicioSel}-01`
-
-    const [anoFimSel, mesFimSel] = ultimoMes.split("-")
-    const anoFimNum = parseInt(anoFimSel)
-    const mesFimNum = parseInt(mesFimSel)
-    const ultimoDiaSelecionadoDate = new Date(anoFimNum, mesFimNum, 0)
-    const dataFimSelecionado = ultimoDiaSelecionadoDate.toISOString().split("T")[0]
-
-    const sucesso = await loadDadosDetalhados(
-      dataInicioSelecionado,
-      dataFimSelecionado,
-      paginaDestino,
-      mesesReferencia,
-      {
-        operadoras: operadorasValidas,
-        entidades: entidades,
-        tipo: tipoValido,
-        cpf,
-      }
-    )
-    logSinistralidade("recarregarPaginaDetalhados FINALIZADO", { paginaDestino, sucesso })
-    return sucesso
-  }, [loadDadosDetalhados, mesesReferencia, operadorasValidas, entidades, tipoValido, cpf])
-
-  const handleAtualizarClick = useCallback(async () => {
-    if (!hasLoadedRef.current) {
-      logSinistralidade("handleAtualizarClick -> carregamento inicial forçado")
-      hasLoadedRef.current = true
-      await loadAllData()
-      return
-    }
-    logSinistralidade("handleAtualizarClick -> disparando loadDashboard manual")
-    await loadDashboard()
-  }, [loadAllData, loadDashboard])
-
-  // REMOVIDO: useEffects complexos e refs desnecessárias
-  // Agora usa abordagem simples como Histórico de Bonificações
 
   // Aguardar carregamento do usuário antes de renderizar
   if (authLoading) {
@@ -1440,7 +735,7 @@ export default function SinistralidadeDashboardPage() {
               <Select 
                 value={tipoValido} 
                 onValueChange={(val) => updateFilters({ tipo: val })}
-                disabled={loadingFiltros}
+                disabled={loadingFiltros || loadingTipos}
               >
                 <SelectTrigger>
                   <SelectValue />
@@ -1455,27 +750,32 @@ export default function SinistralidadeDashboardPage() {
                 </SelectContent>
               </Select>
             </div>
-          <div className="space-y-2">
-            <Label>CPF</Label>
-            <Input
-              value={cpf}
-              onChange={(event) =>
-                updateFilters({
-                  cpf: event.target.value.replace(/\D/g, "").slice(0, 11),
-                })
-              }
-              placeholder="Somente números"
-              maxLength={14}
-            />
-          </div>
+            <div className="space-y-2">
+              <Label>CPF</Label>
+              <Input
+                value={cpf}
+                onChange={(event) =>
+                  updateFilters({
+                    cpf: normalizeCpf(event.target.value),
+                  })
+                }
+                placeholder="Somente números"
+                maxLength={14}
+              />
+            </div>
           </div>
           <div className="mt-4 flex flex-col items-end gap-1">
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={clearFilters}>
                 Limpar
               </Button>
-              <Button onClick={handleAtualizarClick} size="sm" className="gap-2" disabled={loading}>
-                <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              <Button 
+                size="sm" 
+                onClick={handleRefresh}
+                disabled={loadingEntidades || loadingTipos || loadingFiltros}
+                className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
+              >
+                <RefreshCw className={`h-4 w-4 ${loadingEntidades || loadingTipos ? "animate-spin" : ""}`} />
                 Atualizar
               </Button>
             </div>
@@ -1483,380 +783,399 @@ export default function SinistralidadeDashboardPage() {
         </CardContent>
       </Card>
 
-      {/* Cards Resumo Procedimentos */}
-      {(() => {
-        const periodo = getPeriodoSelecionado()
-        if (!periodo) {
-          return (
+      {/* Cards de Status de Vidas com Entidades */}
+      {mesesReferencia.length > 0 && (
+        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4 mt-6">
+          {/* Coluna 1 – Vidas Ativas + entidades ativas */}
+          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:pr-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-              <CardContent className="p-6">
-                <p className="text-muted-foreground">Selecione pelo menos um mês de referência para visualizar os cards.</p>
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Vidas Ativas</CardTitle>
+                <UserCheck className="h-4 w-4 text-green-600" />
+              </CardHeader>
+              <CardContent>
+                {loadingCardsStatus ? (
+                  <>
+                    <Skeleton className="h-8 w-32 mb-2" />
+                    <Skeleton className="h-4 w-24" />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold">
+                      {fmtNumber(cardsStatusVidas?.consolidado?.ativo || 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_ativo || 0)}
+                    </p>
+                    {/* Distribuição por plano - Drilldown */}
+                    {cardsStatusVidas?.consolidado?.por_plano?.ativo && cardsStatusVidas.consolidado.por_plano.ativo.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => togglePlanos('ativo')}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('ativo') ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosExpandidos.has('ativo') && (
+                          <PlanDistributionList
+                            planos={cardsStatusVidas.consolidado.por_plano.ativo}
+                            totalVidas={cardsStatusVidas.consolidado.ativo || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
               </CardContent>
             </Card>
-          )
-        }
-        // Mostrar loading enquanto dashboard não está pronto
-        if (!isDashboardReady || loading) {
-          return (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
-              {[...Array(4)].map((_, i) => (
-                <Card key={i} className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-                  <CardContent className="p-6">
-                    <Skeleton className="h-32 w-full" />
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )
-        }
-        // CardsResumo agora recebe dados já carregados via props (não faz fetch próprio)
-        // Mas mantemos o componente para compatibilidade - ele só renderiza os dados
-        return (
-          <CardsResumo 
-            dataInicio={periodo.dataInicioSelecionado} 
-            dataFim={periodo.dataFimSelecionado}
-            operadoras={operadorasValidas}
-            entidades={entidades}
-            tipo={tipoValido}
-            cpf={cpf}
-          />
-        )
-      })()}
-
-      {/* Gráfico de Vidas Ativas */}
-      <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-        <CardHeader>
-          <CardTitle>Posição Vidas ativas Mensal</CardTitle>
-          <CardDescription>
-            Contagem de beneficiários ativos acumulados - Últimos 12 meses a partir do mês mais recente filtrado
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {!isDashboardReady || loading ? (
-            <Skeleton className="h-64 w-full" />
-          ) : vidasAtivas.length === 0 ? (
-            <p className="text-muted-foreground text-center py-8">Nenhum dado disponível</p>
-          ) : (
-            <ResponsiveContainer width="100%" height={320}>
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="mes" />
-                <YAxis tickFormatter={(value) => fmtNumber(value)} />
-                <Tooltip 
-                  content={({ active, payload }) => {
-                    if (!active || !payload || payload.length === 0) return null
-                    const raw = payload[0].payload as any
-                    const total =
-                      (raw.vidas_ativas as number | undefined) ??
-                      ((raw.vidas_ativas_sem_procedimento || 0) + (raw.vidas_ativas_com_procedimento || 0))
-                    return (
-                      <div className="bg-white dark:bg-zinc-900 p-3 border rounded-lg shadow-lg">
-                        <p className="font-semibold mb-2">{fmtMes(raw.mes_referencia)}</p>
-                        <p className="text-sm mb-1">
-                          <span className="font-semibold" style={{ color: "#CA8282" }}>Com procedimento:</span>{" "}
-                          {fmtNumber(raw.vidas_ativas_com_procedimento || 0)}
-                        </p>
-                        <p className="text-sm mb-1">
-                          <span className="font-semibold" style={{ color: "#333b5f" }}>Sem procedimento:</span>{" "}
-                          {fmtNumber(raw.vidas_ativas_sem_procedimento || 0)}
-                        </p>
-                        <p className="text-sm font-semibold">
-                          Total de vidas ativas: {fmtNumber(total || 0)}
-                        </p>
+            
+            {/* Cards de Entidades - Ativas */}
+            {cardsStatusVidas?.por_entidade?.ativo && cardsStatusVidas.por_entidade.ativo.length > 0 && (
+              <div className="space-y-2">
+                {cardsStatusVidas.por_entidade.ativo.map((entidade) => (
+                  <div
+                    key={entidade.entidade}
+                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                    title={`Entidade: ${entidade.entidade}\nVidas ativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                  >
+                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
+                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas ativas
+                    </p>
+                    <div className="mt-2">
+                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-emerald-500"
+                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                        />
                       </div>
-                    )
-                  }}
-                />
-                <Legend />
-                <Bar
-                  dataKey="vidas_ativas_com_procedimento"
-                  name="Com procedimento"
-                  stackId="1"
-                  fill="#CA8282"
-                />
-                <Bar
-                  dataKey="vidas_ativas_sem_procedimento"
-                  name="Sem procedimento"
-                  stackId="1"
-                  fill="#333b5f"
-                />
-              </BarChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Tabela de Resultados Detalhados */}
-      <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-        <CardHeader>
-          <CardTitle>Resultados Detalhados</CardTitle>
-          <CardDescription>
-            Lista completa de beneficiários ativos com procedimentos
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {loadingDetalhados ? (
-            <div className="space-y-2">
-              {[...Array(5)].map((_, i) => (
-                <Skeleton key={i} className="h-12 w-full" />
-              ))}
-            </div>
-          ) : dadosDetalhados.length === 0 ? (
-            <p className="text-muted-foreground text-center py-8">Nenhum dado disponível</p>
-          ) : (
-            <>
-              <div className="border rounded-md overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10" />
-                    <TableHead>Operadora</TableHead>
-                    <TableHead>Plano</TableHead>
-                    <TableHead>CPF</TableHead>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Idade</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Entidade</TableHead>
-                    <TableHead>Procedimentos</TableHead>
-                    <TableHead>Gasto do Mês</TableHead>
-                    <TableHead>Gasto Anual</TableHead>
-                  </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {dadosAgrupados.map(grupo => {
-                      const isExpanded = expandedRowKeys.has(grupo.key)
-                      return (
-                        <Fragment key={grupo.key}>
-                          <TableRow>
-                            <TableCell className="w-10">
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => toggleExpandRow(grupo.key)}
-                                aria-label={isExpanded ? "Recolher procedimentos" : "Expandir procedimentos"}
-                              >
-                                <ChevronDown
-                                  className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                                />
-                              </Button>
-                            </TableCell>
-                            <TableCell>{grupo.info?.OPERADORA || "-"}</TableCell>
-                            <TableCell>{grupo.info?.PLANO || "-"}</TableCell>
-                            <TableCell>{grupo.info?.CPF || "-"}</TableCell>
-                            <TableCell>{grupo.info?.NOME || "-"}</TableCell>
-                            <TableCell>{grupo.info?.IDADE || "-"}</TableCell>
-                            <TableCell>{grupo.info?.STATUS || "-"}</TableCell>
-                            <TableCell>{grupo.info?.ENTIDADE || "-"}</TableCell>
-                            <TableCell>{grupo.procedimentos.length}</TableCell>
-                            <TableCell>{fmtCurrency(grupo.totalValor)}</TableCell>
-                            <TableCell>{fmtCurrency(grupo.gastoAnual)}</TableCell>
-                          </TableRow>
-                          {isExpanded && (
-                            <TableRow>
-                              <TableCell colSpan={11} className="bg-muted/40">
-                                <div className="space-y-3 p-3">
-                                  <p className="text-sm font-semibold text-muted-foreground">
-                                    Procedimentos realizados
-                                  </p>
-                                  <div className="space-y-3">
-                                    {grupo.procedimentos.map((proc, index) => (
-                                      <div
-                                        key={`${grupo.key}-proc-${index}-${proc.evento || "evento"}`}
-                                        className="rounded-lg border bg-white p-3 text-sm shadow-sm"
-                                      >
-                                        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                                          <div>
-                                            <p className="text-xs uppercase text-muted-foreground">Evento</p>
-                                            <p className="font-medium">{proc.evento || "-"}</p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs uppercase text-muted-foreground">Descrição</p>
-                                            <p className="font-medium break-words whitespace-pre-line">
-                                              {proc.descricao || "-"}
-                                            </p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs uppercase text-muted-foreground">Especialidade</p>
-                                            <p className="font-medium">{proc.especialidade || "-"}</p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs uppercase text-muted-foreground">Data</p>
-                                            <p className="font-medium">{fmtDate(proc.data_atendimento || proc.data_competencia)}</p>
-                                          </div>
-                                          <div>
-                                            <p className="text-xs uppercase text-muted-foreground">Valor</p>
-                                            <p className="font-medium">{fmtCurrency(proc.valor)}</p>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </Fragment>
-                      )
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
-              {/* Controles de Paginação */}
-              <div className="flex items-center justify-between mt-4">
-                <div className="text-sm text-muted-foreground">
-                  Mostrando {((paginaAtual - 1) * linhasPorPagina) + 1} a {Math.min(paginaAtual * linhasPorPagina, totalRegistros)} de {fmtNumber(totalRegistros)} registros
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const novaPagina = Math.max(1, paginaAtual - 1)
-                      const sucesso = await recarregarPaginaDetalhados(novaPagina)
-                      if (sucesso) {
-                        setPaginaAtual(novaPagina)
-                      }
-                    }}
-                    disabled={dadosDetalhados.length === 0 || paginaAtual === 1 || loadingDetalhados}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    Anterior
-                  </Button>
-                  <span className="text-sm text-muted-foreground">
-                    Página {paginaAtual} de {totalPaginas}
-                  </span>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={async () => {
-                      const novaPagina = Math.min(totalPaginas, paginaAtual + 1)
-                      const sucesso = await recarregarPaginaDetalhados(novaPagina)
-                      if (sucesso) {
-                        setPaginaAtual(novaPagina)
-                      }
-                    }}
-                    disabled={dadosDetalhados.length === 0 || paginaAtual >= totalPaginas || loadingDetalhados}
-                  >
-                    Próxima
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Tabela de Beneficiários Não Identificados */}
-      {dadosNaoIdentificados.length > 0 && (
-        <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-          <CardHeader>
-            <CardTitle>Beneficiários Não Identificados</CardTitle>
-            <CardDescription>
-              Procedimentos de CPFs que não foram identificados na base de beneficiários no mês em questão
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="border rounded-md overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="w-10" />
-                    <TableHead>CPF</TableHead>
-                    <TableHead>Procedimentos</TableHead>
-                    <TableHead>Gasto do Mês</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {dadosNaoIdentificadosAgrupados.map(grupo => {
-                    const isExpanded = expandedRowKeysNaoIdentificados.has(grupo.key)
-                    return (
-                      <Fragment key={grupo.key}>
-                        <TableRow>
-                          <TableCell className="w-10">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => {
-                                const newExpanded = new Set(expandedRowKeysNaoIdentificados)
-                                if (isExpanded) {
-                                  newExpanded.delete(grupo.key)
-                                } else {
-                                  newExpanded.add(grupo.key)
-                                }
-                                setExpandedRowKeysNaoIdentificados(newExpanded)
-                              }}
-                              aria-label={isExpanded ? "Recolher procedimentos" : "Expandir procedimentos"}
-                            >
-                              <ChevronDown
-                                className={`h-4 w-4 transition-transform ${isExpanded ? "rotate-180" : ""}`}
-                              />
-                            </Button>
-                          </TableCell>
-                          <TableCell>{grupo.cpf || "-"}</TableCell>
-                          <TableCell>{grupo.procedimentos.length}</TableCell>
-                          <TableCell>{fmtCurrency(grupo.totalValor)}</TableCell>
-                        </TableRow>
-                        {isExpanded && (
-                          <TableRow>
-                            <TableCell colSpan={4} className="bg-muted/40">
-                              <div className="space-y-3 p-3">
-                                <p className="text-sm font-semibold text-muted-foreground">
-                                  Procedimentos realizados
-                                </p>
-                                <div className="space-y-3">
-                                  {grupo.procedimentos.map((proc, index) => (
-                                    <div
-                                      key={`${grupo.key}-proc-${index}-${proc.evento || "evento"}`}
-                                      className="rounded-lg border bg-white p-3 text-sm shadow-sm"
-                                    >
-                                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-                                        <div>
-                                          <p className="text-xs uppercase text-muted-foreground">Evento</p>
-                                          <p className="font-medium">{proc.evento || "-"}</p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs uppercase text-muted-foreground">Descrição</p>
-                                          <p className="font-medium break-words whitespace-pre-line">
-                                            {proc.descricao || "-"}
-                                          </p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs uppercase text-muted-foreground">Especialidade</p>
-                                          <p className="font-medium">{proc.especialidade || "-"}</p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs uppercase text-muted-foreground">Data</p>
-                                          <p className="font-medium">{fmtDate(proc.data_atendimento || proc.data_competencia)}</p>
-                                        </div>
-                                        <div>
-                                          <p className="text-xs uppercase text-muted-foreground">Valor</p>
-                                          <p className="font-medium">{fmtCurrency(proc.valor)}</p>
-                                        </div>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              </div>
-                            </TableCell>
-                          </TableRow>
+                    </div>
+                    {/* Distribuição por plano - Drilldown */}
+                    {entidade.por_plano && entidade.por_plano.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-slate-200">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanosEntidade(`ativo-${entidade.entidade}`)
+                          }}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`ativo-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosEntidadeExpandidos.has(`ativo-${entidade.entidade}`) && (
+                          <PlanDistributionList
+                            planos={entidade.por_plano}
+                            totalVidas={entidade.vidas || 0}
+                          />
                         )}
-                      </Fragment>
-                    )
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-            <div className="mt-4 text-sm text-muted-foreground">
-              Total: {fmtNumber(dadosNaoIdentificadosAgrupados.length)} beneficiário(s) - {fmtCurrency(
-                dadosNaoIdentificadosAgrupados.reduce((sum, grupo) => sum + grupo.totalValor, 0)
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Coluna 2 – Vidas Inativas + entidades inativas */}
+          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
+            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Vidas Inativas</CardTitle>
+                <UserX className="h-4 w-4 text-red-600" />
+              </CardHeader>
+              <CardContent>
+                {loadingCardsStatus ? (
+                  <>
+                    <Skeleton className="h-8 w-32 mb-2" />
+                    <Skeleton className="h-4 w-24" />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold">
+                      {fmtNumber(cardsStatusVidas?.consolidado?.inativo || 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_inativo || 0)}
+                    </p>
+                    {/* Distribuição por plano - Drilldown */}
+                    {cardsStatusVidas?.consolidado?.por_plano?.inativo && cardsStatusVidas.consolidado.por_plano.inativo.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => togglePlanos('inativo')}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('inativo') ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosExpandidos.has('inativo') && (
+                          <PlanDistributionList
+                            planos={cardsStatusVidas.consolidado.por_plano.inativo}
+                            totalVidas={cardsStatusVidas.consolidado.inativo || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Cards de Entidades - Inativas */}
+            {cardsStatusVidas?.por_entidade?.inativo && cardsStatusVidas.por_entidade.inativo.length > 0 && (
+              <div className="space-y-2">
+                {cardsStatusVidas.por_entidade.inativo.map((entidade) => (
+                  <div
+                    key={entidade.entidade}
+                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                    title={`Entidade: ${entidade.entidade}\nVidas inativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                  >
+                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
+                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas inativas
+                    </p>
+                    <div className="mt-2">
+                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-red-500"
+                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* Distribuição por plano - Drilldown */}
+                    {entidade.por_plano && entidade.por_plano.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-slate-200">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanosEntidade(`inativo-${entidade.entidade}`)
+                          }}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`inativo-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosEntidadeExpandidos.has(`inativo-${entidade.entidade}`) && (
+                          <PlanDistributionList
+                            planos={entidade.por_plano}
+                            totalVidas={entidade.vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Coluna 3 – Vidas Não Localizadas + entidades correspondentes */}
+          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
+            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Vidas Não Localizadas</CardTitle>
+                <Users className="h-4 w-4 text-yellow-600" />
+              </CardHeader>
+              <CardContent>
+                {loadingCardsStatus ? (
+                  <>
+                    <Skeleton className="h-8 w-32 mb-2" />
+                    <Skeleton className="h-4 w-24" />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold">
+                      {fmtNumber(cardsStatusVidas?.consolidado?.nao_localizado || 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_nao_localizado || 0)}
+                    </p>
+                    {/* Distribuição por plano - Drilldown */}
+                    {cardsStatusVidas?.consolidado?.por_plano?.nao_localizado && cardsStatusVidas.consolidado.por_plano.nao_localizado.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => togglePlanos('nao_localizado')}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('nao_localizado') ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosExpandidos.has('nao_localizado') && (
+                          <PlanDistributionList
+                            planos={cardsStatusVidas.consolidado.por_plano.nao_localizado}
+                            totalVidas={cardsStatusVidas.consolidado.nao_localizado || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Cards de Entidades - Não Localizadas */}
+            {cardsStatusVidas?.por_entidade?.nao_localizado && cardsStatusVidas.por_entidade.nao_localizado.length > 0 && (
+              <div className="space-y-2">
+                {cardsStatusVidas.por_entidade.nao_localizado.map((entidade) => (
+                  <div
+                    key={entidade.entidade}
+                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                    title={`Entidade: ${entidade.entidade}\nVidas não localizadas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                  >
+                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
+                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas não localizadas
+                    </p>
+                    <div className="mt-2">
+                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-yellow-500"
+                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* Distribuição por plano - Drilldown */}
+                    {entidade.por_plano && entidade.por_plano.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-slate-200">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanosEntidade(`nao_localizado-${entidade.entidade}`)
+                          }}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`nao_localizado-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosEntidadeExpandidos.has(`nao_localizado-${entidade.entidade}`) && (
+                          <PlanDistributionList
+                            planos={entidade.por_plano}
+                            totalVidas={entidade.vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Coluna 4 – Total de Vidas + entidades de total */}
+          <div className="space-y-3 lg:pl-4">
+            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Total de Vidas</CardTitle>
+                <Activity className="h-4 w-4 text-primary" />
+              </CardHeader>
+              <CardContent>
+                {loadingCardsStatus ? (
+                  <>
+                    <Skeleton className="h-8 w-32 mb-2" />
+                    <Skeleton className="h-4 w-24" />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold">
+                      {fmtNumber(cardsStatusVidas?.consolidado?.total_vidas || 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Valor Total: {fmtBRL(cardsStatusVidas?.consolidado?.valor_total_geral || 0)}
+                    </p>
+                    {/* Distribuição por plano - Drilldown */}
+                    {cardsStatusVidas?.consolidado?.por_plano?.total && cardsStatusVidas.consolidado.por_plano.total.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => togglePlanos('total')}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('total') ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosExpandidos.has('total') && (
+                          <PlanDistributionList
+                            planos={cardsStatusVidas.consolidado.por_plano.total}
+                            totalVidas={cardsStatusVidas.consolidado.total_vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Cards de Entidades - Total */}
+            {cardsStatusVidas?.por_entidade?.total && cardsStatusVidas.por_entidade.total.length > 0 && (
+              <div className="space-y-2">
+                {cardsStatusVidas.por_entidade.total.map((entidade) => (
+                  <div
+                    key={entidade.entidade}
+                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                    title={`Entidade: ${entidade.entidade}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                  >
+                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
+                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
+                    </p>
+                    <div className="mt-2">
+                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* Distribuição por plano - Drilldown */}
+                    {entidade.por_plano && entidade.por_plano.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-slate-200">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanosEntidade(`total-${entidade.entidade}`)
+                          }}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`total-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosEntidadeExpandidos.has(`total-${entidade.entidade}`) && (
+                          <PlanDistributionList
+                            planos={entidade.por_plano}
+                            totalVidas={entidade.vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
       )}
+
     </div>
   )
 }
-
-
