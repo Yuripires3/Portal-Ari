@@ -27,9 +27,9 @@ export function PlanDistributionList({
 }: PlanDistributionListProps) {
   const [showAll, setShowAll] = useState(false)
 
-  // Ordenar planos por vidas (do maior para o menor) - já vem ordenado do backend, mas garantimos aqui
+  // Ordenar planos por valor (do maior para o menor)
   const planosOrdenados = useMemo(() => {
-    return [...planos].sort((a, b) => b.vidas - a.vidas)
+    return [...planos].sort((a, b) => b.valor - a.valor)
   }, [planos])
 
   // Formatação de valores
@@ -70,55 +70,51 @@ export function PlanDistributionList({
   return (
     <div>
       {/* Container da tabela com scroll */}
-      <div className="mt-2 max-h-80 overflow-auto rounded-xl border border-slate-200 bg-white">
+      <div className="mt-2 max-h-80 overflow-y-auto rounded-xl bg-white">
         {/* Cabeçalho fixo */}
-        <div className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200 px-3 py-2 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-          <div className="flex items-center">
-            <span className="w-[30%] truncate">Plano</span>
-            <span className="w-[25%] text-right">Vidas</span>
-            <span className="w-[35%] text-right">Valor</span>
-            <span className="w-[10%] text-right">IS</span>
+        <div className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200">
+          <div className="flex items-center py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
+            <span className="w-[160px] pl-3 text-left border-r border-slate-200">Plano</span>
+            <span className="w-[65px] text-center border-r border-slate-200">Vidas</span>
+            <span className="w-[125px] text-center border-r border-slate-200">Valor</span>
+            <span className="w-[60px] pr-3 text-center">IS</span>
           </div>
         </div>
 
-        {/* Linhas com zebra */}
-        <div>
+        {/* Linhas com dividers */}
+        <div className="divide-y divide-slate-100">
           {planosVisiveis.map((plano, index) => {
-            const tooltipText = `Vidas: ${formatNumber(plano.vidas)}\nValor: ${formatCurrency(plano.valor)}\nIS: ${formatPercent(plano.is)}`
             const isFirstRow = index === 0
 
             return (
               <div
                 key={plano.plano}
                 className={cn(
-                  "flex items-center px-3 py-1.5 text-xs hover:bg-slate-100 transition-colors cursor-default",
-                  index % 2 === 0 ? "bg-white" : "bg-slate-50/60",
-                  isFirstRow && "bg-slate-100"
+                  "flex items-center py-2.5 text-xs hover:bg-slate-50/60 transition-colors cursor-default",
+                  "h-[40px]"
                 )}
-                title={tooltipText}
               >
                 {/* Plano */}
-                <span className={cn(
-                  "w-1/2 truncate",
-                  isFirstRow ? "font-semibold" : "font-medium",
-                  "text-[#184286]"
-                )}>
+                <span 
+                  className="w-[160px] pl-3 truncate text-left font-semibold text-[#184286] border-r border-slate-100"
+                  title={plano.plano}
+                >
                   {plano.plano}
                 </span>
 
                 {/* Vidas */}
-                <span className="w-[15%] text-right font-semibold text-[#184286]">
+                <span className="w-[65px] text-center font-semibold text-[#184286] border-r border-slate-100">
                   {formatNumber(plano.vidas)}
                 </span>
 
                 {/* Valor */}
-                <span className="w-[25%] text-right text-slate-600">
+                <span className="w-[125px] text-center text-[#184286] border-r border-slate-100">
                   {formatCurrency(plano.valor)}
                 </span>
 
                 {/* IS */}
                 <span className={cn(
-                  "w-[10%] text-right",
+                  "w-[60px] pr-3 text-center",
                   plano.is != null ? "text-[#184286]" : "text-slate-300"
                 )}>
                   {plano.is != null ? formatPercent(plano.is) : "-"}
