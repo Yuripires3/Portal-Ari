@@ -253,11 +253,12 @@ export async function GET(request: NextRequest) {
         m.mes
     `
 
-    // Query adicional para agregação por entidade separada por status
+    // Query adicional para agregação por entidade separada por status e mês de reajuste
     // Retorna entidades para cada status: ativo, inativo, vazio (não localizado)
     const sqlPorEntidade = `
       SELECT
         base.entidade,
+        base.mes_reajuste,
         base.status_final,
         COUNT(DISTINCT base.cpf) AS vidas,
         SUM(base.valor_total_cpf_mes) AS valor_total
@@ -272,6 +273,7 @@ export async function GET(request: NextRequest) {
             ELSE 'inativo'
           END AS status_final,
           b.entidade,
+          b.mes_reajuste,
           b.tipo
         FROM (
           SELECT
@@ -305,6 +307,14 @@ export async function GET(request: NextRequest) {
             ) AS entidade,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
+                b.mes_reajuste
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS mes_reajuste,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
                 b.tipo
                 ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
@@ -324,9 +334,12 @@ export async function GET(request: NextRequest) {
       ${cpf ? "AND base.cpf = ?" : ""}
       GROUP BY
         base.entidade,
+        base.mes_reajuste,
         base.status_final
       ORDER BY
         base.status_final,
+        base.entidade,
+        base.mes_reajuste,
         valor_total DESC
     `
 
@@ -396,9 +409,10 @@ export async function GET(request: NextRequest) {
     // Consolidado para retorno (sempre usa o geral, independente de filtro de entidade)
     const consolidado = consolidadoGeral
 
-    // Processar dados por entidade separados por status
+    // Processar dados por entidade separados por status e mês de reajuste
     const entidadesPorStatus: Record<string, Array<{
       entidade: string
+      mes_reajuste?: string | null
       vidas: number
       valor_total: number
       pct_vidas: number
@@ -409,10 +423,11 @@ export async function GET(request: NextRequest) {
       vazio: [],
     }
 
-    // Agrupar por status
+    // Agrupar por status e mês de reajuste
     ;(rowsPorEntidade || []).forEach((row: any) => {
       const status = row.status_final || "vazio"
       const entidade = row.entidade || ""
+      const mesReajuste = row.mes_reajuste || null
       const vidas = Number(row.vidas) || 0
       const valorTotal = Number(row.valor_total) || 0
 
@@ -443,6 +458,7 @@ export async function GET(request: NextRequest) {
 
       entidadesPorStatus[status].push({
         entidade,
+        mes_reajuste: mesReajuste,
         vidas,
         valor_total: valorTotal,
         pct_vidas: pctVidas,
@@ -450,32 +466,60 @@ export async function GET(request: NextRequest) {
       })
     })
 
-    // Ordenar cada lista por valor_total DESC e limitar a top 6
+    // Ordenar cada lista: primeiro por entidade, depois por mês de reajuste, depois por valor_total DESC
     Object.keys(entidadesPorStatus).forEach((status) => {
       entidadesPorStatus[status] = entidadesPorStatus[status]
-        .sort((a, b) => b.valor_total - a.valor_total)
-        .slice(0, 6)
+        .sort((a, b) => {
+          // Primeiro ordena por entidade
+          if (a.entidade !== b.entidade) {
+            return a.entidade.localeCompare(b.entidade)
+          }
+          // Depois por mês de reajuste (nulls por último)
+          if (a.mes_reajuste !== b.mes_reajuste) {
+            if (!a.mes_reajuste) return 1
+            if (!b.mes_reajuste) return -1
+            return a.mes_reajuste.localeCompare(b.mes_reajuste)
+          }
+          // Por último por valor_total DESC
+          return b.valor_total - a.valor_total
+        })
     })
 
-    // Calcular total agregado por entidade (todas as entidades juntas)
-    const entidadesTotalMap = new Map<string, { entidade: string; vidas: number; valor_total: number }>()
+    // Calcular total agregado por entidade e mês de reajuste (todas as entidades juntas)
+    // Manter separado por mês de reajuste para exibir cards individuais
+    const entidadesTotal: Array<{
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+    }> = []
     
     ;[...entidadesPorStatus.ativo, ...entidadesPorStatus.inativo, ...entidadesPorStatus.vazio].forEach((item) => {
-      const atual = entidadesTotalMap.get(item.entidade) || { entidade: item.entidade, vidas: 0, valor_total: 0 }
-      atual.vidas += item.vidas
-      atual.valor_total += item.valor_total
-      entidadesTotalMap.set(item.entidade, atual)
-    })
-
-    const entidadesTotal = Array.from(entidadesTotalMap.values())
-      .sort((a, b) => b.valor_total - a.valor_total)
-      .slice(0, 6)
-      .map((item) => ({
-        ...item,
+      entidadesTotal.push({
+        entidade: item.entidade,
+        mes_reajuste: item.mes_reajuste,
+        vidas: item.vidas,
+        valor_total: item.valor_total,
         // Porcentagem calculada sobre o total de vidas do card mandante "Total de Vidas"
         pct_vidas: consolidadoGeral.total_vidas > 0 ? item.vidas / consolidadoGeral.total_vidas : 0,
         pct_valor: consolidadoGeral.valor_total_geral > 0 ? item.valor_total / consolidadoGeral.valor_total_geral : 0,
-      }))
+      })
+    })
+
+    // Ordenar por entidade, depois por mês de reajuste, depois por valor_total DESC
+    entidadesTotal.sort((a, b) => {
+      if (a.entidade !== b.entidade) {
+        return a.entidade.localeCompare(b.entidade)
+      }
+      if (a.mes_reajuste !== b.mes_reajuste) {
+        if (!a.mes_reajuste) return -1
+        if (!b.mes_reajuste) return 1
+        return a.mes_reajuste.localeCompare(b.mes_reajuste)
+      }
+      return b.valor_total - a.valor_total
+    })
 
     // Query para distribuição por plano nos cards principais (por status)
     const sqlPorPlanoGeral = `
@@ -541,10 +585,11 @@ export async function GET(request: NextRequest) {
         COUNT(DISTINCT m.cpf) DESC
     `
 
-    // Query para distribuição por plano nos cards de entidade (por entidade e status)
+    // Query para distribuição por plano nos cards de entidade (por entidade, mês de reajuste e status)
     const sqlPorPlanoEntidade = `
       SELECT
         base.entidade,
+        base.mes_reajuste,
         base.status_final,
         base.plano,
         COUNT(DISTINCT base.cpf) AS vidas,
@@ -560,6 +605,7 @@ export async function GET(request: NextRequest) {
             ELSE 'inativo'
           END AS status_final,
           b.entidade,
+          b.mes_reajuste,
           b.plano,
           b.tipo
         FROM (
@@ -594,6 +640,14 @@ export async function GET(request: NextRequest) {
             ) AS entidade,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
+                b.mes_reajuste
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS mes_reajuste,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
                 b.plano
                 ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
@@ -622,10 +676,12 @@ export async function GET(request: NextRequest) {
       ${cpf ? "AND base.cpf = ?" : ""}
       GROUP BY
         base.entidade,
+        base.mes_reajuste,
         base.status_final,
         base.plano
       ORDER BY
         base.entidade,
+        base.mes_reajuste,
         base.status_final,
         COUNT(DISTINCT base.cpf) DESC
     `
@@ -685,11 +741,12 @@ export async function GET(request: NextRequest) {
       .map(([plano, { vidas, valor }]) => ({ plano, vidas, valor }))
       .sort((a, b) => b.vidas - a.vidas)
 
-    // Processar distribuição por plano para cards de entidade
-    const porPlanoEntidade: Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number }>>> = {}
+    // Processar distribuição por plano para cards de entidade (agrupado por entidade, mês de reajuste e status)
+    const porPlanoEntidade: Record<string, Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number }>>>> = {}
 
     ;(rowsPorPlanoEntidade || []).forEach((row: any) => {
       const entidade = row.entidade || ""
+      const mesReajuste = row.mes_reajuste || null
       const status = row.status_final || "vazio"
       const plano = row.plano || ""
       const vidas = Number(row.vidas) || 0
@@ -697,47 +754,65 @@ export async function GET(request: NextRequest) {
 
       if (!entidade || !plano) return
 
+      const keyMesReajuste = mesReajuste || "sem_mes"
+
       if (!porPlanoEntidade[entidade]) {
         porPlanoEntidade[entidade] = {}
       }
-      if (!porPlanoEntidade[entidade][status]) {
-        porPlanoEntidade[entidade][status] = []
+      if (!porPlanoEntidade[entidade][keyMesReajuste]) {
+        porPlanoEntidade[entidade][keyMesReajuste] = {}
       }
-      porPlanoEntidade[entidade][status].push({ plano, vidas, valor })
+      if (!porPlanoEntidade[entidade][keyMesReajuste][status]) {
+        porPlanoEntidade[entidade][keyMesReajuste][status] = []
+      }
+      porPlanoEntidade[entidade][keyMesReajuste][status].push({ plano, vidas, valor })
     })
 
-    // Ordenar planos por vidas (do maior para o menor) em cada entidade/status
+    // Ordenar planos por vidas (do maior para o menor) em cada entidade/mês de reajuste/status
     Object.keys(porPlanoEntidade).forEach((entidade) => {
-      Object.keys(porPlanoEntidade[entidade]).forEach((status) => {
-        if (porPlanoEntidade[entidade][status]) {
-          porPlanoEntidade[entidade][status].sort((a, b) => b.vidas - a.vidas)
-        }
+      Object.keys(porPlanoEntidade[entidade]).forEach((mesReajuste) => {
+        Object.keys(porPlanoEntidade[entidade][mesReajuste]).forEach((status) => {
+          if (porPlanoEntidade[entidade][mesReajuste][status]) {
+            porPlanoEntidade[entidade][mesReajuste][status].sort((a, b) => b.vidas - a.vidas)
+          }
+        })
       })
     })
 
     // Adicionar distribuição por plano aos dados de entidade
     const entidadesComPlano = {
-      ativo: entidadesPorStatus.ativo.map((ent) => ({
-        ...ent,
-        por_plano: porPlanoEntidade[ent.entidade]?.ativo || [],
-      })),
-      inativo: entidadesPorStatus.inativo.map((ent) => ({
-        ...ent,
-        por_plano: porPlanoEntidade[ent.entidade]?.inativo || [],
-      })),
-      nao_localizado: entidadesPorStatus.vazio.map((ent) => ({
-        ...ent,
-        por_plano: porPlanoEntidade[ent.entidade]?.vazio || [],
-      })),
+      ativo: entidadesPorStatus.ativo.map((ent) => {
+        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
+        return {
+          ...ent,
+          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.ativo || [],
+        }
+      }),
+      inativo: entidadesPorStatus.inativo.map((ent) => {
+        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
+        return {
+          ...ent,
+          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.inativo || [],
+        }
+      }),
+      nao_localizado: entidadesPorStatus.vazio.map((ent) => {
+        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
+        return {
+          ...ent,
+          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.vazio || [],
+        }
+      }),
       total: entidadesTotal.map((ent) => {
-        // Para total, somar todos os planos de todos os status da entidade
+        // Para total, somar todos os planos de todos os status e meses de reajuste da entidade
         const planosMap = new Map<string, { vidas: number; valor: number }>()
-        Object.values(porPlanoEntidade[ent.entidade] || {}).forEach((planos) => {
-          planos.forEach((p) => {
-            const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0 }
-            atual.vidas += p.vidas
-            atual.valor += p.valor
-            planosMap.set(p.plano, atual)
+        Object.values(porPlanoEntidade[ent.entidade] || {}).forEach((porMesReajuste) => {
+          Object.values(porMesReajuste).forEach((planos) => {
+            planos.forEach((p) => {
+              const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0 }
+              atual.vidas += p.vidas
+              atual.valor += p.valor
+              planosMap.set(p.plano, atual)
+            })
           })
         })
         return {

@@ -54,6 +54,7 @@ export default function SinistralidadeDashboardPage() {
     por_entidade?: {
       ativo: Array<{
         entidade: string
+        mes_reajuste?: string | null
         vidas: number
         valor_total: number
         pct_vidas: number
@@ -62,6 +63,7 @@ export default function SinistralidadeDashboardPage() {
       }>
       inativo: Array<{
         entidade: string
+        mes_reajuste?: string | null
         vidas: number
         valor_total: number
         pct_vidas: number
@@ -70,6 +72,7 @@ export default function SinistralidadeDashboardPage() {
       }>
       nao_localizado: Array<{
         entidade: string
+        mes_reajuste?: string | null
         vidas: number
         valor_total: number
         pct_vidas: number
@@ -78,6 +81,7 @@ export default function SinistralidadeDashboardPage() {
       }>
       total: Array<{
         entidade: string
+        mes_reajuste?: string | null
         vidas: number
         valor_total: number
         pct_vidas: number
@@ -139,6 +143,42 @@ export default function SinistralidadeDashboardPage() {
   
   const tipo = useMemo(() => filters?.tipo || "Todos", [filters?.tipo])
   const cpf = useMemo(() => filters?.cpf || "", [filters?.cpf])
+  
+  // Estado local para meses de reajuste (não está no store de filtros)
+  const [mesesReajuste, setMesesReajuste] = useState<string[]>([])
+
+  // Carregar meses de reajuste disponíveis dos dados já carregados
+  const mesesReajusteDisponiveis = useMemo(() => {
+    const mesesSet = new Set<string>()
+    if (cardsStatusVidas?.por_entidade) {
+      try {
+        Object.values(cardsStatusVidas.por_entidade).forEach((entidades) => {
+          if (Array.isArray(entidades)) {
+            entidades.forEach((ent) => {
+              if (ent?.mes_reajuste && typeof ent.mes_reajuste === 'string') {
+                mesesSet.add(ent.mes_reajuste)
+              }
+            })
+          }
+        })
+      } catch (error) {
+        console.error('Erro ao processar meses de reajuste:', error)
+      }
+    }
+    return Array.from(mesesSet).sort()
+  }, [cardsStatusVidas])
+
+  const mesesReajusteDisponiveisParaSelecao = useMemo(() => {
+    return mesesReajusteDisponiveis.filter(mes => !mesesReajuste.includes(mes))
+  }, [mesesReajusteDisponiveis, mesesReajuste])
+
+  const toggleMesReajuste = useCallback((mes: string) => {
+    setMesesReajuste(prev => 
+      prev.includes(mes)
+        ? prev.filter(m => m !== mes)
+        : [...prev, mes]
+    )
+  }, [])
 
   // Usar hook otimizado para carregar entidades por mês
   const {
@@ -329,6 +369,7 @@ export default function SinistralidadeDashboardPage() {
       tipo: "Todos",
       cpf: "",
     })
+    setMesesReajuste([])
     setEntidadeSelectKey(prev => prev + 1)
   }, [updateFilters])
 
@@ -349,6 +390,77 @@ export default function SinistralidadeDashboardPage() {
   // Função para formatar números
   const fmtNumber = useCallback((valor: number) => {
     return new Intl.NumberFormat("pt-BR").format(valor)
+  }, [])
+
+  // Função auxiliar para formatar nome do mês
+  const getNomeMes = useCallback((mesNum: string | null | undefined) => {
+    if (!mesNum) return null
+    const meses: Record<string, string> = {
+      "01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+      "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+      "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"
+    }
+    return meses[mesNum] || mesNum
+  }, [])
+
+  // Função para agrupar entidades por entidade e mês de reajuste
+  // Ordenação: primeiro por mês de reajuste (maior volume de vidas), depois por entidade (maior quantidade de vidas)
+  const agruparEntidadesPorMesReajuste = useCallback((
+    entidades: Array<{
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+    }>
+  ) => {
+    // Primeiro, calcular o volume total de vidas por mês de reajuste
+    const volumePorMesReajuste = new Map<string | null, number>()
+    
+    entidades.forEach(ent => {
+      const mesReajuste = ent.mes_reajuste || null
+      const atual = volumePorMesReajuste.get(mesReajuste) || 0
+      volumePorMesReajuste.set(mesReajuste, atual + ent.vidas)
+    })
+
+    // Ordenar entidades:
+    // 1. Primeiro por mês de reajuste (ordenar pelos meses com maior volume de vidas primeiro)
+    // 2. Depois por quantidade de vidas da entidade (maior para menor)
+    const resultado = [...entidades].sort((a, b) => {
+      const mesA = a.mes_reajuste || null
+      const mesB = b.mes_reajuste || null
+      
+      // Se os meses de reajuste forem diferentes, ordenar pelo volume total do mês
+      if (mesA !== mesB) {
+        const volumeA = volumePorMesReajuste.get(mesA) || 0
+        const volumeB = volumePorMesReajuste.get(mesB) || 0
+        
+        // Maior volume primeiro
+        if (volumeB !== volumeA) {
+          return volumeB - volumeA
+        }
+        
+        // Se o volume for igual, ordenar por mês (null primeiro, depois cronologicamente)
+        if (!mesA) return -1
+        if (!mesB) return 1
+        return mesA.localeCompare(mesB)
+      }
+      
+      // Se for o mesmo mês de reajuste, ordenar por quantidade de vidas da entidade (maior para menor)
+      if (b.vidas !== a.vidas) {
+        return b.vidas - a.vidas
+      }
+      
+      // Se a quantidade de vidas for igual, ordenar por nome da entidade
+      return a.entidade.localeCompare(b.entidade)
+    })
+
+    return resultado.map((item, index) => ({
+      ...item,
+      isPrincipal: index === 0 && !item.mes_reajuste
+    }))
   }, [])
 
   // Carregar cards de status de vidas
@@ -381,6 +493,10 @@ export default function SinistralidadeDashboardPage() {
 
         if (cpf) {
           params.append("cpf", cpf)
+        }
+
+        if (mesesReajuste.length > 0) {
+          params.append("meses_reajuste", mesesReajuste.join(","))
         }
 
         const res = await fetchNoStore(`/api/sinistralidade/cards-status-vidas?${params}`)
@@ -416,7 +532,7 @@ export default function SinistralidadeDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [mesesReferencia, operadoras, entidades, tipo, cpf, toast])
+  }, [mesesReferencia, operadoras, entidades, tipo, cpf, mesesReajuste, toast])
 
   // Validação automática de filtros (usando utilitário centralizado)
   const validacaoExecutadaRef = useRef(false)
@@ -537,7 +653,7 @@ export default function SinistralidadeDashboardPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
             <div className="space-y-2">
               <Label>Mês Referência *</Label>
               <div className="relative">
@@ -731,6 +847,52 @@ export default function SinistralidadeDashboardPage() {
               )}
             </div>
             <div className="space-y-2">
+              <Label>Mês de Reajuste</Label>
+              <Select
+                onValueChange={(val) => {
+                  if (val && val !== "__no-mes-reajuste" && !mesesReajuste.includes(val)) {
+                    toggleMesReajuste(val)
+                  }
+                }}
+                disabled={mesesReajusteDisponiveisParaSelecao.length === 0 || !cardsStatusVidas}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder={mesesReajuste.length === 0 ? "Selecione o mês" : "Adicionar mês"} />
+                </SelectTrigger>
+                <SelectContent>
+                  {mesesReajusteDisponiveisParaSelecao.map(mes => (
+                    <SelectItem key={mes} value={mes}>
+                      {getNomeMes(mes) || mes}
+                    </SelectItem>
+                  ))}
+                  {mesesReajusteDisponiveisParaSelecao.length === 0 && (
+                    <SelectItem value="__no-mes-reajuste" disabled>
+                      {mesesReajuste.length > 0 ? "Todos os meses selecionados" : "Nenhum mês disponível"}
+                    </SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+              {mesesReajuste.length > 0 && (
+                <div className="flex flex-wrap gap-2 mt-2">
+                  {mesesReajuste.map(mes => (
+                    <span
+                      key={mes}
+                      className="inline-flex items-center gap-1 px-2 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-md text-sm"
+                    >
+                      {getNomeMes(mes) || mes}
+                      <button
+                        onClick={() => toggleMesReajuste(mes)}
+                        className="hover:text-red-500"
+                        aria-label={`Remover ${getNomeMes(mes)}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="space-y-2">
               <Label>Tipo de beneficiário</Label>
               <Select 
                 value={tipoValido} 
@@ -839,50 +1001,65 @@ export default function SinistralidadeDashboardPage() {
             {/* Cards de Entidades - Total */}
             {cardsStatusVidas?.por_entidade?.total && cardsStatusVidas.por_entidade.total.length > 0 && (
               <div className="space-y-2">
-                {cardsStatusVidas.por_entidade.total.map((entidade) => (
-                  <div
-                    key={entidade.entidade}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                    title={`Entidade: ${entidade.entidade}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
-                  >
-                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
-                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
-                    </p>
-                    <div className="mt-2">
-                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
-                        />
+                {agruparEntidadesPorMesReajuste(
+                  mesesReajuste.length > 0
+                    ? cardsStatusVidas.por_entidade.total.filter(ent => 
+                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                      )
+                    : cardsStatusVidas.por_entidade.total
+                ).map((entidade, index) => {
+                  const nomeExibicao = entidade.mes_reajuste 
+                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
+                    : entidade.entidade
+                  const key = entidade.mes_reajuste 
+                    ? `total-${entidade.entidade}-${entidade.mes_reajuste}`
+                    : `total-${entidade.entidade}`
+                  
+                  return (
+                    <div
+                      key={key}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                      title={`Entidade: ${nomeExibicao}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                    >
+                      <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
+                      <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
+                      </p>
+                      <div className="mt-2">
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                          />
+                        </div>
                       </div>
+                      {/* Distribuição por plano - Drilldown */}
+                      {entidade.por_plano && entidade.por_plano.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-slate-200">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              togglePlanosEntidade(key)
+                            }}
+                            className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                          >
+                            <span>Distribuição por plano</span>
+                            <ChevronRight 
+                              className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(key) ? 'rotate-90' : ''}`} 
+                            />
+                          </button>
+                          {planosEntidadeExpandidos.has(key) && (
+                            <PlanDistributionList
+                              planos={entidade.por_plano}
+                              totalVidas={entidade.vidas || 0}
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {/* Distribuição por plano - Drilldown */}
-                    {entidade.por_plano && entidade.por_plano.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-slate-200">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            togglePlanosEntidade(`total-${entidade.entidade}`)
-                          }}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`total-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosEntidadeExpandidos.has(`total-${entidade.entidade}`) && (
-                          <PlanDistributionList
-                            planos={entidade.por_plano}
-                            totalVidas={entidade.vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -936,50 +1113,65 @@ export default function SinistralidadeDashboardPage() {
             {/* Cards de Entidades - Ativas */}
             {cardsStatusVidas?.por_entidade?.ativo && cardsStatusVidas.por_entidade.ativo.length > 0 && (
               <div className="space-y-2">
-                {cardsStatusVidas.por_entidade.ativo.map((entidade) => (
-                  <div
-                    key={entidade.entidade}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                    title={`Entidade: ${entidade.entidade}\nVidas ativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
-                  >
-                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
-                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas ativas
-                    </p>
-                    <div className="mt-2">
-                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-emerald-500"
-                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
-                        />
+                {agruparEntidadesPorMesReajuste(
+                  mesesReajuste.length > 0
+                    ? cardsStatusVidas.por_entidade.ativo.filter(ent => 
+                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                      )
+                    : cardsStatusVidas.por_entidade.ativo
+                ).map((entidade) => {
+                  const nomeExibicao = entidade.mes_reajuste 
+                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
+                    : entidade.entidade
+                  const key = entidade.mes_reajuste 
+                    ? `ativo-${entidade.entidade}-${entidade.mes_reajuste}`
+                    : `ativo-${entidade.entidade}`
+                  
+                  return (
+                    <div
+                      key={key}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                      title={`Entidade: ${nomeExibicao}\nVidas ativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                    >
+                      <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
+                      <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {(entidade.pct_vidas * 100).toFixed(1)}% das vidas ativas
+                      </p>
+                      <div className="mt-2">
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-emerald-500"
+                            style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                          />
+                        </div>
                       </div>
+                      {/* Distribuição por plano - Drilldown */}
+                      {entidade.por_plano && entidade.por_plano.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-slate-200">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              togglePlanosEntidade(key)
+                            }}
+                            className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                          >
+                            <span>Distribuição por plano</span>
+                            <ChevronRight 
+                              className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(key) ? 'rotate-90' : ''}`} 
+                            />
+                          </button>
+                          {planosEntidadeExpandidos.has(key) && (
+                            <PlanDistributionList
+                              planos={entidade.por_plano}
+                              totalVidas={entidade.vidas || 0}
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {/* Distribuição por plano - Drilldown */}
-                    {entidade.por_plano && entidade.por_plano.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-slate-200">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            togglePlanosEntidade(`ativo-${entidade.entidade}`)
-                          }}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`ativo-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosEntidadeExpandidos.has(`ativo-${entidade.entidade}`) && (
-                          <PlanDistributionList
-                            planos={entidade.por_plano}
-                            totalVidas={entidade.vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -1033,50 +1225,65 @@ export default function SinistralidadeDashboardPage() {
             {/* Cards de Entidades - Inativas */}
             {cardsStatusVidas?.por_entidade?.inativo && cardsStatusVidas.por_entidade.inativo.length > 0 && (
               <div className="space-y-2">
-                {cardsStatusVidas.por_entidade.inativo.map((entidade) => (
-                  <div
-                    key={entidade.entidade}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                    title={`Entidade: ${entidade.entidade}\nVidas inativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
-                  >
-                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
-                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas inativas
-                    </p>
-                    <div className="mt-2">
-                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-red-500"
-                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
-                        />
+                {agruparEntidadesPorMesReajuste(
+                  mesesReajuste.length > 0
+                    ? cardsStatusVidas.por_entidade.inativo.filter(ent => 
+                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                      )
+                    : cardsStatusVidas.por_entidade.inativo
+                ).map((entidade) => {
+                  const nomeExibicao = entidade.mes_reajuste 
+                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
+                    : entidade.entidade
+                  const key = entidade.mes_reajuste 
+                    ? `inativo-${entidade.entidade}-${entidade.mes_reajuste}`
+                    : `inativo-${entidade.entidade}`
+                  
+                  return (
+                    <div
+                      key={key}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                      title={`Entidade: ${nomeExibicao}\nVidas inativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                    >
+                      <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
+                      <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {(entidade.pct_vidas * 100).toFixed(1)}% das vidas inativas
+                      </p>
+                      <div className="mt-2">
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-red-500"
+                            style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                          />
+                        </div>
                       </div>
+                      {/* Distribuição por plano - Drilldown */}
+                      {entidade.por_plano && entidade.por_plano.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-slate-200">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              togglePlanosEntidade(key)
+                            }}
+                            className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                          >
+                            <span>Distribuição por plano</span>
+                            <ChevronRight 
+                              className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(key) ? 'rotate-90' : ''}`} 
+                            />
+                          </button>
+                          {planosEntidadeExpandidos.has(key) && (
+                            <PlanDistributionList
+                              planos={entidade.por_plano}
+                              totalVidas={entidade.vidas || 0}
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {/* Distribuição por plano - Drilldown */}
-                    {entidade.por_plano && entidade.por_plano.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-slate-200">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            togglePlanosEntidade(`inativo-${entidade.entidade}`)
-                          }}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`inativo-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosEntidadeExpandidos.has(`inativo-${entidade.entidade}`) && (
-                          <PlanDistributionList
-                            planos={entidade.por_plano}
-                            totalVidas={entidade.vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -1131,50 +1338,65 @@ export default function SinistralidadeDashboardPage() {
             {/* Cards de Entidades - Não Localizadas */}
             {cardsStatusVidas?.por_entidade?.nao_localizado && cardsStatusVidas.por_entidade.nao_localizado.length > 0 && (
               <div className="space-y-2">
-                {cardsStatusVidas.por_entidade.nao_localizado.map((entidade) => (
-                  <div
-                    key={entidade.entidade}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                    title={`Entidade: ${entidade.entidade}\nVidas não localizadas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
-                  >
-                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
-                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(entidade.pct_vidas * 100).toFixed(1)}% das vidas não localizadas
-                    </p>
-                    <div className="mt-2">
-                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-yellow-500"
-                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
-                        />
+                {agruparEntidadesPorMesReajuste(
+                  mesesReajuste.length > 0
+                    ? cardsStatusVidas.por_entidade.nao_localizado.filter(ent => 
+                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                      )
+                    : cardsStatusVidas.por_entidade.nao_localizado
+                ).map((entidade) => {
+                  const nomeExibicao = entidade.mes_reajuste 
+                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
+                    : entidade.entidade
+                  const key = entidade.mes_reajuste 
+                    ? `nao_localizado-${entidade.entidade}-${entidade.mes_reajuste}`
+                    : `nao_localizado-${entidade.entidade}`
+                  
+                  return (
+                    <div
+                      key={key}
+                      className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                      title={`Entidade: ${nomeExibicao}\nVidas não localizadas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                    >
+                      <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
+                      <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {(entidade.pct_vidas * 100).toFixed(1)}% das vidas não localizadas
+                      </p>
+                      <div className="mt-2">
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-yellow-500"
+                            style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                          />
+                        </div>
                       </div>
+                      {/* Distribuição por plano - Drilldown */}
+                      {entidade.por_plano && entidade.por_plano.length > 0 && (
+                        <div className="mt-3 pt-2 border-t border-slate-200">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              togglePlanosEntidade(key)
+                            }}
+                            className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                          >
+                            <span>Distribuição por plano</span>
+                            <ChevronRight 
+                              className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(key) ? 'rotate-90' : ''}`} 
+                            />
+                          </button>
+                          {planosEntidadeExpandidos.has(key) && (
+                            <PlanDistributionList
+                              planos={entidade.por_plano}
+                              totalVidas={entidade.vidas || 0}
+                            />
+                          )}
+                        </div>
+                      )}
                     </div>
-                    {/* Distribuição por plano - Drilldown */}
-                    {entidade.por_plano && entidade.por_plano.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-slate-200">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            togglePlanosEntidade(`nao_localizado-${entidade.entidade}`)
-                          }}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`nao_localizado-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosEntidadeExpandidos.has(`nao_localizado-${entidade.entidade}`) && (
-                          <PlanDistributionList
-                            planos={entidade.por_plano}
-                            totalVidas={entidade.vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
