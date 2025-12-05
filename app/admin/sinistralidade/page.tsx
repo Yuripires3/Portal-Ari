@@ -790,8 +790,105 @@ export default function SinistralidadeDashboardPage() {
         
         return (
         <div className={`grid gap-6 ${gridCols} mt-6`}>
-          {/* Coluna 1 – Vidas Ativas + entidades ativas */}
+          {/* Coluna 1 – Total de Vidas + entidades de total */}
           <div className="space-y-3 lg:border-r lg:border-slate-200 lg:pr-4">
+            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
+              <CardHeader className="flex flex-row items-center justify-between pb-2">
+                <CardTitle className="text-sm font-medium">Total de Vidas</CardTitle>
+                <Activity className="h-4 w-4 text-primary" />
+              </CardHeader>
+              <CardContent>
+                {loadingCardsStatus ? (
+                  <>
+                    <Skeleton className="h-8 w-32 mb-2" />
+                    <Skeleton className="h-4 w-24" />
+                  </>
+                ) : (
+                  <>
+                    <div className="text-2xl font-bold">
+                      {fmtNumber(cardsStatusVidas?.consolidado?.total_vidas || 0)}
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Valor Total: {fmtBRL(cardsStatusVidas?.consolidado?.valor_total_geral || 0)}
+                    </p>
+                    {/* Distribuição por plano - Drilldown */}
+                    {cardsStatusVidas?.consolidado?.por_plano?.total && cardsStatusVidas.consolidado.por_plano.total.length > 0 && (
+                      <div className="mt-4 pt-3 border-t border-slate-200">
+                        <button
+                          onClick={() => togglePlanos('total')}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('total') ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosExpandidos.has('total') && (
+                          <PlanDistributionList
+                            planos={cardsStatusVidas.consolidado.por_plano.total}
+                            totalVidas={cardsStatusVidas.consolidado.total_vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+            
+            {/* Cards de Entidades - Total */}
+            {cardsStatusVidas?.por_entidade?.total && cardsStatusVidas.por_entidade.total.length > 0 && (
+              <div className="space-y-2">
+                {cardsStatusVidas.por_entidade.total.map((entidade) => (
+                  <div
+                    key={entidade.entidade}
+                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
+                    title={`Entidade: ${entidade.entidade}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                  >
+                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
+                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
+                    </p>
+                    <div className="mt-2">
+                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                        <div
+                          className="h-full rounded-full bg-primary"
+                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
+                        />
+                      </div>
+                    </div>
+                    {/* Distribuição por plano - Drilldown */}
+                    {entidade.por_plano && entidade.por_plano.length > 0 && (
+                      <div className="mt-3 pt-2 border-t border-slate-200">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            togglePlanosEntidade(`total-${entidade.entidade}`)
+                          }}
+                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
+                        >
+                          <span>Distribuição por plano</span>
+                          <ChevronRight 
+                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`total-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
+                          />
+                        </button>
+                        {planosEntidadeExpandidos.has(`total-${entidade.entidade}`) && (
+                          <PlanDistributionList
+                            planos={entidade.por_plano}
+                            totalVidas={entidade.vidas || 0}
+                          />
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Coluna 2 – Vidas Ativas + entidades ativas */}
+          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">Vidas Ativas</CardTitle>
@@ -887,7 +984,7 @@ export default function SinistralidadeDashboardPage() {
             )}
           </div>
 
-          {/* Coluna 2 – Vidas Inativas + entidades inativas */}
+          {/* Coluna 3 – Vidas Inativas + entidades inativas */}
           <div className={`space-y-3 ${temNaoLocalizados ? 'lg:border-r lg:border-slate-200 lg:px-4' : 'lg:border-r lg:border-slate-200 lg:px-4'}`}>
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -984,9 +1081,9 @@ export default function SinistralidadeDashboardPage() {
             )}
           </div>
 
-          {/* Coluna 3 – Vidas Não Localizadas + entidades correspondentes */}
+          {/* Coluna 4 – Vidas Não Localizadas + entidades correspondentes */}
           {temNaoLocalizados && (
-          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
+          <div className="space-y-3 lg:px-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">Vidas Não Localizadas</CardTitle>
@@ -1082,103 +1179,6 @@ export default function SinistralidadeDashboardPage() {
             )}
           </div>
           )}
-
-          {/* Coluna 4 – Total de Vidas + entidades de total */}
-          <div className={`space-y-3 ${temNaoLocalizados ? 'lg:pl-4' : 'lg:pl-4'}`}>
-            <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">Total de Vidas</CardTitle>
-                <Activity className="h-4 w-4 text-primary" />
-              </CardHeader>
-              <CardContent>
-                {loadingCardsStatus ? (
-                  <>
-                    <Skeleton className="h-8 w-32 mb-2" />
-                    <Skeleton className="h-4 w-24" />
-                  </>
-                ) : (
-                  <>
-                    <div className="text-2xl font-bold">
-                      {fmtNumber(cardsStatusVidas?.consolidado?.total_vidas || 0)}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Valor Total: {fmtBRL(cardsStatusVidas?.consolidado?.valor_total_geral || 0)}
-                    </p>
-                    {/* Distribuição por plano - Drilldown */}
-                    {cardsStatusVidas?.consolidado?.por_plano?.total && cardsStatusVidas.consolidado.por_plano.total.length > 0 && (
-                      <div className="mt-4 pt-3 border-t border-slate-200">
-                        <button
-                          onClick={() => togglePlanos('total')}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-4 w-4 transition-transform ${planosExpandidos.has('total') ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosExpandidos.has('total') && (
-                          <PlanDistributionList
-                            planos={cardsStatusVidas.consolidado.por_plano.total}
-                            totalVidas={cardsStatusVidas.consolidado.total_vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </CardContent>
-            </Card>
-            
-            {/* Cards de Entidades - Total */}
-            {cardsStatusVidas?.por_entidade?.total && cardsStatusVidas.por_entidade.total.length > 0 && (
-              <div className="space-y-2">
-                {cardsStatusVidas.por_entidade.total.map((entidade) => (
-                  <div
-                    key={entidade.entidade}
-                    className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                    title={`Entidade: ${entidade.entidade}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
-                  >
-                    <div className="text-sm font-medium truncate text-slate-900">{entidade.entidade}</div>
-                    <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
-                    </p>
-                    <div className="mt-2">
-                      <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
-                        <div
-                          className="h-full rounded-full bg-primary"
-                          style={{ width: `${Math.min(entidade.pct_vidas * 100, 100)}%` }}
-                        />
-                      </div>
-                    </div>
-                    {/* Distribuição por plano - Drilldown */}
-                    {entidade.por_plano && entidade.por_plano.length > 0 && (
-                      <div className="mt-3 pt-2 border-t border-slate-200">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            togglePlanosEntidade(`total-${entidade.entidade}`)
-                          }}
-                          className="w-full flex items-center justify-between text-xs font-medium text-[#184286] hover:text-[#184286]/80 transition-colors mb-2"
-                        >
-                          <span>Distribuição por plano</span>
-                          <ChevronRight 
-                            className={`h-3 w-3 transition-transform ${planosEntidadeExpandidos.has(`total-${entidade.entidade}`) ? 'rotate-90' : ''}`} 
-                          />
-                        </button>
-                        {planosEntidadeExpandidos.has(`total-${entidade.entidade}`) && (
-                          <PlanDistributionList
-                            planos={entidade.por_plano}
-                            totalVidas={entidade.vidas || 0}
-                          />
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
         )
       })()}
