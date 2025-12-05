@@ -784,8 +784,12 @@ export default function SinistralidadeDashboardPage() {
       </Card>
 
       {/* Cards de Status de Vidas com Entidades */}
-      {mesesReferencia.length > 0 && (
-        <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4 mt-6">
+      {mesesReferencia.length > 0 && (() => {
+        const temNaoLocalizados = (cardsStatusVidas?.consolidado?.nao_localizado || 0) > 0
+        const gridCols = temNaoLocalizados ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-2 lg:grid-cols-3"
+        
+        return (
+        <div className={`grid gap-6 ${gridCols} mt-6`}>
           {/* Coluna 1 – Vidas Ativas + entidades ativas */}
           <div className="space-y-3 lg:border-r lg:border-slate-200 lg:pr-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
@@ -884,7 +888,7 @@ export default function SinistralidadeDashboardPage() {
           </div>
 
           {/* Coluna 2 – Vidas Inativas + entidades inativas */}
-          <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
+          <div className={`space-y-3 ${temNaoLocalizados ? 'lg:border-r lg:border-slate-200 lg:px-4' : 'lg:border-r lg:border-slate-200 lg:px-4'}`}>
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">Vidas Inativas</CardTitle>
@@ -981,6 +985,7 @@ export default function SinistralidadeDashboardPage() {
           </div>
 
           {/* Coluna 3 – Vidas Não Localizadas + entidades correspondentes */}
+          {temNaoLocalizados && (
           <div className="space-y-3 lg:border-r lg:border-slate-200 lg:px-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -1076,9 +1081,10 @@ export default function SinistralidadeDashboardPage() {
               </div>
             )}
           </div>
+          )}
 
           {/* Coluna 4 – Total de Vidas + entidades de total */}
-          <div className="space-y-3 lg:pl-4">
+          <div className={`space-y-3 ${temNaoLocalizados ? 'lg:pl-4' : 'lg:pl-4'}`}>
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">Total de Vidas</CardTitle>
@@ -1174,7 +1180,8 @@ export default function SinistralidadeDashboardPage() {
             )}
           </div>
         </div>
-      )}
+        )
+      })()}
 
     </div>
   )
