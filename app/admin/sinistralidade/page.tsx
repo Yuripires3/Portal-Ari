@@ -4,29 +4,82 @@ import { useEffect, useState, useMemo, useCallback, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useAuth } from "@/components/auth/auth-provider"
-import { useBeneficiariosFilters } from "@/lib/beneficiarios-filters-store"
 import { useToast } from "@/hooks/use-toast"
-import { Filter, RefreshCw, ChevronDown, Users, UserX, UserCheck, Activity, ChevronRight } from "lucide-react"
+import { Filter, RefreshCw, ChevronDown, Users, UserX, UserCheck, Activity, ChevronRight, Loader2 } from "lucide-react"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useEntidadesPorMes } from "@/hooks/useEntidadesPorMes"
 import { useTiposPorMes } from "@/hooks/useTiposPorMes"
-import { filterAssimSaude, validateFilters, normalizeCpf } from "@/lib/beneficiarios-filters-utils"
+import { filterAssimSaude, validateFilters, createDefaultFilters, getMesReferenciaAtual } from "@/lib/beneficiarios-filters-utils"
 import { PlanDistributionList } from "@/components/sinistralidade/PlanDistributionList"
+import type { BeneficiariosFiltersState } from "@/lib/beneficiarios-filters-utils"
 
 const fetchNoStore = (input: string, init?: RequestInit) =>
   fetch(input, { ...init, cache: "no-store" })
+
+// Chave para persistência específica desta página
+const STORAGE_KEY_SINISTRALIDADE = "sinistralidade-dashboard-filters"
+
+// Tipo para filtros aplicados (usados na API)
+type FiltrosAplicados = {
+  mesesReferencia: string[]
+  operadoras: string[]
+  entidades: string[]
+  mesesReajuste: string[]
+  tipo: string
+}
 
 export default function SinistralidadeDashboardPage() {
   const { user, isLoading: authLoading } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
-  const { filters, updateFilters } = useBeneficiariosFilters()
   
+  // Estados de filtros: formulário (edição) vs aplicados (consulta API)
+  const [filtrosFormulario, setFiltrosFormulario] = useState<BeneficiariosFiltersState>(() => {
+    // Carregar do localStorage ao inicializar
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_SINISTRALIDADE)
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          return {
+            mesReferencia: parsed.mesReferencia || getMesReferenciaAtual(),
+            mesesReferencia: Array.isArray(parsed.mesesReferencia) && parsed.mesesReferencia.length > 0
+              ? parsed.mesesReferencia
+              : [getMesReferenciaAtual()],
+            operadoras: Array.isArray(parsed.operadoras) ? parsed.operadoras : [],
+            entidades: Array.isArray(parsed.entidades) ? parsed.entidades : [],
+            tipo: parsed.tipo || "Todos",
+            cpf: "", // Sempre vazio nesta página
+          }
+        }
+      } catch (e) {
+        console.error("Erro ao carregar filtros do localStorage:", e)
+      }
+    }
+    return createDefaultFilters()
+  })
+
+  const [filtrosAplicados, setFiltrosAplicados] = useState<FiltrosAplicados | null>(null)
+  const [mesesReajuste, setMesesReajuste] = useState<string[]>(() => {
+    // Carregar meses de reajuste do localStorage
+    if (typeof window !== "undefined") {
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_SINISTRALIDADE)
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          return Array.isArray(parsed.mesesReajuste) ? parsed.mesesReajuste : []
+        }
+      } catch (e) {
+        console.error("Erro ao carregar meses de reajuste do localStorage:", e)
+      }
+    }
+    return []
+  })
+
   const [entidadeSelectKey, setEntidadeSelectKey] = useState(0)
   const [mesesDropdownOpen, setMesesDropdownOpen] = useState(false)
   const [operadorasDisponiveis, setOperadorasDisponiveis] = useState<string[]>([])
@@ -91,6 +144,7 @@ export default function SinistralidadeDashboardPage() {
     }
   } | null>(null)
   const [loadingCardsStatus, setLoadingCardsStatus] = useState(false)
+  const [loadingOverlay, setLoadingOverlay] = useState(false)
   
   // Estados para controlar expansão dos drilldowns de planos
   const [planosExpandidos, setPlanosExpandidos] = useState<Set<string>>(new Set())
@@ -120,32 +174,28 @@ export default function SinistralidadeDashboardPage() {
     })
   }, [])
 
-  // Ler filtros diretamente do store (com fallbacks seguros)
+  // Ler filtros do formulário (com fallbacks seguros)
   const mesesReferencia = useMemo(() => {
-    if (Array.isArray(filters?.mesesReferencia) && filters.mesesReferencia.length > 0) {
-      return filters.mesesReferencia
+    if (Array.isArray(filtrosFormulario?.mesesReferencia) && filtrosFormulario.mesesReferencia.length > 0) {
+      return filtrosFormulario.mesesReferencia
     }
-    if (filters?.mesReferencia) {
-      return [filters.mesReferencia]
+    if (filtrosFormulario?.mesReferencia) {
+      return [filtrosFormulario.mesReferencia]
     }
     return []
-  }, [filters?.mesesReferencia, filters?.mesReferencia])
+  }, [filtrosFormulario?.mesesReferencia, filtrosFormulario?.mesReferencia])
 
   const operadoras = useMemo(() => 
-    Array.isArray(filters?.operadoras) ? filters.operadoras : [],
-    [filters?.operadoras]
+    Array.isArray(filtrosFormulario?.operadoras) ? filtrosFormulario.operadoras : [],
+    [filtrosFormulario?.operadoras]
   )
   
   const entidades = useMemo(() => 
-    Array.isArray(filters?.entidades) ? filters.entidades : [],
-    [filters?.entidades]
+    Array.isArray(filtrosFormulario?.entidades) ? filtrosFormulario.entidades : [],
+    [filtrosFormulario?.entidades]
   )
   
-  const tipo = useMemo(() => filters?.tipo || "Todos", [filters?.tipo])
-  const cpf = useMemo(() => filters?.cpf || "", [filters?.cpf])
-  
-  // Estado local para meses de reajuste (não está no store de filtros)
-  const [mesesReajuste, setMesesReajuste] = useState<string[]>([])
+  const tipo = useMemo(() => filtrosFormulario?.tipo || "Todos", [filtrosFormulario?.tipo])
 
   // Carregar meses de reajuste disponíveis dos dados já carregados
   const mesesReajusteDisponiveis = useMemo(() => {
@@ -180,7 +230,7 @@ export default function SinistralidadeDashboardPage() {
     )
   }, [])
 
-  // Usar hook otimizado para carregar entidades por mês
+  // Usar hook otimizado para carregar entidades por mês (baseado nos filtros do formulário)
   const {
     entidadesDisponiveis,
     entidadesPorOperadora,
@@ -189,7 +239,7 @@ export default function SinistralidadeDashboardPage() {
     refresh: refreshEntidades,
   } = useEntidadesPorMes(mesesReferencia, operadorasDisponiveis)
 
-  // Usar hook otimizado para carregar tipos por mês
+  // Usar hook otimizado para carregar tipos por mês (baseado nos filtros do formulário)
   const {
     tiposDisponiveis,
     loading: loadingTipos,
@@ -301,7 +351,7 @@ export default function SinistralidadeDashboardPage() {
     return entidadesBase.filter(ent => !entidades.includes(ent))
   }, [entidadesBase, entidades])
 
-  // Callbacks memoizados para evitar re-renders desnecessários
+  // Callbacks memoizados para atualizar filtros do formulário (não dispara carregamento)
   const toggleOperadora = useCallback((op: string) => {
     const novasOperadoras = operadoras.includes(op)
       ? operadoras.filter(o => o !== op)
@@ -313,20 +363,22 @@ export default function SinistralidadeDashboardPage() {
       ? entidades.filter(ent => entidadesDisponiveis.includes(ent))
       : []
     
-    updateFilters({
+    setFiltrosFormulario(prev => ({
+      ...prev,
       operadoras: novasOperadoras,
       entidades: entidadesValidas
-    })
+    }))
     setEntidadeSelectKey(prev => prev + 1)
-  }, [operadoras, entidades, entidadesDisponiveis, updateFilters])
+  }, [operadoras, entidades, entidadesDisponiveis])
 
   const toggleEntidade = useCallback((ent: string) => {
-    updateFilters({
+    setFiltrosFormulario(prev => ({
+      ...prev,
       entidades: entidades.includes(ent)
         ? entidades.filter(e => e !== ent)
         : [...entidades, ent]
-    })
-  }, [entidades, updateFilters])
+    }))
+  }, [entidades])
 
   const toggleMes = useCallback((mesValue: string) => {
     const novosMeses = mesesReferencia.includes(mesValue)
@@ -344,8 +396,12 @@ export default function SinistralidadeDashboardPage() {
 
     // Ordenar meses em ordem cronológica
     const mesesOrdenados = [...novosMeses].sort()
-    updateFilters({ mesesReferencia: mesesOrdenados })
-  }, [mesesReferencia, updateFilters, toast])
+    setFiltrosFormulario(prev => ({
+      ...prev,
+      mesesReferencia: mesesOrdenados,
+      mesReferencia: mesesOrdenados[0]
+    }))
+  }, [mesesReferencia, toast])
 
   const getTextoMesesSelecionados = () => {
     if (mesesReferencia.length === 0) return "Selecione os meses"
@@ -358,26 +414,66 @@ export default function SinistralidadeDashboardPage() {
   }
 
   const clearFilters = useCallback(() => {
-    const hoje = new Date()
-    const ano = hoje.getFullYear()
-    const mes = String(hoje.getMonth() + 1).padStart(2, "0")
-    const mesAtual = `${ano}-${mes}`
-    updateFilters({ 
+    const mesAtual = getMesReferenciaAtual()
+    const novosFiltros = {
+      mesReferencia: mesAtual,
       mesesReferencia: [mesAtual],
       operadoras: [],
       entidades: [],
       tipo: "Todos",
       cpf: "",
-    })
+    }
+    setFiltrosFormulario(novosFiltros)
     setMesesReajuste([])
     setEntidadeSelectKey(prev => prev + 1)
-  }, [updateFilters])
+    // Persistir no localStorage
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(STORAGE_KEY_SINISTRALIDADE, JSON.stringify({
+          ...novosFiltros,
+          mesesReajuste: []
+        }))
+      } catch (e) {
+        console.error("Erro ao salvar filtros no localStorage:", e)
+      }
+    }
+  }, [])
 
-  // Função para atualizar/recarregar dados
-  const handleRefresh = useCallback(() => {
-    refreshEntidades()
-    refreshTipos()
-  }, [refreshEntidades, refreshTipos])
+  // Função para aplicar filtros e carregar dados (dispara carregamento)
+  const handleAplicarFiltros = useCallback(() => {
+    // Validar meses
+    if (mesesReferencia.length === 0) {
+      toast({
+        title: "Atenção",
+        description: "Pelo menos um mês deve estar selecionado",
+        variant: "destructive"
+      })
+      return
+    }
+
+    // Aplicar filtros do formulário aos filtros aplicados
+    const novosFiltrosAplicados: FiltrosAplicados = {
+      mesesReferencia: mesesReferencia,
+      operadoras: operadoras,
+      entidades: entidades,
+      mesesReajuste: mesesReajuste,
+      tipo: tipo,
+    }
+    
+    setFiltrosAplicados(novosFiltrosAplicados)
+    
+    // Persistir no localStorage
+    if (typeof window !== "undefined") {
+      try {
+        localStorage.setItem(STORAGE_KEY_SINISTRALIDADE, JSON.stringify({
+          ...filtrosFormulario,
+          mesesReajuste: mesesReajuste
+        }))
+      } catch (e) {
+        console.error("Erro ao salvar filtros no localStorage:", e)
+      }
+    }
+  }, [mesesReferencia, operadoras, entidades, mesesReajuste, tipo, filtrosFormulario, toast])
 
   // Função para formatar valores monetários
   const fmtBRL = useCallback((valor: number) => {
@@ -463,55 +559,74 @@ export default function SinistralidadeDashboardPage() {
     }))
   }, [])
 
-  // Carregar cards de status de vidas
+  // Carregar cards de status de vidas (apenas quando filtrosAplicados mudar)
   useEffect(() => {
-    if (mesesReferencia.length === 0) {
+    if (!filtrosAplicados || filtrosAplicados.mesesReferencia.length === 0) {
       setCardsStatusVidas(null)
+      setLoadingOverlay(false)
       return
     }
 
     let cancelled = false
     setLoadingCardsStatus(true)
+    setLoadingOverlay(true)
 
     const loadCardsStatus = async () => {
       try {
-        const params = new URLSearchParams({
-          meses_referencia: mesesReferencia.join(","),
+        // CARDS MÃE: usar apenas meses_referencia e operadoras
+        const paramsCardsMae = new URLSearchParams({
+          meses_referencia: filtrosAplicados.mesesReferencia.join(","),
         })
 
-        if (operadoras.length > 0) {
-          params.append("operadoras", operadoras.join(","))
+        if (filtrosAplicados.operadoras.length > 0) {
+          paramsCardsMae.append("operadoras", filtrosAplicados.operadoras.join(","))
         }
 
-        if (entidades.length > 0) {
-          params.append("entidades", entidades.join(","))
+        // CARDS FILHOS: usar todos os filtros (exceto CPF)
+        const paramsCardsFilhos = new URLSearchParams({
+          meses_referencia: filtrosAplicados.mesesReferencia.join(","),
+        })
+
+        if (filtrosAplicados.operadoras.length > 0) {
+          paramsCardsFilhos.append("operadoras", filtrosAplicados.operadoras.join(","))
         }
 
-        if (tipo && tipo !== "Todos") {
-          params.append("tipo", tipo)
+        if (filtrosAplicados.entidades.length > 0) {
+          paramsCardsFilhos.append("entidades", filtrosAplicados.entidades.join(","))
         }
 
-        if (cpf) {
-          params.append("cpf", cpf)
+        if (filtrosAplicados.tipo && filtrosAplicados.tipo !== "Todos") {
+          paramsCardsFilhos.append("tipo", filtrosAplicados.tipo)
         }
 
-        if (mesesReajuste.length > 0) {
-          params.append("meses_reajuste", mesesReajuste.join(","))
+        if (filtrosAplicados.mesesReajuste.length > 0) {
+          paramsCardsFilhos.append("meses_reajuste", filtrosAplicados.mesesReajuste.join(","))
         }
 
-        const res = await fetchNoStore(`/api/sinistralidade/cards-status-vidas?${params}`)
+        // Fazer duas chamadas em paralelo: uma para cards MÃE e outra para FILHOS
+        const [resCardsMae, resCardsFilhos] = await Promise.all([
+          fetchNoStore(`/api/sinistralidade/cards-status-vidas?${paramsCardsMae}`),
+          fetchNoStore(`/api/sinistralidade/cards-status-vidas?${paramsCardsFilhos}`)
+        ])
         
         if (cancelled) return
 
-        if (!res.ok) {
+        if (!resCardsMae.ok || !resCardsFilhos.ok) {
           throw new Error("Erro ao carregar cards de status")
         }
 
-        const data = await res.json()
+        const [dataCardsMae, dataCardsFilhos] = await Promise.all([
+          resCardsMae.json(),
+          resCardsFilhos.json()
+        ])
         
         if (cancelled) return
 
-        setCardsStatusVidas(data)
+        // Combinar dados: consolidado dos cards MÃE + por_entidade dos cards FILHOS
+        setCardsStatusVidas({
+          consolidado: dataCardsMae.consolidado,
+          por_entidade: dataCardsFilhos.por_entidade,
+        })
       } catch (error: any) {
         if (cancelled) return
         console.error("Erro ao carregar cards de status:", error)
@@ -523,6 +638,7 @@ export default function SinistralidadeDashboardPage() {
       } finally {
         if (!cancelled) {
           setLoadingCardsStatus(false)
+          setLoadingOverlay(false)
         }
       }
     }
@@ -532,16 +648,35 @@ export default function SinistralidadeDashboardPage() {
     return () => {
       cancelled = true
     }
-  }, [mesesReferencia, operadoras, entidades, tipo, cpf, mesesReajuste, toast])
+  }, [filtrosAplicados, toast])
 
-  // Validação automática de filtros (usando utilitário centralizado)
+  // Carregar filtros aplicados ao montar a página (se existirem no localStorage)
+  // Isso garante que ao voltar para a página, os cards sejam carregados automaticamente
+  useEffect(() => {
+    if (filtrosAplicados !== null) return // Já foi aplicado
+    if (loadingFiltros) return // Aguardar carregamento dos filtros disponíveis
+
+    // Aplicar filtros do formulário como filtros aplicados na primeira carga
+    // Isso permite que os cards sejam carregados automaticamente ao entrar na página
+    if (mesesReferencia.length > 0) {
+      setFiltrosAplicados({
+        mesesReferencia: mesesReferencia,
+        operadoras: operadoras,
+        entidades: entidades,
+        mesesReajuste: mesesReajuste,
+        tipo: tipo,
+      })
+    }
+  }, [filtrosAplicados, loadingFiltros, mesesReferencia, operadoras, entidades, mesesReajuste, tipo])
+
+  // Validação automática de filtros do formulário
   const validacaoExecutadaRef = useRef(false)
   useEffect(() => {
     if (loadingFiltros || loadingTipos || validacaoExecutadaRef.current) {
       return
     }
     
-    const updates = validateFilters(filters, {
+    const updates = validateFilters(filtrosFormulario, {
       operadorasDisponiveis,
       tiposDisponiveis,
     })
@@ -568,14 +703,14 @@ export default function SinistralidadeDashboardPage() {
     
     if (Object.keys(updates).length > 0) {
       validacaoExecutadaRef.current = true
-      updateFilters(updates)
+      setFiltrosFormulario(prev => ({ ...prev, ...updates }))
       if (updates.entidades !== undefined) {
         setEntidadeSelectKey(prev => prev + 1)
       }
     } else {
       validacaoExecutadaRef.current = true
     }
-  }, [loadingFiltros, loadingTipos, filters, operadorasDisponiveis, tiposDisponiveis, operadoras, entidades, entidadesDisponiveis, tipo, updateFilters])
+  }, [loadingFiltros, loadingTipos, filtrosFormulario, operadorasDisponiveis, tiposDisponiveis, operadoras, entidades, entidadesDisponiveis, tipo])
 
   // Carregar filtros disponíveis (apenas uma vez)
   useEffect(() => {
@@ -753,10 +888,11 @@ export default function SinistralidadeDashboardPage() {
                 key={`operadora-${operadoras.length}`}
                 onValueChange={(val) => {
                   if (val && val !== "__no-operadora" && !operadoras.includes(val)) {
-                    updateFilters({ 
+                    setFiltrosFormulario(prev => ({ 
+                      ...prev,
                       operadoras: [...operadoras, val],
                       entidades: [] 
-                    })
+                    }))
                     setEntidadeSelectKey(prev => prev + 1)
                   }
                 }}
@@ -804,7 +940,7 @@ export default function SinistralidadeDashboardPage() {
                 key={entidadeSelectKey}
                 onValueChange={(val) => {
                   if (val && val !== "__no-entidade" && !entidades.includes(val)) {
-                    updateFilters({ entidades: [...entidades, val] })
+                    setFiltrosFormulario(prev => ({ ...prev, entidades: [...entidades, val] }))
                   }
                   setEntidadeSelectKey(prev => prev + 1)
                 }}
@@ -896,7 +1032,7 @@ export default function SinistralidadeDashboardPage() {
               <Label>Tipo de beneficiário</Label>
               <Select 
                 value={tipoValido} 
-                onValueChange={(val) => updateFilters({ tipo: val })}
+                onValueChange={(val) => setFiltrosFormulario(prev => ({ ...prev, tipo: val }))}
                 disabled={loadingFiltros || loadingTipos}
               >
                 <SelectTrigger>
@@ -912,19 +1048,6 @@ export default function SinistralidadeDashboardPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-2">
-              <Label>CPF</Label>
-              <Input
-                value={cpf}
-                onChange={(event) =>
-                  updateFilters({
-                    cpf: normalizeCpf(event.target.value),
-                  })
-                }
-                placeholder="Somente números"
-                maxLength={14}
-              />
-            </div>
           </div>
           <div className="mt-4 flex flex-col items-end gap-1">
             <div className="flex gap-2">
@@ -933,12 +1056,12 @@ export default function SinistralidadeDashboardPage() {
               </Button>
               <Button 
                 size="sm" 
-                onClick={handleRefresh}
-                disabled={loadingEntidades || loadingTipos || loadingFiltros}
+                onClick={handleAplicarFiltros}
+                disabled={loadingCardsStatus || loadingOverlay || mesesReferencia.length === 0}
                 className="gap-2 bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                <RefreshCw className={`h-4 w-4 ${loadingEntidades || loadingTipos ? "animate-spin" : ""}`} />
-                Atualizar
+                <RefreshCw className={`h-4 w-4 ${loadingCardsStatus || loadingOverlay ? "animate-spin" : ""}`} />
+                Visualizar
               </Button>
             </div>
           </div>
@@ -946,11 +1069,11 @@ export default function SinistralidadeDashboardPage() {
       </Card>
 
       {/* Cards de Status de Vidas com Entidades */}
-      {mesesReferencia.length > 0 && (() => {
+      {filtrosAplicados && filtrosAplicados.mesesReferencia.length > 0 && (() => {
         const cardsData = cardsStatusVidas
         const temNaoLocalizados = (cardsData?.consolidado?.nao_localizado || 0) > 0
         const gridCols = temNaoLocalizados ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-2 lg:grid-cols-3"
-        const mesesReajusteFiltro = mesesReajuste
+        const mesesReajusteFiltro = filtrosAplicados.mesesReajuste
         
         // Funções auxiliares para calcular nome de exibição e key
         const calcularNomeExibicao = (entidade: { entidade: string; mes_reajuste?: string | null }) => {
@@ -966,7 +1089,17 @@ export default function SinistralidadeDashboardPage() {
         }
         
         return (
-        <div className={`grid gap-6 ${gridCols} mt-6`}>
+        <div className="relative mt-6">
+          {/* Overlay de carregamento */}
+          {loadingOverlay && (
+            <div className="absolute inset-0 z-50 flex items-center justify-center bg-white/80 backdrop-blur-sm rounded-2xl">
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                <p className="text-sm font-medium text-muted-foreground">Carregando dados...</p>
+              </div>
+            </div>
+          )}
+          <div className={`grid gap-6 ${gridCols}`}>
           {/* Coluna 1 – Total de Vidas + entidades de total */}
           <div className="space-y-3 lg:border-r lg:border-slate-200 lg:pr-4">
             <Card className="bg-white rounded-2xl shadow-sm border-zinc-200/70">
@@ -1400,6 +1533,7 @@ export default function SinistralidadeDashboardPage() {
             )}
           </div>
           )}
+          </div>
         </div>
         )
       })()}
