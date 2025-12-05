@@ -186,43 +186,50 @@ export function AdminSidebar() {
       </SidebarContent>
 
       <SidebarFooter className="border-t border-sidebar-border p-4">
-          <div className="flex items-center gap-3">
-            <Avatar className="h-8 w-8 bg-zinc-900 text-zinc-200">
-              <AvatarFallback className="bg-zinc-900 text-zinc-200">
-                {(() => {
-                  const login = (user?.usuario_login || "").toString()
-                  const [pre, pos] = login.split(".")
-                  const a = (pre?.[0] || "U").toUpperCase()
-                  const b = (pos?.[0] || pre?.[1] || "S").toUpperCase()
-                  return `${a}${b}`
-                })()}
-              </AvatarFallback>
-            </Avatar>
+          {(() => {
+            const userData = user
+            const login = (userData?.usuario_login || "").toString()
+            const [pre, pos] = login.split(".")
+            const a = (pre?.[0] || "U").toUpperCase()
+            const b = (pos?.[0] || pre?.[1] || "S").toUpperCase()
+            const initials = `${a}${b}`
+            
+            const full = (userData?.nome || "").trim()
+            let displayName = ""
+            if (full) {
+              const parts = full.split(/\s+/)
+              const first = parts[0]
+              const last = parts.length > 1 ? parts[parts.length - 1] : ""
+              displayName = last ? `${first} ${last}` : first
+            } else {
+              displayName = userData?.usuario_login || ""
+            }
+            
+            return (
+              <div className="flex items-center gap-3">
+                <Avatar className="h-8 w-8 bg-zinc-900 text-zinc-200">
+                  <AvatarFallback className="bg-zinc-900 text-zinc-200">
+                    {initials}
+                  </AvatarFallback>
+                </Avatar>
 
-            <div className="flex flex-col leading-tight">
-              <span className="text-sm font-medium">
-                {(() => {
-                  const full = (user?.nome || "").trim()
-                  if (full) {
-                    const parts = full.split(/\s+/)
-                    const first = parts[0]
-                    const last = parts.length > 1 ? parts[parts.length - 1] : ""
-                    return last ? `${first} ${last}` : first
-                  }
-                  return user?.usuario_login || ""
-                })()}
-              </span>
+                <div className="flex flex-col leading-tight">
+                  <span className="text-sm font-medium">
+                    {displayName}
+                  </span>
 
-              <button
-                onClick={logout}
-                aria-label="Sair"
-                className="text-xs flex items-center gap-1 opacity-75 hover:opacity-100 focus:outline-none"
-              >
-                <LogOut className="h-3 w-3" />
-                Sair
-              </button>
-            </div>
-          </div>
+                  <button
+                    onClick={logout}
+                    aria-label="Sair"
+                    className="text-xs flex items-center gap-1 opacity-75 hover:opacity-100 focus:outline-none"
+                  >
+                    <LogOut className="h-3 w-3" />
+                    Sair
+                  </button>
+                </div>
+              </div>
+            )
+          })()}
       </SidebarFooter>
     </Sidebar>
   )

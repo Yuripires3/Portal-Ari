@@ -947,8 +947,23 @@ export default function SinistralidadeDashboardPage() {
 
       {/* Cards de Status de Vidas com Entidades */}
       {mesesReferencia.length > 0 && (() => {
-        const temNaoLocalizados = (cardsStatusVidas?.consolidado?.nao_localizado || 0) > 0
+        const cardsData = cardsStatusVidas
+        const temNaoLocalizados = (cardsData?.consolidado?.nao_localizado || 0) > 0
         const gridCols = temNaoLocalizados ? "sm:grid-cols-2 lg:grid-cols-4" : "sm:grid-cols-2 lg:grid-cols-3"
+        const mesesReajusteFiltro = mesesReajuste
+        
+        // Funções auxiliares para calcular nome de exibição e key
+        const calcularNomeExibicao = (entidade: { entidade: string; mes_reajuste?: string | null }) => {
+          return entidade.mes_reajuste 
+            ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
+            : entidade.entidade
+        }
+        
+        const calcularKey = (prefixo: string, entidade: { entidade: string; mes_reajuste?: string | null }) => {
+          return entidade.mes_reajuste 
+            ? `${prefixo}-${entidade.entidade}-${entidade.mes_reajuste}`
+            : `${prefixo}-${entidade.entidade}`
+        }
         
         return (
         <div className={`grid gap-6 ${gridCols} mt-6`}>
@@ -968,13 +983,13 @@ export default function SinistralidadeDashboardPage() {
                 ) : (
                   <>
                     <div className="text-2xl font-bold">
-                      {fmtNumber(cardsStatusVidas?.consolidado?.total_vidas || 0)}
+                      {fmtNumber(cardsData?.consolidado?.total_vidas || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor Total: {fmtBRL(cardsStatusVidas?.consolidado?.valor_total_geral || 0)}
+                      Valor Total: {fmtBRL(cardsData?.consolidado?.valor_total_geral || 0)}
                     </p>
                     {/* Distribuição por plano - Drilldown */}
-                    {cardsStatusVidas?.consolidado?.por_plano?.total && cardsStatusVidas.consolidado.por_plano.total.length > 0 && (
+                    {cardsData?.consolidado?.por_plano?.total && cardsData.consolidado.por_plano.total.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
                           onClick={() => togglePlanos('total')}
@@ -987,8 +1002,8 @@ export default function SinistralidadeDashboardPage() {
                         </button>
                         {planosExpandidos.has('total') && (
                           <PlanDistributionList
-                            planos={cardsStatusVidas.consolidado.por_plano.total}
-                            totalVidas={cardsStatusVidas.consolidado.total_vidas || 0}
+                            planos={cardsData.consolidado.por_plano.total}
+                            totalVidas={cardsData.consolidado.total_vidas || 0}
                           />
                         )}
                       </div>
@@ -999,21 +1014,17 @@ export default function SinistralidadeDashboardPage() {
             </Card>
             
             {/* Cards de Entidades - Total */}
-            {cardsStatusVidas?.por_entidade?.total && cardsStatusVidas.por_entidade.total.length > 0 && (
+            {cardsData?.por_entidade?.total && cardsData.por_entidade.total.length > 0 && (
               <div className="space-y-2">
                 {agruparEntidadesPorMesReajuste(
-                  mesesReajuste.length > 0
-                    ? cardsStatusVidas.por_entidade.total.filter(ent => 
-                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                  mesesReajusteFiltro.length > 0
+                    ? cardsData.por_entidade.total.filter(ent => 
+                        !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
                       )
-                    : cardsStatusVidas.por_entidade.total
-                ).map((entidade, index) => {
-                  const nomeExibicao = entidade.mes_reajuste 
-                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
-                    : entidade.entidade
-                  const key = entidade.mes_reajuste 
-                    ? `total-${entidade.entidade}-${entidade.mes_reajuste}`
-                    : `total-${entidade.entidade}`
+                    : cardsData.por_entidade.total
+                ).map((entidade) => {
+                  const nomeExibicao = calcularNomeExibicao(entidade)
+                  const key = calcularKey('total', entidade)
                   
                   return (
                     <div
@@ -1080,13 +1091,13 @@ export default function SinistralidadeDashboardPage() {
                 ) : (
                   <>
                     <div className="text-2xl font-bold">
-                      {fmtNumber(cardsStatusVidas?.consolidado?.ativo || 0)}
+                      {fmtNumber(cardsData?.consolidado?.ativo || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_ativo || 0)}
+                      Valor: {fmtBRL(cardsData?.consolidado?.valor_ativo || 0)}
                     </p>
                     {/* Distribuição por plano - Drilldown */}
-                    {cardsStatusVidas?.consolidado?.por_plano?.ativo && cardsStatusVidas.consolidado.por_plano.ativo.length > 0 && (
+                    {cardsData?.consolidado?.por_plano?.ativo && cardsData.consolidado.por_plano.ativo.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
                           onClick={() => togglePlanos('ativo')}
@@ -1099,8 +1110,8 @@ export default function SinistralidadeDashboardPage() {
                         </button>
                         {planosExpandidos.has('ativo') && (
                           <PlanDistributionList
-                            planos={cardsStatusVidas.consolidado.por_plano.ativo}
-                            totalVidas={cardsStatusVidas.consolidado.ativo || 0}
+                            planos={cardsData.consolidado.por_plano.ativo}
+                            totalVidas={cardsData.consolidado.ativo || 0}
                           />
                         )}
                       </div>
@@ -1111,21 +1122,17 @@ export default function SinistralidadeDashboardPage() {
             </Card>
             
             {/* Cards de Entidades - Ativas */}
-            {cardsStatusVidas?.por_entidade?.ativo && cardsStatusVidas.por_entidade.ativo.length > 0 && (
+            {cardsData?.por_entidade?.ativo && cardsData.por_entidade.ativo.length > 0 && (
               <div className="space-y-2">
                 {agruparEntidadesPorMesReajuste(
-                  mesesReajuste.length > 0
-                    ? cardsStatusVidas.por_entidade.ativo.filter(ent => 
-                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                  mesesReajusteFiltro.length > 0
+                    ? cardsData.por_entidade.ativo.filter(ent => 
+                        !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
                       )
-                    : cardsStatusVidas.por_entidade.ativo
+                    : cardsData.por_entidade.ativo
                 ).map((entidade) => {
-                  const nomeExibicao = entidade.mes_reajuste 
-                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
-                    : entidade.entidade
-                  const key = entidade.mes_reajuste 
-                    ? `ativo-${entidade.entidade}-${entidade.mes_reajuste}`
-                    : `ativo-${entidade.entidade}`
+                  const nomeExibicao = calcularNomeExibicao(entidade)
+                  const key = calcularKey('ativo', entidade)
                   
                   return (
                     <div
@@ -1192,13 +1199,13 @@ export default function SinistralidadeDashboardPage() {
                 ) : (
                   <>
                     <div className="text-2xl font-bold">
-                      {fmtNumber(cardsStatusVidas?.consolidado?.inativo || 0)}
+                      {fmtNumber(cardsData?.consolidado?.inativo || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_inativo || 0)}
+                      Valor: {fmtBRL(cardsData?.consolidado?.valor_inativo || 0)}
                     </p>
                     {/* Distribuição por plano - Drilldown */}
-                    {cardsStatusVidas?.consolidado?.por_plano?.inativo && cardsStatusVidas.consolidado.por_plano.inativo.length > 0 && (
+                    {cardsData?.consolidado?.por_plano?.inativo && cardsData.consolidado.por_plano.inativo.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
                           onClick={() => togglePlanos('inativo')}
@@ -1211,8 +1218,8 @@ export default function SinistralidadeDashboardPage() {
                         </button>
                         {planosExpandidos.has('inativo') && (
                           <PlanDistributionList
-                            planos={cardsStatusVidas.consolidado.por_plano.inativo}
-                            totalVidas={cardsStatusVidas.consolidado.inativo || 0}
+                            planos={cardsData.consolidado.por_plano.inativo}
+                            totalVidas={cardsData.consolidado.inativo || 0}
                           />
                         )}
                       </div>
@@ -1223,21 +1230,17 @@ export default function SinistralidadeDashboardPage() {
             </Card>
             
             {/* Cards de Entidades - Inativas */}
-            {cardsStatusVidas?.por_entidade?.inativo && cardsStatusVidas.por_entidade.inativo.length > 0 && (
+            {cardsData?.por_entidade?.inativo && cardsData.por_entidade.inativo.length > 0 && (
               <div className="space-y-2">
                 {agruparEntidadesPorMesReajuste(
-                  mesesReajuste.length > 0
-                    ? cardsStatusVidas.por_entidade.inativo.filter(ent => 
-                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                  mesesReajusteFiltro.length > 0
+                    ? cardsData.por_entidade.inativo.filter(ent => 
+                        !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
                       )
-                    : cardsStatusVidas.por_entidade.inativo
+                    : cardsData.por_entidade.inativo
                 ).map((entidade) => {
-                  const nomeExibicao = entidade.mes_reajuste 
-                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
-                    : entidade.entidade
-                  const key = entidade.mes_reajuste 
-                    ? `inativo-${entidade.entidade}-${entidade.mes_reajuste}`
-                    : `inativo-${entidade.entidade}`
+                  const nomeExibicao = calcularNomeExibicao(entidade)
+                  const key = calcularKey('inativo', entidade)
                   
                   return (
                     <div
@@ -1305,13 +1308,13 @@ export default function SinistralidadeDashboardPage() {
                 ) : (
                   <>
                     <div className="text-2xl font-bold">
-                      {fmtNumber(cardsStatusVidas?.consolidado?.nao_localizado || 0)}
+                      {fmtNumber(cardsData?.consolidado?.nao_localizado || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsStatusVidas?.consolidado?.valor_nao_localizado || 0)}
+                      Valor: {fmtBRL(cardsData?.consolidado?.valor_nao_localizado || 0)}
                     </p>
                     {/* Distribuição por plano - Drilldown */}
-                    {cardsStatusVidas?.consolidado?.por_plano?.nao_localizado && cardsStatusVidas.consolidado.por_plano.nao_localizado.length > 0 && (
+                    {cardsData?.consolidado?.por_plano?.nao_localizado && cardsData.consolidado.por_plano.nao_localizado.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
                         <button
                           onClick={() => togglePlanos('nao_localizado')}
@@ -1324,8 +1327,8 @@ export default function SinistralidadeDashboardPage() {
                         </button>
                         {planosExpandidos.has('nao_localizado') && (
                           <PlanDistributionList
-                            planos={cardsStatusVidas.consolidado.por_plano.nao_localizado}
-                            totalVidas={cardsStatusVidas.consolidado.nao_localizado || 0}
+                            planos={cardsData.consolidado.por_plano.nao_localizado}
+                            totalVidas={cardsData.consolidado.nao_localizado || 0}
                           />
                         )}
                       </div>
@@ -1336,21 +1339,17 @@ export default function SinistralidadeDashboardPage() {
             </Card>
             
             {/* Cards de Entidades - Não Localizadas */}
-            {cardsStatusVidas?.por_entidade?.nao_localizado && cardsStatusVidas.por_entidade.nao_localizado.length > 0 && (
+            {cardsData?.por_entidade?.nao_localizado && cardsData.por_entidade.nao_localizado.length > 0 && (
               <div className="space-y-2">
                 {agruparEntidadesPorMesReajuste(
-                  mesesReajuste.length > 0
-                    ? cardsStatusVidas.por_entidade.nao_localizado.filter(ent => 
-                        !ent.mes_reajuste || mesesReajuste.includes(ent.mes_reajuste)
+                  mesesReajusteFiltro.length > 0
+                    ? cardsData.por_entidade.nao_localizado.filter(ent => 
+                        !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
                       )
-                    : cardsStatusVidas.por_entidade.nao_localizado
+                    : cardsData.por_entidade.nao_localizado
                 ).map((entidade) => {
-                  const nomeExibicao = entidade.mes_reajuste 
-                    ? `${entidade.entidade} ${getNomeMes(entidade.mes_reajuste)}`
-                    : entidade.entidade
-                  const key = entidade.mes_reajuste 
-                    ? `nao_localizado-${entidade.entidade}-${entidade.mes_reajuste}`
-                    : `nao_localizado-${entidade.entidade}`
+                  const nomeExibicao = calcularNomeExibicao(entidade)
+                  const key = calcularKey('nao_localizado', entidade)
                   
                   return (
                     <div
