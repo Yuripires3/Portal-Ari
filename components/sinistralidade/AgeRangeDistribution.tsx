@@ -8,6 +8,7 @@ interface FaixaEtaria {
   faixa_etaria: string
   vidas: number
   valor: number
+  is?: number | null
 }
 
 interface AgeRangeDistributionProps {
@@ -95,6 +96,13 @@ export function AgeRangeDistribution({
     return new Intl.NumberFormat("pt-BR").format(valor)
   }
 
+  const formatPercent = (valor: number | null | undefined) => {
+    if (valor === null || valor === undefined || isNaN(valor)) {
+      return "-"
+    }
+    return `${valor.toFixed(1)}%`
+  }
+
   const getPctVidas = (vidas: number) => {
     return totalVidas > 0 ? (vidas / totalVidas) * 100 : 0
   }
@@ -129,6 +137,7 @@ export function AgeRangeDistribution({
           <span className="w-[60px] text-center">Vidas</span>
           <span className="w-[110px] text-center">Valor</span>
           <span className="w-[50px] text-center">%</span>
+          <span className="w-[50px] text-center">IS</span>
         </div>
       </div>
 
@@ -160,6 +169,14 @@ export function AgeRangeDistribution({
               {/* Percentual */}
               <span className="w-[50px] text-center text-slate-600">
                 {pct.toFixed(1)}%
+              </span>
+
+              {/* IS */}
+              <span className={cn(
+                "w-[50px] text-center",
+                faixa.is != null ? "text-[#184286]" : "text-slate-300"
+              )}>
+                {faixa.is != null ? formatPercent(faixa.is) : "-"}
               </span>
             </div>
           )

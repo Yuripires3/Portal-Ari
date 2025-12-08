@@ -394,10 +394,12 @@ export async function GET(request: NextRequest) {
     // Converter para array ordenado
     todasFaixas.forEach(faixa => {
       const dados = faixasMap.get(faixa) || { vidas: 0, valor: 0 }
+      // IS ainda não implementado - retornar null para mostrar "-"
       faixasEtarias.push({
         faixa_etaria: faixa,
         vidas: dados.vidas,
-        valor: dados.valor
+        valor: dados.valor,
+        is: null
       })
     })
 
