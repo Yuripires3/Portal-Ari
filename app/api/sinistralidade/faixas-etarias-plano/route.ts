@@ -107,104 +107,109 @@ export async function GET(request: NextRequest) {
     procedimentosConditions.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${mesesReferencia.map(() => "?").join(",")})`)
     procedimentosValues.push(...mesesReferencia)
 
-    // Construir condições WHERE para beneficiários
-    const beneficiarioConditions: string[] = []
-    const beneficiarioValues: any[] = []
+    // WHERE de beneficiários para igualar a base dos cards de distribuição por plano (sem filtrar por entidade/mes_reajuste)
+    const beneficiarioConditionsPlano: string[] = []
+    const beneficiarioValuesPlano: any[] = []
 
     if (operadoras.length > 0) {
-      beneficiarioConditions.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
-      beneficiarioValues.push(...operadoras)
-    }
-
-    if (entidades.length > 0) {
-      beneficiarioConditions.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
-      beneficiarioValues.push(...entidades)
-    }
-
-    if (mesesReajuste.length > 0) {
-      beneficiarioConditions.push(`b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})`)
-      beneficiarioValues.push(...mesesReajuste)
+      beneficiarioConditionsPlano.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
+      beneficiarioValuesPlano.push(...operadoras)
     }
 
     if (tipo) {
-      beneficiarioConditions.push("b.tipo = ?")
-      beneficiarioValues.push(tipo)
+      beneficiarioConditionsPlano.push("b.tipo = ?")
+      beneficiarioValuesPlano.push(tipo)
     }
 
-    beneficiarioConditions.push(`(
+    beneficiarioConditionsPlano.push(`(
       UPPER(b.plano) NOT LIKE '%DENT%' 
       AND UPPER(b.plano) NOT LIKE '%AESP%' 
     )`)
 
-    beneficiarioConditions.push("b.plano = ?")
-    beneficiarioValues.push(plano)
-
-    const beneficiarioWhereClause = beneficiarioConditions.length > 0
-      ? `WHERE ${beneficiarioConditions.join(" AND ")}`
+    const beneficiarioWhereClausePlano = beneficiarioConditionsPlano.length > 0
+      ? `WHERE ${beneficiarioConditionsPlano.join(" AND ")}`
       : ""
 
-    // Query para faixas etárias por plano
-    // IMPORTANTE: Usar INNER JOIN para garantir que apenas procedimentos de beneficiários com o plano específico sejam considerados
+    // Query para faixas etárias por plano usando a mesma base dos cards principais
+    // Contabiliza apenas vidas que têm procedimentos (igual aos cards de plano) e distribui por faixa etária
     const sqlFaixasEtarias = `
+      WITH base AS (
+        SELECT
+          pr.mes,
+          pr.cpf,
+          pr.valor_total_cpf_mes,
+          CASE
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS status_final,
+          b.idade
+        FROM (
+          SELECT
+            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+            p.cpf,
+            SUM(p.valor_procedimento) AS valor_total_cpf_mes
+          FROM reg_procedimentos p
+          WHERE ${procedimentosConditions.join(" AND ")}
+          GROUP BY
+            DATE_FORMAT(p.data_competencia, '%Y-%m'),
+            p.cpf
+        ) AS pr
+        INNER JOIN (
+          SELECT
+            b.cpf,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.status_beneficiario
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                CAST(b.idade AS CHAR)
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS idade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.plano
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS plano
+          FROM reg_beneficiarios b
+          ${beneficiarioWhereClausePlano}
+          GROUP BY
+            b.cpf
+        ) AS b
+          ON b.cpf = pr.cpf
+        WHERE b.plano = ?
+      )
       SELECT
         CASE
-          WHEN CAST(b.idade AS UNSIGNED) IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-          WHEN CAST(b.idade AS UNSIGNED) <= 23 THEN '19 a 23'
-          WHEN CAST(b.idade AS UNSIGNED) <= 28 THEN '24 a 28'
-          WHEN CAST(b.idade AS UNSIGNED) <= 33 THEN '29 a 33'
-          WHEN CAST(b.idade AS UNSIGNED) <= 38 THEN '34 a 38'
-          WHEN CAST(b.idade AS UNSIGNED) <= 43 THEN '39 a 43'
-          WHEN CAST(b.idade AS UNSIGNED) <= 48 THEN '44 a 48'
-          WHEN CAST(b.idade AS UNSIGNED) <= 53 THEN '49 a 53'
-          WHEN CAST(b.idade AS UNSIGNED) <= 58 THEN '54 a 58'
+          WHEN CAST(base.idade AS UNSIGNED) IS NULL OR CAST(base.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base.idade AS UNSIGNED) <= 23 THEN '19 a 23'
+          WHEN CAST(base.idade AS UNSIGNED) <= 28 THEN '24 a 28'
+          WHEN CAST(base.idade AS UNSIGNED) <= 33 THEN '29 a 33'
+          WHEN CAST(base.idade AS UNSIGNED) <= 38 THEN '34 a 38'
+          WHEN CAST(base.idade AS UNSIGNED) <= 43 THEN '39 a 43'
+          WHEN CAST(base.idade AS UNSIGNED) <= 48 THEN '44 a 48'
+          WHEN CAST(base.idade AS UNSIGNED) <= 53 THEN '49 a 53'
+          WHEN CAST(base.idade AS UNSIGNED) <= 58 THEN '54 a 58'
           ELSE '59+'
         END AS faixa_etaria,
-        CASE
-          WHEN b.cpf IS NULL THEN 'vazio'
-          WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-          ELSE 'inativo'
-        END AS status_final,
-        COUNT(DISTINCT pr.cpf) AS vidas,
-        SUM(pr.valor_total_cpf_mes) AS valor
-      FROM (
-        SELECT
-          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-          p.cpf,
-          SUM(p.valor_procedimento) AS valor_total_cpf_mes
-        FROM reg_procedimentos p
-        WHERE ${procedimentosConditions.join(" AND ")}
-        GROUP BY
-          DATE_FORMAT(p.data_competencia, '%Y-%m'),
-          p.cpf
-      ) AS pr
-      INNER JOIN (
-        SELECT
-          b.cpf,
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(
-              b.status_beneficiario
-              ORDER BY b.data_inicio_vigencia_beneficiario DESC
-            ),
-            ',',
-            1
-          ) AS status_beneficiario,
-          SUBSTRING_INDEX(
-            GROUP_CONCAT(
-              CAST(b.idade AS CHAR)
-              ORDER BY b.data_inicio_vigencia_beneficiario DESC
-            ),
-            ',',
-            1
-          ) AS idade
-        FROM reg_beneficiarios b
-        ${beneficiarioWhereClause}
-        GROUP BY
-          b.cpf
-      ) AS b
-        ON b.cpf = pr.cpf
+        base.status_final,
+        COUNT(DISTINCT base.cpf) AS vidas,
+        SUM(base.valor_total_cpf_mes) AS valor
+      FROM base
       GROUP BY
         faixa_etaria,
-        status_final
+        base.status_final
       ORDER BY
         CASE faixa_etaria
           WHEN '00 a 18' THEN 1
@@ -224,10 +229,12 @@ export async function GET(request: NextRequest) {
     // Executar query
     // Ordem dos valores:
     // 1. procedimentosValues (para WHERE dos procedimentos)
-    // 2. beneficiarioValues (para JOIN)
+    // 2. beneficiarioValuesPlano (para WHERE dos beneficiários - mesma base dos cards de plano)
+    // 3. plano (para filtro explícito no CTE base)
     const [rows]: any = await connection.execute(sqlFaixasEtarias, [
       ...procedimentosValues,
-      ...beneficiarioValues
+      ...beneficiarioValuesPlano,
+      plano
     ])
 
     // Processar resultados
