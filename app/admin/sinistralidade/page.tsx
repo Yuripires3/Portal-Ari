@@ -413,6 +413,23 @@ export default function SinistralidadeDashboardPage() {
     return `${mesesReferencia.length} meses selecionados`
   }
 
+  const getTextoEntidadesSelecionadas = () => {
+    if (entidades.length === 0) return operadorasValidas.length > 0 ? "Selecione a entidade" : "Selecione"
+    if (entidades.length === 1) return entidades[0]
+    if (entidades.length <= 2) {
+      return entidades.join(", ")
+    }
+    return `${entidades.slice(0, 2).join(", ")} +${entidades.length - 2}`
+  }
+
+  const getTextoMesesReajusteSelecionados = () => {
+    if (mesesReajuste.length === 0) return "Selecione o mês"
+    if (mesesReajuste.length === 1) {
+      return getNomeMes(mesesReajuste[0]) || mesesReajuste[0]
+    }
+    return `${mesesReajuste.length} meses selecionados`
+  }
+
   const clearFilters = useCallback(() => {
     const mesAtual = getMesReferenciaAtual()
     const novosFiltros = {
@@ -497,6 +514,141 @@ export default function SinistralidadeDashboardPage() {
       "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"
     }
     return meses[mesNum] || mesNum
+  }, [])
+
+  // Função para agrupar entidades de todos os status (ativo, inativo, nao_localizado) por entidade e mês de reajuste
+  // Usado no card "Total de Vidas" para somar todas as vidas de uma mesma entidade/mês de reajuste
+  const agruparEntidadesTotal = useCallback((
+    entidadesAtivo: Array<{
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+    }>,
+    entidadesInativo: Array<{
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+    }>,
+    entidadesNaoLocalizado: Array<{
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+    }>,
+    totalVidasConsolidado: number,
+    valorTotalConsolidado: number
+  ) => {
+    // Map para agrupar por chave (entidade + mês de reajuste)
+    const agrupado = new Map<string, {
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano: Map<string, { vidas: number; valor: number }>
+    }>()
+
+    // Função auxiliar para processar uma lista de entidades
+    const processarEntidades = (lista: typeof entidadesAtivo) => {
+      lista.forEach(ent => {
+        const key = `${ent.entidade}|${ent.mes_reajuste || 'null'}`
+        const existente = agrupado.get(key)
+        
+        if (existente) {
+          existente.vidas += ent.vidas
+          existente.valor_total += ent.valor_total
+          
+          // Agrupar planos também
+          if (ent.por_plano) {
+            ent.por_plano.forEach(plano => {
+              const planoExistente = existente.por_plano.get(plano.plano) || { vidas: 0, valor: 0 }
+              planoExistente.vidas += plano.vidas
+              planoExistente.valor += plano.valor
+              existente.por_plano.set(plano.plano, planoExistente)
+            })
+          }
+        } else {
+          const planosMap = new Map<string, { vidas: number; valor: number }>()
+          if (ent.por_plano) {
+            ent.por_plano.forEach(plano => {
+              planosMap.set(plano.plano, { vidas: plano.vidas, valor: plano.valor })
+            })
+          }
+          
+          agrupado.set(key, {
+            entidade: ent.entidade,
+            mes_reajuste: ent.mes_reajuste,
+            vidas: ent.vidas,
+            valor_total: ent.valor_total,
+            pct_vidas: 0, // Será calculado depois
+            pct_valor: 0, // Será calculado depois
+            por_plano: planosMap
+          })
+        }
+      })
+    }
+
+    // Processar todas as listas
+    processarEntidades(entidadesAtivo)
+    processarEntidades(entidadesInativo)
+    processarEntidades(entidadesNaoLocalizado)
+
+    // Calcular percentuais e converter planos para array
+    const resultado = Array.from(agrupado.values()).map(ent => ({
+      entidade: ent.entidade,
+      mes_reajuste: ent.mes_reajuste,
+      vidas: ent.vidas,
+      valor_total: ent.valor_total,
+      pct_vidas: totalVidasConsolidado > 0 ? ent.vidas / totalVidasConsolidado : 0,
+      pct_valor: valorTotalConsolidado > 0 ? ent.valor_total / valorTotalConsolidado : 0,
+      por_plano: Array.from(ent.por_plano.entries())
+        .map(([plano, { vidas, valor }]) => ({ plano, vidas, valor }))
+        .sort((a, b) => b.vidas - a.vidas)
+    }))
+
+    // Ordenar: primeiro por mês de reajuste (maior volume), depois por vidas (maior para menor)
+    const volumePorMesReajuste = new Map<string | null, number>()
+    resultado.forEach(ent => {
+      const mesReajuste = ent.mes_reajuste || null
+      const atual = volumePorMesReajuste.get(mesReajuste) || 0
+      volumePorMesReajuste.set(mesReajuste, atual + ent.vidas)
+    })
+
+    return resultado.sort((a, b) => {
+      const mesA = a.mes_reajuste || null
+      const mesB = b.mes_reajuste || null
+      
+      if (mesA !== mesB) {
+        const volumeA = volumePorMesReajuste.get(mesA) || 0
+        const volumeB = volumePorMesReajuste.get(mesB) || 0
+        
+        if (volumeB !== volumeA) {
+          return volumeB - volumeA
+        }
+        
+        if (!mesA) return -1
+        if (!mesB) return 1
+        return mesA.localeCompare(mesB)
+      }
+      
+      if (b.vidas !== a.vidas) {
+        return b.vidas - a.vidas
+      }
+      
+      return a.entidade.localeCompare(b.entidade)
+    })
   }, [])
 
   // Função para agrupar entidades por entidade e mês de reajuste
@@ -947,7 +1099,7 @@ export default function SinistralidadeDashboardPage() {
                 disabled={entidadesDisponiveisParaSelecao.length === 0}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={operadorasValidas.length > 0 ? "Selecione a entidade" : "Selecione"} />
+                  <SelectValue placeholder={getTextoEntidadesSelecionadas()} />
                 </SelectTrigger>
                 <SelectContent>
                   {entidadesDisponiveisParaSelecao.map(ent => (
@@ -993,7 +1145,7 @@ export default function SinistralidadeDashboardPage() {
                 disabled={mesesReajusteDisponiveisParaSelecao.length === 0 || !cardsStatusVidas}
               >
                 <SelectTrigger>
-                  <SelectValue placeholder={mesesReajuste.length === 0 ? "Selecione o mês" : "Adicionar mês"} />
+                  <SelectValue placeholder={getTextoMesesReajusteSelecionados()} />
                 </SelectTrigger>
                 <SelectContent>
                   {mesesReajusteDisponiveisParaSelecao.map(mes => (
@@ -1147,15 +1299,29 @@ export default function SinistralidadeDashboardPage() {
             </Card>
             
             {/* Cards de Entidades - Total */}
-            {cardsData?.por_entidade?.total && cardsData.por_entidade.total.length > 0 && (
-              <div className="space-y-2">
-                {agruparEntidadesPorMesReajuste(
-                  mesesReajusteFiltro.length > 0
-                    ? cardsData.por_entidade.total.filter(ent => 
-                        !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
-                      )
-                    : cardsData.por_entidade.total
-                ).map((entidade) => {
+            {cardsData?.por_entidade && (
+              (() => {
+                // Agrupar entidades de todos os status para o card Total
+                const entidadesAgrupadas = agruparEntidadesTotal(
+                  cardsData.por_entidade.ativo || [],
+                  cardsData.por_entidade.inativo || [],
+                  cardsData.por_entidade.nao_localizado || [],
+                  cardsData.consolidado?.total_vidas || 0,
+                  cardsData.consolidado?.valor_total_geral || 0
+                )
+                
+                // Aplicar filtro de mês de reajuste se houver
+                const entidadesFiltradas = mesesReajusteFiltro.length > 0
+                  ? entidadesAgrupadas.filter(ent => 
+                      !ent.mes_reajuste || mesesReajusteFiltro.includes(ent.mes_reajuste)
+                    )
+                  : entidadesAgrupadas
+                
+                if (entidadesFiltradas.length === 0) return null
+                
+                return (
+                  <div className="space-y-2">
+                    {agruparEntidadesPorMesReajuste(entidadesFiltradas).map((entidade) => {
                   const nomeExibicao = calcularNomeExibicao(entidade)
                   const key = calcularKey('total', entidade)
                   
@@ -1204,7 +1370,9 @@ export default function SinistralidadeDashboardPage() {
                     </div>
                   )
                 })}
-              </div>
+                  </div>
+                )
+              })()
             )}
           </div>
 
