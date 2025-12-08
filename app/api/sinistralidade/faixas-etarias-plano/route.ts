@@ -107,13 +107,31 @@ export async function GET(request: NextRequest) {
     procedimentosConditions.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${mesesReferencia.map(() => "?").join(",")})`)
     procedimentosValues.push(...mesesReferencia)
 
-    // WHERE de beneficiários para igualar a base dos cards de distribuição por plano (sem filtrar por entidade/mes_reajuste)
+    // Detectar contexto: card MÃE ou card FILHO
+    // Cards MÃE: não filtram por entidade/mês de reajuste (mesmo que venham nos parâmetros)
+    // Cards FILHOS: filtram por entidade/mês de reajuste quando aplicável
+    const isCardMae = entidades.length === 0 && mesesReajuste.length === 0
+
+    // WHERE de beneficiários - mesma lógica dos cards correspondentes
     const beneficiarioConditionsPlano: string[] = []
     const beneficiarioValuesPlano: any[] = []
 
     if (operadoras.length > 0) {
       beneficiarioConditionsPlano.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
       beneficiarioValuesPlano.push(...operadoras)
+    }
+
+    // Para cards FILHOS, aplicar filtros de entidade e mês de reajuste
+    if (!isCardMae) {
+      if (entidades.length > 0) {
+        beneficiarioConditionsPlano.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
+        beneficiarioValuesPlano.push(...entidades)
+      }
+
+      if (mesesReajuste.length > 0) {
+        beneficiarioConditionsPlano.push(`b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})`)
+        beneficiarioValuesPlano.push(...mesesReajuste)
+      }
     }
 
     if (tipo) {
@@ -130,14 +148,17 @@ export async function GET(request: NextRequest) {
       ? `WHERE ${beneficiarioConditionsPlano.join(" AND ")}`
       : ""
 
+    // Tipo de JOIN baseado no contexto (igual aos cards)
+    const joinType = (isCardMae ? (tipo ? "INNER" : "LEFT") : (entidades.length > 0 || tipo ? "INNER" : "LEFT"))
+
     // Query para faixas etárias por plano usando a mesma base dos cards principais
-    // Contabiliza apenas vidas que têm procedimentos (igual aos cards de plano) e distribui por faixa etária
+    // IMPORTANTE: Agrupar por CPF primeiro (sem mês) para contar cada CPF apenas uma vez
+    // Depois distribuir por faixa etária, garantindo que a soma das faixas = vidas do plano
     const sqlFaixasEtarias = `
       WITH base AS (
         SELECT
-          pr.mes,
           pr.cpf,
-          pr.valor_total_cpf_mes,
+          SUM(pr.valor_total_cpf_mes) AS valor_total_cpf,
           CASE
             WHEN b.cpf IS NULL THEN 'vazio'
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
@@ -155,7 +176,7 @@ export async function GET(request: NextRequest) {
             DATE_FORMAT(p.data_competencia, '%Y-%m'),
             p.cpf
         ) AS pr
-        INNER JOIN (
+        ${joinType} JOIN (
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
@@ -189,6 +210,7 @@ export async function GET(request: NextRequest) {
         ) AS b
           ON b.cpf = pr.cpf
         WHERE b.plano = ?
+        GROUP BY pr.cpf, b.cpf, b.status_beneficiario, b.idade
       )
       SELECT
         CASE
@@ -205,7 +227,7 @@ export async function GET(request: NextRequest) {
         END AS faixa_etaria,
         base.status_final,
         COUNT(DISTINCT base.cpf) AS vidas,
-        SUM(base.valor_total_cpf_mes) AS valor
+        SUM(base.valor_total_cpf) AS valor
       FROM base
       GROUP BY
         faixa_etaria,
