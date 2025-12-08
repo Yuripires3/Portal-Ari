@@ -259,12 +259,13 @@ export async function GET(request: NextRequest) {
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
           -- Pegar status mais recente (deve ser consistente para o mesmo CPF)
           MAX(status_final) AS status_final,
-          -- Pegar a idade não-nula mais recente (ou qualquer idade se todas forem iguais)
-          -- Garantir que cada CPF tenha apenas uma idade para evitar duplicação
-          COALESCE(
-            MAX(CASE WHEN idade IS NOT NULL AND CAST(idade AS UNSIGNED) > 0 THEN CAST(idade AS UNSIGNED) ELSE NULL END),
-            MAX(CAST(idade AS UNSIGNED))
-          ) AS idade
+          -- Pegar a idade não-nula mais recente (ou NULL se todas forem NULL)
+          -- Se idade for NULL, será tratada como '00 a 18' no CASE posterior
+          MAX(CASE 
+            WHEN idade IS NOT NULL AND CAST(idade AS UNSIGNED) > 0 
+            THEN CAST(idade AS UNSIGNED) 
+            ELSE NULL 
+          END) AS idade
         FROM base_mes_cpf
         -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
         -- com o status correto sejam considerados (respeitando o contexto do card)
@@ -275,7 +276,8 @@ export async function GET(request: NextRequest) {
       )
       SELECT
         CASE
-          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) IS NULL OR CAST(base_cpf_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN base_cpf_agregado.idade IS NULL OR base_cpf_agregado.idade = 0 THEN '00 a 18'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
           WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 23 THEN '19 a 23'
           WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 28 THEN '24 a 28'
           WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 33 THEN '29 a 33'
