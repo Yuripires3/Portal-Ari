@@ -151,20 +151,34 @@ export async function GET(request: NextRequest) {
     // Tipo de JOIN baseado no contexto (igual aos cards)
     const joinType = (isCardMae ? (tipo ? "INNER" : "LEFT") : (entidades.length > 0 || tipo ? "INNER" : "LEFT"))
 
-    // Query para faixas etárias por plano usando a mesma base dos cards principais
-    // IMPORTANTE: Agrupar por CPF primeiro (sem mês) para contar cada CPF apenas uma vez
-    // Depois distribuir por faixa etária, garantindo que a soma das faixas = vidas do plano
+    // Query para faixas etárias por plano - REPLICA EXATAMENTE a lógica dos cards
+    // Cards MÃE: usa beneficiarioWhereClauseGeral (sem entidade/mês de reajuste)
+    // Cards FILHOS: usa beneficiarioWhereClause (com entidade/mês de reajuste) + filtros no WHERE final
+    // 1. Agrupa procedimentos por mês+CPF (igual aos cards)
+    // 2. Faz JOIN com beneficiários (igual aos cards)
+    // 3. Filtra pelo plano específico + entidade/mês de reajuste quando aplicável
+    // 4. Agrupa por CPF para ter valor total por CPF (sem duplicar contagem)
+    // 5. Distribui por faixa etária contando DISTINCT CPF
+    
+    // Para cards filhos, os filtros de entidade e tipo já estão no beneficiarioWhereClausePlano
+    // Apenas precisamos garantir que entidade não seja NULL no WHERE final (igual aos cards de entidade)
+    
     const sqlFaixasEtarias = `
-      WITH base AS (
+      WITH base_mes_cpf AS (
         SELECT
+          pr.mes,
           pr.cpf,
-          SUM(pr.valor_total_cpf_mes) AS valor_total_cpf,
+          pr.valor_total_cpf_mes,
           CASE
             WHEN b.cpf IS NULL THEN 'vazio'
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
           END AS status_final,
-          b.idade
+          b.idade,
+          b.plano${!isCardMae ? `,
+          b.entidade,
+          b.mes_reajuste,
+          b.tipo` : ''}
         FROM (
           SELECT
             DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
@@ -202,7 +216,31 @@ export async function GET(request: NextRequest) {
               ),
               ',',
               1
-            ) AS plano
+            ) AS plano${!isCardMae ? `,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.entidade
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS entidade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS mes_reajuste,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.tipo
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS tipo` : ''}
           FROM reg_beneficiarios b
           ${beneficiarioWhereClausePlano}
           GROUP BY
@@ -210,28 +248,39 @@ export async function GET(request: NextRequest) {
         ) AS b
           ON b.cpf = pr.cpf
         WHERE b.plano = ?
-        GROUP BY pr.cpf, b.cpf, b.status_beneficiario, b.idade
+          ${!isCardMae ? `AND (b.entidade IS NOT NULL AND b.entidade != '')` : ''}
+          ${!isCardMae && entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
+          ${!isCardMae && mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
+      ),
+      base_cpf AS (
+        SELECT
+          cpf,
+          SUM(valor_total_cpf_mes) AS valor_total_cpf,
+          status_final,
+          idade
+        FROM base_mes_cpf
+        GROUP BY cpf, status_final, idade
       )
       SELECT
         CASE
-          WHEN CAST(base.idade AS UNSIGNED) IS NULL OR CAST(base.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-          WHEN CAST(base.idade AS UNSIGNED) <= 23 THEN '19 a 23'
-          WHEN CAST(base.idade AS UNSIGNED) <= 28 THEN '24 a 28'
-          WHEN CAST(base.idade AS UNSIGNED) <= 33 THEN '29 a 33'
-          WHEN CAST(base.idade AS UNSIGNED) <= 38 THEN '34 a 38'
-          WHEN CAST(base.idade AS UNSIGNED) <= 43 THEN '39 a 43'
-          WHEN CAST(base.idade AS UNSIGNED) <= 48 THEN '44 a 48'
-          WHEN CAST(base.idade AS UNSIGNED) <= 53 THEN '49 a 53'
-          WHEN CAST(base.idade AS UNSIGNED) <= 58 THEN '54 a 58'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) IS NULL OR CAST(base_cpf.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 23 THEN '19 a 23'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 28 THEN '24 a 28'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 33 THEN '29 a 33'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 38 THEN '34 a 38'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 43 THEN '39 a 43'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 48 THEN '44 a 48'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 53 THEN '49 a 53'
+          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 58 THEN '54 a 58'
           ELSE '59+'
         END AS faixa_etaria,
-        base.status_final,
-        COUNT(DISTINCT base.cpf) AS vidas,
-        SUM(base.valor_total_cpf) AS valor
-      FROM base
+        base_cpf.status_final,
+        COUNT(DISTINCT base_cpf.cpf) AS vidas,
+        SUM(base_cpf.valor_total_cpf) AS valor
+      FROM base_cpf
       GROUP BY
         faixa_etaria,
-        base.status_final
+        base_cpf.status_final
       ORDER BY
         CASE faixa_etaria
           WHEN '00 a 18' THEN 1
@@ -251,13 +300,28 @@ export async function GET(request: NextRequest) {
     // Executar query
     // Ordem dos valores:
     // 1. procedimentosValues (para WHERE dos procedimentos)
-    // 2. beneficiarioValuesPlano (para WHERE dos beneficiários - mesma base dos cards de plano)
+    // 2. beneficiarioValuesPlano (para WHERE dos beneficiários - mesma base dos cards)
+    //    - Para cards MÃE: apenas operadora, tipo, exclusões de odontológicos
+    //    - Para cards FILHOS: operadora, entidade, mês de reajuste, tipo, exclusões de odontológicos
     // 3. plano (para filtro explícito no CTE base)
-    const [rows]: any = await connection.execute(sqlFaixasEtarias, [
+    // 4. Para cards FILHOS: entidades e mesesReajuste (para filtros no WHERE final do CTE)
+    const queryValues: any[] = [
       ...procedimentosValues,
       ...beneficiarioValuesPlano,
       plano
-    ])
+    ]
+    
+    // Adicionar valores de entidade e mês de reajuste para filtros no WHERE final do CTE (cards filhos)
+    if (!isCardMae) {
+      if (entidades.length > 0) {
+        queryValues.push(...entidades)
+      }
+      if (mesesReajuste.length > 0) {
+        queryValues.push(...mesesReajuste)
+      }
+    }
+    
+    const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
 
     // Processar resultados
     const faixasEtarias: Array<{

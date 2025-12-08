@@ -1373,7 +1373,13 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
-                              filtros={filtrosParaDrilldown}
+                              filtros={{
+                                ...filtrosParaDrilldown,
+                                // Para cards filhos dentro de um card de entidade, usar apenas esta entidade específica
+                                entidades: [entidade.entidade],
+                                // Usar apenas o mês de reajuste desta entidade (se houver)
+                                mesesReajuste: entidade.mes_reajuste ? [entidade.mes_reajuste] : []
+                              }}
                             />
                           )}
                         </div>
@@ -1485,7 +1491,14 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
-                              filtros={{ ...filtrosParaDrilldown, status: 'ativo' }}
+                              filtros={{
+                                ...filtrosParaDrilldown,
+                                status: 'ativo',
+                                // Para cards filhos dentro de um card de entidade, usar apenas esta entidade específica
+                                entidades: [entidade.entidade],
+                                // Usar apenas o mês de reajuste desta entidade (se houver)
+                                mesesReajuste: entidade.mes_reajuste ? [entidade.mes_reajuste] : []
+                              }}
                             />
                           )}
                         </div>
@@ -1595,7 +1608,14 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
-                              filtros={{ ...filtrosParaDrilldown, status: 'inativo' }}
+                              filtros={{
+                                ...filtrosParaDrilldown,
+                                status: 'inativo',
+                                // Para cards filhos dentro de um card de entidade, usar apenas esta entidade específica
+                                entidades: [entidade.entidade],
+                                // Usar apenas o mês de reajuste desta entidade (se houver)
+                                mesesReajuste: entidade.mes_reajuste ? [entidade.mes_reajuste] : []
+                              }}
                             />
                           )}
                         </div>
@@ -1706,7 +1726,14 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
-                              filtros={{ ...filtrosParaDrilldown, status: 'vazio' }}
+                              filtros={{
+                                ...filtrosParaDrilldown,
+                                status: 'vazio',
+                                // Para cards filhos dentro de um card de entidade, usar apenas esta entidade específica
+                                entidades: [entidade.entidade],
+                                // Usar apenas o mês de reajuste desta entidade (se houver)
+                                mesesReajuste: entidade.mes_reajuste ? [entidade.mes_reajuste] : []
+                              }}
                             />
                           )}
                         </div>
