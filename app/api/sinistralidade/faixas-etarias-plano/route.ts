@@ -255,11 +255,17 @@ export async function GET(request: NextRequest) {
       base_cpf AS (
         SELECT
           cpf,
+          -- Somar valores apenas dos meses filtrados (já filtrado em base_mes_cpf)
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          status_final,
-          idade
+          -- Pegar status e idade (devem ser consistentes para o mesmo CPF já que pegamos os mais recentes no JOIN)
+          -- Usar MAX para garantir consistência quando há múltiplos meses filtrados
+          MAX(status_final) AS status_final,
+          -- Pegar a idade não-nula mais recente (ou qualquer idade se todas forem iguais)
+          MAX(CAST(idade AS UNSIGNED)) AS idade
         FROM base_mes_cpf
-        GROUP BY cpf, status_final, idade
+        -- Agrupar apenas por CPF para garantir que cada CPF apareça apenas uma vez
+        -- mesmo que apareça em múltiplos meses filtrados
+        GROUP BY cpf
       )
       SELECT
         CASE
@@ -274,13 +280,13 @@ export async function GET(request: NextRequest) {
           WHEN CAST(base_cpf.idade AS UNSIGNED) <= 58 THEN '54 a 58'
           ELSE '59+'
         END AS faixa_etaria,
-        base_cpf.status_final,
+        MAX(base_cpf.status_final) AS status_final,
         COUNT(DISTINCT base_cpf.cpf) AS vidas,
         SUM(base_cpf.valor_total_cpf) AS valor
       FROM base_cpf
+      ${statusParam !== "total" ? `WHERE base_cpf.status_final = ?` : ''}
       GROUP BY
-        faixa_etaria,
-        base_cpf.status_final
+        faixa_etaria
       ORDER BY
         CASE faixa_etaria
           WHEN '00 a 18' THEN 1
@@ -321,6 +327,11 @@ export async function GET(request: NextRequest) {
       }
     }
     
+    // Adicionar status se não for "total"
+    if (statusParam !== "total") {
+      queryValues.push(statusParam)
+    }
+    
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
 
     // Processar resultados
@@ -343,6 +354,8 @@ export async function GET(request: NextRequest) {
     })
 
     // Processar resultados da query
+    // Nota: Como já agrupamos por CPF no base_cpf, cada CPF deve aparecer apenas uma vez
+    // mesmo quando statusParam === "total", pois removemos o agrupamento por status_final
     ;(rows || []).forEach((row: any) => {
       const faixa = row.faixa_etaria || '00 a 18'
       const status = row.status_final || 'vazio'
@@ -350,6 +363,8 @@ export async function GET(request: NextRequest) {
       const valor = Number(row.valor) || 0
 
       // Filtrar por status se especificado
+      // Quando statusParam === "total", incluímos todos os status
+      // Como já agrupamos por CPF no base_cpf, não há duplicação
       if (statusParam === "total" || statusParam === status) {
         const atual = faixasMap.get(faixa) || { vidas: 0, valor: 0 }
         atual.vidas += vidas
