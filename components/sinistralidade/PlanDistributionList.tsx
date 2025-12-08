@@ -1,7 +1,9 @@
 "use client"
 
 import { useState, useMemo } from "react"
+import { ChevronRight } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { AgeRangeDistribution } from "./AgeRangeDistribution"
 
 interface Plano {
   plano: string
@@ -14,6 +16,14 @@ interface PlanDistributionListProps {
   planos: Plano[]
   totalVidas: number
   maxVisible?: number // Número máximo de planos visíveis inicialmente (padrão: 10)
+  filtros?: {
+    mesesReferencia: string[]
+    operadoras?: string[]
+    entidades?: string[]
+    mesesReajuste?: string[]
+    tipo?: string
+    status?: string
+  }
 }
 
 // Cores do menu lateral (conforme especificado)
@@ -23,9 +33,23 @@ const COR_TEXTO_MENU = "#184286"
 export function PlanDistributionList({ 
   planos, 
   totalVidas,
-  maxVisible = 10 
+  maxVisible = 10,
+  filtros
 }: PlanDistributionListProps) {
   const [showAll, setShowAll] = useState(false)
+  const [planosExpandidos, setPlanosExpandidos] = useState<Set<string>>(new Set())
+
+  const togglePlano = (planoNome: string) => {
+    setPlanosExpandidos(prev => {
+      const next = new Set(prev)
+      if (next.has(planoNome)) {
+        next.delete(planoNome)
+      } else {
+        next.add(planoNome)
+      }
+      return next
+    })
+  }
 
   // Ordenar planos por valor (do maior para o menor)
   const planosOrdenados = useMemo(() => {
@@ -85,40 +109,70 @@ export function PlanDistributionList({
         <div className="divide-y divide-slate-100">
           {planosVisiveis.map((plano, index) => {
             const isFirstRow = index === 0
+            const isExpandido = planosExpandidos.has(plano.plano)
 
             return (
-              <div
-                key={plano.plano}
-                className={cn(
-                  "flex items-center py-2.5 text-xs hover:bg-slate-50/60 transition-colors cursor-default",
-                  "h-[40px]"
-                )}
-              >
-                {/* Plano */}
-                <span 
-                  className="w-[160px] pl-3 truncate text-left font-semibold text-[#184286] border-r border-slate-100"
-                  title={plano.plano}
+              <div key={plano.plano}>
+                <div
+                  className={cn(
+                    "flex items-center py-2.5 text-xs hover:bg-slate-50/60 transition-colors",
+                    "h-[40px]",
+                    filtros ? "cursor-pointer" : "cursor-default"
+                  )}
+                  onClick={() => filtros && togglePlano(plano.plano)}
                 >
-                  {plano.plano}
-                </span>
+                  {/* Ícone de expansão */}
+                  {filtros && (
+                    <div className="w-[20px] pl-2 flex items-center justify-center">
+                      <ChevronRight 
+                        className={cn(
+                          "h-3 w-3 text-slate-400 transition-transform",
+                          isExpandido && "rotate-90"
+                        )} 
+                      />
+                    </div>
+                  )}
 
-                {/* Vidas */}
-                <span className="w-[65px] text-center font-semibold text-[#184286] border-r border-slate-100">
-                  {formatNumber(plano.vidas)}
-                </span>
+                  {/* Plano */}
+                  <span 
+                    className={cn(
+                      "truncate text-left font-semibold text-[#184286] border-r border-slate-100",
+                      filtros ? "w-[140px] pl-1" : "w-[160px] pl-3"
+                    )}
+                    title={plano.plano}
+                  >
+                    {plano.plano}
+                  </span>
 
-                {/* Valor */}
-                <span className="w-[125px] text-center text-[#184286] border-r border-slate-100">
-                  {formatCurrency(plano.valor)}
-                </span>
+                  {/* Vidas */}
+                  <span className="w-[65px] text-center font-semibold text-[#184286] border-r border-slate-100">
+                    {formatNumber(plano.vidas)}
+                  </span>
 
-                {/* IS */}
-                <span className={cn(
-                  "w-[60px] pr-3 text-center",
-                  plano.is != null ? "text-[#184286]" : "text-slate-300"
-                )}>
-                  {plano.is != null ? formatPercent(plano.is) : "-"}
-                </span>
+                  {/* Valor */}
+                  <span className="w-[125px] text-center text-[#184286] border-r border-slate-100">
+                    {formatCurrency(plano.valor)}
+                  </span>
+
+                  {/* IS */}
+                  <span className={cn(
+                    "w-[60px] pr-3 text-center",
+                    plano.is != null ? "text-[#184286]" : "text-slate-300"
+                  )}>
+                    {plano.is != null ? formatPercent(plano.is) : "-"}
+                  </span>
+                </div>
+
+                {/* Drilldown de faixas etárias */}
+                {filtros && isExpandido && (
+                  <div className="bg-slate-50/30 py-2">
+                    <AgeRangeDistribution
+                      plano={plano.plano}
+                      filtros={filtros}
+                      totalVidas={plano.vidas}
+                    />
+                  </div>
+                )}
               </div>
             )
           })}

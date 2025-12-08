@@ -1240,6 +1240,15 @@ export default function SinistralidadeDashboardPage() {
             : `${prefixo}-${entidade.entidade}`
         }
         
+        // Objeto de filtros para passar para os componentes de drilldown
+        const filtrosParaDrilldown = {
+          mesesReferencia: filtrosAplicados.mesesReferencia,
+          operadoras: filtrosAplicados.operadoras,
+          entidades: filtrosAplicados.entidades,
+          mesesReajuste: filtrosAplicados.mesesReajuste,
+          tipo: filtrosAplicados.tipo,
+        }
+        
         return (
         <div className="relative mt-6">
           {/* Overlay de carregamento */}
@@ -1289,6 +1298,7 @@ export default function SinistralidadeDashboardPage() {
                           <PlanDistributionList
                             planos={cardsData.consolidado.por_plano.total}
                             totalVidas={cardsData.consolidado.total_vidas || 0}
+                            filtros={filtrosParaDrilldown}
                           />
                         )}
                       </div>
@@ -1363,6 +1373,7 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
+                              filtros={filtrosParaDrilldown}
                             />
                           )}
                         </div>
@@ -1413,6 +1424,7 @@ export default function SinistralidadeDashboardPage() {
                           <PlanDistributionList
                             planos={cardsData.consolidado.por_plano.ativo}
                             totalVidas={cardsData.consolidado.ativo || 0}
+                            filtros={{ ...filtrosParaDrilldown, status: 'ativo' }}
                           />
                         )}
                       </div>
@@ -1473,6 +1485,7 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
+                              filtros={{ ...filtrosParaDrilldown, status: 'ativo' }}
                             />
                           )}
                         </div>
@@ -1521,6 +1534,7 @@ export default function SinistralidadeDashboardPage() {
                           <PlanDistributionList
                             planos={cardsData.consolidado.por_plano.inativo}
                             totalVidas={cardsData.consolidado.inativo || 0}
+                            filtros={{ ...filtrosParaDrilldown, status: 'inativo' }}
                           />
                         )}
                       </div>
@@ -1581,6 +1595,7 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
+                              filtros={{ ...filtrosParaDrilldown, status: 'inativo' }}
                             />
                           )}
                         </div>
@@ -1630,6 +1645,7 @@ export default function SinistralidadeDashboardPage() {
                           <PlanDistributionList
                             planos={cardsData.consolidado.por_plano.nao_localizado}
                             totalVidas={cardsData.consolidado.nao_localizado || 0}
+                            filtros={{ ...filtrosParaDrilldown, status: 'vazio' }}
                           />
                         )}
                       </div>
@@ -1690,6 +1706,7 @@ export default function SinistralidadeDashboardPage() {
                             <PlanDistributionList
                               planos={entidade.por_plano}
                               totalVidas={entidade.vidas || 0}
+                              filtros={{ ...filtrosParaDrilldown, status: 'vazio' }}
                             />
                           )}
                         </div>
