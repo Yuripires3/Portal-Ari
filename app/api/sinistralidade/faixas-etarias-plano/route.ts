@@ -251,13 +251,18 @@ export async function GET(request: NextRequest) {
           ${!isCardMae ? `AND (b.entidade IS NOT NULL AND b.entidade != '')` : ''}
           ${!isCardMae && entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
           ${!isCardMae && mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
+          ${statusParam !== "total" ? `AND CASE
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END = ?` : ''}
       ),
       base_cpf_agregado AS (
         SELECT
           cpf,
           -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          -- Pegar status mais recente (deve ser consistente para o mesmo CPF)
+          -- Pegar status (já filtrado no base_mes_cpf, então será consistente)
           MAX(status_final) AS status_final,
           -- Pegar a idade não-nula mais recente (ou NULL se todas forem NULL)
           -- Se idade for NULL, será tratada como '00 a 18' no CASE posterior
@@ -267,11 +272,9 @@ export async function GET(request: NextRequest) {
             ELSE NULL 
           END) AS idade
         FROM base_mes_cpf
-        -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
-        -- com o status correto sejam considerados (respeitando o contexto do card)
-        ${statusParam !== "total" ? `WHERE base_mes_cpf.status_final = ?` : ''}
         -- Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
         -- mesmo que apareça em múltiplos meses filtrados
+        -- O filtro de status já foi aplicado no base_mes_cpf acima
         GROUP BY cpf
       )
       SELECT
@@ -294,7 +297,7 @@ export async function GET(request: NextRequest) {
         -- Somar valores de todos os CPFs na faixa etária
         SUM(base_cpf_agregado.valor_total_cpf) AS valor
       FROM base_cpf_agregado
-      ${statusParam !== "total" ? `WHERE base_cpf_agregado.status_final = ?` : ''}
+      -- Filtro de status já foi aplicado no base_mes_cpf, então não precisa filtrar novamente aqui
       GROUP BY
         faixa_etaria
       ORDER BY
@@ -337,7 +340,10 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // Adicionar status se não for "total"
+    // Adicionar status se não for "total" - precisa ser depois de entidade/mês de reajuste porque está no WHERE do base_mes_cpf
+    if (statusParam !== "total") {
+      queryValues.push(statusParam)
+    }
     // IMPORTANTE: Adicionar duas vezes - uma para o filtro no base_cpf_agregado e outra para o filtro final
     // Isso garante que apenas CPFs com o status correto sejam considerados em todas as etapas
     if (statusParam !== "total") {
