@@ -252,39 +252,47 @@ export async function GET(request: NextRequest) {
           ${!isCardMae && entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
           ${!isCardMae && mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
       ),
-      base_cpf AS (
+      base_cpf_agregado AS (
         SELECT
           cpf,
-          -- Somar valores apenas dos meses filtrados (já filtrado em base_mes_cpf)
+          -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          -- Pegar status e idade (devem ser consistentes para o mesmo CPF já que pegamos os mais recentes no JOIN)
-          -- Usar MAX para garantir consistência quando há múltiplos meses filtrados
+          -- Pegar status mais recente (deve ser consistente para o mesmo CPF)
           MAX(status_final) AS status_final,
           -- Pegar a idade não-nula mais recente (ou qualquer idade se todas forem iguais)
-          MAX(CAST(idade AS UNSIGNED)) AS idade
+          -- Garantir que cada CPF tenha apenas uma idade para evitar duplicação
+          COALESCE(
+            MAX(CASE WHEN idade IS NOT NULL AND CAST(idade AS UNSIGNED) > 0 THEN CAST(idade AS UNSIGNED) ELSE NULL END),
+            MAX(CAST(idade AS UNSIGNED))
+          ) AS idade
         FROM base_mes_cpf
-        -- Agrupar apenas por CPF para garantir que cada CPF apareça apenas uma vez
+        -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
+        -- com o status correto sejam considerados (respeitando o contexto do card)
+        ${statusParam !== "total" ? `WHERE base_mes_cpf.status_final = ?` : ''}
+        -- Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
         -- mesmo que apareça em múltiplos meses filtrados
         GROUP BY cpf
       )
       SELECT
         CASE
-          WHEN CAST(base_cpf.idade AS UNSIGNED) IS NULL OR CAST(base_cpf.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 23 THEN '19 a 23'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 28 THEN '24 a 28'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 33 THEN '29 a 33'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 38 THEN '34 a 38'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 43 THEN '39 a 43'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 48 THEN '44 a 48'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 53 THEN '49 a 53'
-          WHEN CAST(base_cpf.idade AS UNSIGNED) <= 58 THEN '54 a 58'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) IS NULL OR CAST(base_cpf_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 23 THEN '19 a 23'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 28 THEN '24 a 28'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 33 THEN '29 a 33'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 38 THEN '34 a 38'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 43 THEN '39 a 43'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 48 THEN '44 a 48'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 53 THEN '49 a 53'
+          WHEN CAST(base_cpf_agregado.idade AS UNSIGNED) <= 58 THEN '54 a 58'
           ELSE '59+'
         END AS faixa_etaria,
-        MAX(base_cpf.status_final) AS status_final,
-        COUNT(DISTINCT base_cpf.cpf) AS vidas,
-        SUM(base_cpf.valor_total_cpf) AS valor
-      FROM base_cpf
-      ${statusParam !== "total" ? `WHERE base_cpf.status_final = ?` : ''}
+        MAX(base_cpf_agregado.status_final) AS status_final,
+        -- Contar cada CPF apenas uma vez por faixa etária
+        COUNT(DISTINCT base_cpf_agregado.cpf) AS vidas,
+        -- Somar valores de todos os CPFs na faixa etária
+        SUM(base_cpf_agregado.valor_total_cpf) AS valor
+      FROM base_cpf_agregado
+      ${statusParam !== "total" ? `WHERE base_cpf_agregado.status_final = ?` : ''}
       GROUP BY
         faixa_etaria
       ORDER BY
@@ -328,8 +336,11 @@ export async function GET(request: NextRequest) {
     }
     
     // Adicionar status se não for "total"
+    // IMPORTANTE: Adicionar duas vezes - uma para o filtro no base_cpf_agregado e outra para o filtro final
+    // Isso garante que apenas CPFs com o status correto sejam considerados em todas as etapas
     if (statusParam !== "total") {
-      queryValues.push(statusParam)
+      queryValues.push(statusParam) // Para filtro no base_cpf_agregado
+      queryValues.push(statusParam) // Para filtro final
     }
     
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
