@@ -251,18 +251,24 @@ export async function GET(request: NextRequest) {
           ${!isCardMae ? `AND (b.entidade IS NOT NULL AND b.entidade != '')` : ''}
           ${!isCardMae && entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
           ${!isCardMae && mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
-          ${statusParam !== "total" ? `AND CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END = ?` : ''}
+      ),
+      base_cpf_filtrado AS (
+        SELECT
+          cpf,
+          valor_total_cpf_mes,
+          status_final,
+          idade
+        FROM base_mes_cpf
+        -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
+        -- com o status correto sejam considerados (respeitando o contexto do card)
+        ${statusParam !== "total" ? `WHERE base_mes_cpf.status_final = ?` : ''}
       ),
       base_cpf_agregado AS (
         SELECT
           cpf,
           -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          -- Pegar status (já filtrado no base_mes_cpf, então será consistente)
+          -- Pegar status (já filtrado, então será consistente)
           MAX(status_final) AS status_final,
           -- Pegar a idade não-nula mais recente (ou NULL se todas forem NULL)
           -- Se idade for NULL, será tratada como '00 a 18' no CASE posterior
@@ -271,10 +277,9 @@ export async function GET(request: NextRequest) {
             THEN CAST(idade AS UNSIGNED) 
             ELSE NULL 
           END) AS idade
-        FROM base_mes_cpf
+        FROM base_cpf_filtrado
         -- Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
         -- mesmo que apareça em múltiplos meses filtrados
-        -- O filtro de status já foi aplicado no base_mes_cpf acima
         GROUP BY cpf
       )
       SELECT
@@ -340,15 +345,9 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // Adicionar status se não for "total" - precisa ser depois de entidade/mês de reajuste porque está no WHERE do base_mes_cpf
+    // Adicionar status se não for "total" - precisa ser depois de entidade/mês de reajuste porque está no WHERE do base_cpf_agregado
     if (statusParam !== "total") {
       queryValues.push(statusParam)
-    }
-    // IMPORTANTE: Adicionar duas vezes - uma para o filtro no base_cpf_agregado e outra para o filtro final
-    // Isso garante que apenas CPFs com o status correto sejam considerados em todas as etapas
-    if (statusParam !== "total") {
-      queryValues.push(statusParam) // Para filtro no base_cpf_agregado
-      queryValues.push(statusParam) // Para filtro final
     }
     
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
