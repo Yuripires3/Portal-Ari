@@ -154,16 +154,195 @@ export async function GET(request: NextRequest) {
     // Query para faixas etárias por plano - REPLICA EXATAMENTE a lógica dos cards
     // Cards MÃE: usa beneficiarioWhereClauseGeral (sem entidade/mês de reajuste)
     // Cards FILHOS: usa beneficiarioWhereClause (com entidade/mês de reajuste) + filtros no WHERE final
-    // 1. Agrupa procedimentos por mês+CPF (igual aos cards)
-    // 2. Faz JOIN com beneficiários (igual aos cards)
-    // 3. Filtra pelo plano específico + entidade/mês de reajuste quando aplicável
-    // 4. Agrupa por CPF para ter valor total por CPF (sem duplicar contagem)
-    // 5. Distribui por faixa etária contando DISTINCT CPF
+    // 
+    // CORREÇÃO CRÍTICA: Para card filho com status="total", usar EXATAMENTE a mesma base_agregado
+    // da query de planos (sqlPorPlanoEntidade), incluindo o agrupamento por CPF + entidade + mes_reajuste + status_final + plano
+    // Isso garante que cada CPF seja contado apenas uma vez, mesmo que apareça com status diferentes
     
-    // Para cards filhos, os filtros de entidade e tipo já estão no beneficiarioWhereClausePlano
-    // Apenas precisamos garantir que entidade não seja NULL no WHERE final (igual aos cards de entidade)
+    // Para cards filhos com status="total", usar estrutura idêntica à query de planos
+    const usarBaseAgregadaPlano = !isCardMae && statusParam === "total"
     
-    const sqlFaixasEtarias = `
+    const sqlFaixasEtarias = usarBaseAgregadaPlano ? `
+      -- CORREÇÃO CRÍTICA: Para card filho com status="total", usar EXATAMENTE a mesma estrutura
+      -- da query de planos (sqlPorPlanoEntidade), mas agrupando SEM status_final
+      -- Isso garante que cada CPF seja contado apenas UMA VEZ, igual ao card mãe Total de Vidas
+      WITH base AS (
+        SELECT
+          pr.mes,
+          pr.cpf,
+          pr.valor_total_cpf_mes,
+          -- CORREÇÃO: Não calcular status_final aqui porque não vamos usar
+          -- Quando status="total", não importa o status - queremos apenas 1 linha por CPF
+          b.entidade,
+          b.mes_reajuste,
+          b.plano,
+          b.tipo,
+          -- Incluir idade para calcular faixa etária (pegar do beneficiário)
+          b.idade,
+          -- NET único por CPF (já agrupado no JOIN)
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
+        FROM (
+          SELECT
+            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+            p.cpf,
+            SUM(p.valor_procedimento) AS valor_total_cpf_mes
+          FROM reg_procedimentos p
+          WHERE ${procedimentosConditions.join(" AND ")}
+          GROUP BY
+            DATE_FORMAT(p.data_competencia, '%Y-%m'),
+            p.cpf
+        ) AS pr
+        ${joinType} JOIN (
+          SELECT
+            b.cpf,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.status_beneficiario
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.entidade
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS entidade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS mes_reajuste,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.plano
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS plano,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.tipo
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS tipo,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                CAST(b.idade AS CHAR)
+                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',',
+              1
+            ) AS idade
+          FROM reg_beneficiarios b
+          ${beneficiarioWhereClausePlano}
+          GROUP BY
+            b.cpf
+        ) AS b
+          ON b.cpf = pr.cpf
+        LEFT JOIN (
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
+        WHERE b.plano = ?
+          AND (b.entidade IS NOT NULL AND b.entidade != '')
+          AND b.plano IS NOT NULL AND b.plano != ''
+          ${entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
+          ${mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
+          ${tipo ? "AND b.tipo = ?" : ""}
+      ),
+      base_agregado AS (
+        SELECT
+          base.cpf,
+          base.entidade,
+          base.mes_reajuste,
+          base.plano,
+          -- Somar valores de procedimentos de TODOS os meses e TODOS os status para este CPF
+          -- IMPORTANTE: Quando status="total", queremos somar valores de todos os status
+          SUM(base.valor_total_cpf_mes) AS valor_total_cpf,
+          -- NET único por CPF (usar MAX porque já é único por CPF)
+          MAX(COALESCE(base.vlr_net_cpf, 0)) AS vlr_net_cpf,
+          -- Pegar idade mais recente (ou NULL)
+          -- IMPORTANTE: Pegar idade de qualquer status (não importa qual)
+          -- Usar MAX para garantir que pegamos uma idade válida se houver múltiplas
+          -- A idade já vem única do JOIN com beneficiários, mas usar MAX garante consistência
+          MAX(CASE 
+            WHEN base.idade IS NOT NULL AND CAST(base.idade AS UNSIGNED) > 0 
+            THEN CAST(base.idade AS UNSIGNED) 
+            ELSE NULL 
+          END) AS idade
+        FROM base
+        -- CORREÇÃO CRÍTICA: Agrupar por CPF + entidade + mes_reajuste + plano
+        -- SEM status_final e SEM mes, para garantir que cada CPF seja contado apenas UMA VEZ
+        -- mesmo que apareça com status diferentes em meses diferentes
+        -- Isso é EXATAMENTE a mesma base que alimenta o card mãe Total de Vidas
+        -- quando somamos todos os status no front-end
+        -- IMPORTANTE: Não incluir 'mes' nem 'status_final' no GROUP BY porque queremos
+        -- agregar todos os meses e todos os status para cada CPF
+        GROUP BY
+          base.cpf,
+          base.entidade,
+          base.mes_reajuste,
+          base.plano
+      )
+      SELECT
+        CASE
+          WHEN base_agregado.idade IS NULL OR base_agregado.idade = 0 THEN '00 a 18'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 23 THEN '19 a 23'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 28 THEN '24 a 28'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 33 THEN '29 a 33'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 38 THEN '34 a 38'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 43 THEN '39 a 43'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 48 THEN '44 a 48'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 53 THEN '49 a 53'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) <= 58 THEN '54 a 58'
+          ELSE '59+'
+        END AS faixa_etaria,
+        -- CORREÇÃO CRÍTICA: Contar cada CPF apenas uma vez por faixa etária
+        -- Como base_agregado já agrupa por CPF + entidade + mes_reajuste + plano (SEM status_final),
+        -- cada CPF aparece apenas UMA VEZ em base_agregado
+        -- COUNT(DISTINCT) garante que não haja duplicação mesmo se houver algum problema
+        COUNT(DISTINCT base_agregado.cpf) AS vidas,
+        -- Somar valores de todos os CPFs na faixa etária
+        SUM(base_agregado.valor_total_cpf) AS valor,
+        -- Somar valores NET de faturamento na faixa etária
+        SUM(COALESCE(base_agregado.vlr_net_cpf, 0)) AS valor_net
+      FROM base_agregado
+      -- IMPORTANTE: Agrupar apenas por faixa_etaria
+      -- Como base_agregado já tem 1 linha por CPF (agrupado por CPF + entidade + mes_reajuste + plano),
+      -- cada CPF será contado apenas uma vez por faixa etária
+      GROUP BY
+        faixa_etaria
+      ORDER BY
+        CASE faixa_etaria
+          WHEN '00 a 18' THEN 1
+          WHEN '19 a 23' THEN 2
+          WHEN '24 a 28' THEN 3
+          WHEN '29 a 33' THEN 4
+          WHEN '34 a 38' THEN 5
+          WHEN '39 a 43' THEN 6
+          WHEN '44 a 48' THEN 7
+          WHEN '49 a 53' THEN 8
+          WHEN '54 a 58' THEN 9
+          WHEN '59+' THEN 10
+          ELSE 11
+        END
+    ` : `
+      -- Query original para cards mãe ou status diferente de "total"
       WITH base_mes_cpf AS (
         SELECT
           pr.mes,
@@ -176,8 +355,6 @@ export async function GET(request: NextRequest) {
           END AS status_final,
           b.idade,
           b.plano,
-          -- CORREÇÃO PROBLEMA 2: Garantir que o NET seja trazido apenas uma vez por CPF
-          -- O JOIN com reg_faturamento já está agrupado por CPF, então não deve duplicar
           COALESCE(f.vlr_net, 0) AS vlr_net_cpf${!isCardMae ? `,
           b.entidade,
           b.mes_reajuste,
@@ -251,9 +428,6 @@ export async function GET(request: NextRequest) {
         ) AS b
           ON b.cpf = pr.cpf
         LEFT JOIN (
-          -- CORREÇÃO PROBLEMA 2: Garantir apenas 1 registro por CPF de reg_faturamento
-          -- Usar subquery com GROUP BY para garantir unicidade antes do JOIN
-          -- Isso evita que o JOIN duplique linhas quando um CPF aparece em múltiplos meses
           SELECT
             f.cpf_do_beneficiario AS cpf,
             MAX(f.vlr_net) AS vlr_net
@@ -272,37 +446,26 @@ export async function GET(request: NextRequest) {
           valor_total_cpf_mes,
           status_final,
           idade,
-          -- CORREÇÃO PROBLEMA 2: Garantir que o NET seja único por CPF
-          -- Como o JOIN já garante 1 valor por CPF, usar MAX para garantir consistência
-          -- Mas não agrupar aqui - manter todas as linhas (uma por mês/CPF) para que
-          -- base_cpf_agregado possa somar corretamente os valores de todos os meses
-          vlr_net_cpf
+          vlr_net_cpf${!isCardMae ? `,
+          entidade,
+          mes_reajuste` : ''}
         FROM base_mes_cpf
-        -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
-        -- com o status correto sejam considerados (respeitando o contexto do card)
         ${statusParam !== "total" ? `WHERE base_mes_cpf.status_final = ?` : ''}
       ),
       base_cpf_agregado AS (
         SELECT
           cpf,
-          -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          -- CORREÇÃO PROBLEMA 2: Pegar valor NET de faturamento (1 valor por CPF, usar MAX para garantir único)
-          -- Como já agrupamos por CPF no base_cpf_filtrado, cada CPF deve ter apenas 1 valor NET
           MAX(vlr_net_cpf) AS valor_net_cpf,
-          -- Pegar status (já filtrado, então será consistente)
           MAX(status_final) AS status_final,
-          -- Pegar a idade não-nula mais recente (ou NULL se todas forem NULL)
-          -- Se idade for NULL, será tratada como '00 a 18' no CASE posterior
           MAX(CASE 
             WHEN idade IS NOT NULL AND CAST(idade AS UNSIGNED) > 0 
             THEN CAST(idade AS UNSIGNED) 
             ELSE NULL 
-          END) AS idade
+          END) AS idade${!isCardMae ? `,
+          MAX(entidade) AS entidade,
+          MAX(mes_reajuste) AS mes_reajuste` : ''}
         FROM base_cpf_filtrado
-        -- CORREÇÃO PROBLEMA 2: Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
-        -- mesmo que apareça em múltiplos meses filtrados
-        -- Isso é crítico para evitar supercontagem de vidas
         GROUP BY cpf
       )
       SELECT
@@ -320,17 +483,10 @@ export async function GET(request: NextRequest) {
           ELSE '59+'
         END AS faixa_etaria,
         MAX(base_cpf_agregado.status_final) AS status_final,
-        -- CORREÇÃO PROBLEMA 2: Contar cada CPF apenas uma vez por faixa etária
-        -- Como base_cpf_agregado já agrupa por CPF, COUNT(DISTINCT) garante que não haja duplicação
         COUNT(DISTINCT base_cpf_agregado.cpf) AS vidas,
-        -- Somar valores de todos os CPFs na faixa etária
         SUM(base_cpf_agregado.valor_total_cpf) AS valor,
-        -- CORREÇÃO PROBLEMA 2: Somar valores NET de faturamento na faixa etária
-        -- Como cada CPF tem apenas 1 valor NET (já garantido no base_cpf_agregado),
-        -- a soma está correta
         SUM(COALESCE(base_cpf_agregado.valor_net_cpf, 0)) AS valor_net
       FROM base_cpf_agregado
-      -- Filtro de status já foi aplicado no base_mes_cpf, então não precisa filtrar novamente aqui
       GROUP BY
         faixa_etaria
       ORDER BY
@@ -364,6 +520,13 @@ export async function GET(request: NextRequest) {
     ]
     
     // Adicionar valores de entidade e mês de reajuste para filtros no WHERE final do CTE (cards filhos)
+    // IMPORTANTE: Quando usarBaseAgregadaPlano é true, a ordem é:
+    // 1. procedimentosValues
+    // 2. beneficiarioValuesPlano
+    // 3. plano
+    // 4. entidades (se houver)
+    // 5. mesesReajuste (se houver)
+    // 6. tipo (se houver)
     if (!isCardMae) {
       if (entidades.length > 0) {
         queryValues.push(...entidades)
@@ -373,12 +536,27 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // Adicionar status se não for "total" - precisa ser depois de entidade/mês de reajuste porque está no WHERE do base_cpf_agregado
-    if (statusParam !== "total") {
+    // Adicionar tipo se especificado (para usarBaseAgregadaPlano, o tipo vem do beneficiarioValuesPlano)
+    // Mas precisamos adicionar aqui também se não estiver em beneficiarioValuesPlano
+    // Na verdade, o tipo já está em beneficiarioValuesPlano, então não precisamos adicionar novamente
+    
+    // Adicionar status se não for "total" - apenas para query antiga (não usarBaseAgregadaPlano)
+    if (!usarBaseAgregadaPlano && statusParam !== "total") {
       queryValues.push(statusParam)
     }
     
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
+
+    // DEBUG TEMPORÁRIO: Verificar contagem de vidas para ANEC ASSIM MAX QC
+    if (usarBaseAgregadaPlano && entidades.length > 0 && entidades.includes("ANEC") && plano && plano.includes("ASSIM MAX QC") && !plano.includes("R")) {
+      const totalVidas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.vidas) || 0), 0)
+      console.log("DEBUG FAIXAS ETARIAS - ANEC ASSIM MAX QC:", {
+        plano,
+        total_vidas_somadas: totalVidas,
+        numero_faixas: (rows || []).length,
+        faixas: (rows || []).map((r: any) => ({ faixa: r.faixa_etaria, vidas: r.vidas }))
+      })
+    }
 
     // Processar resultados
     // INTEGRAÇÃO: Incluído campo valor_net
@@ -402,19 +580,19 @@ export async function GET(request: NextRequest) {
     })
 
     // Processar resultados da query
-    // Nota: Como já agrupamos por CPF no base_cpf, cada CPF deve aparecer apenas uma vez
-    // mesmo quando statusParam === "total", pois removemos o agrupamento por status_final
+    // CORREÇÃO: Quando usarBaseAgregadaPlano é true (card filho com status="total"),
+    // a query não retorna status_final porque agrupamos sem ele para evitar duplicação
     ;(rows || []).forEach((row: any) => {
       const faixa = row.faixa_etaria || '00 a 18'
-      const status = row.status_final || 'vazio'
+      const status = row.status_final || (usarBaseAgregadaPlano ? 'total' : 'vazio')
       const vidas = Number(row.vidas) || 0
       const valor = Number(row.valor) || 0
       const valorNet = Number(row.valor_net) || 0
 
       // Filtrar por status se especificado
-      // Quando statusParam === "total", incluímos todos os status
-      // Como já agrupamos por CPF no base_cpf, não há duplicação
-      if (statusParam === "total" || statusParam === status) {
+      // Quando statusParam === "total" ou usarBaseAgregadaPlano, incluímos todos os status
+      // Como já agrupamos por CPF sem status_final quando usarBaseAgregadaPlano, não há duplicação
+      if (usarBaseAgregadaPlano || statusParam === "total" || statusParam === status) {
         const atual = faixasMap.get(faixa) || { vidas: 0, valor: 0, valor_net: 0 }
         atual.vidas += vidas
         atual.valor += valor
