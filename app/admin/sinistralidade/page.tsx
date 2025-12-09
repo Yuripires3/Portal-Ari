@@ -87,6 +87,7 @@ export default function SinistralidadeDashboardPage() {
   const [loadingFiltros, setLoadingFiltros] = useState(true)
   
   // Estados para cards de status de vidas
+  // INTEGRAÇÃO: Incluídos campos de faturamento NET
   const [cardsStatusVidas, setCardsStatusVidas] = useState<{
     consolidado: {
       ativo: number
@@ -97,11 +98,15 @@ export default function SinistralidadeDashboardPage() {
       valor_inativo: number
       valor_nao_localizado: number
       valor_total_geral: number
+      valor_net_ativo?: number
+      valor_net_inativo?: number
+      valor_net_nao_localizado?: number
+      valor_net_total_geral?: number
       por_plano?: {
-        ativo: Array<{ plano: string; vidas: number; valor: number }>
-        inativo: Array<{ plano: string; vidas: number; valor: number }>
-        nao_localizado: Array<{ plano: string; vidas: number; valor: number }>
-        total: Array<{ plano: string; vidas: number; valor: number }>
+        ativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        inativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        nao_localizado: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        total: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
       }
     }
     por_entidade?: {
@@ -110,36 +115,40 @@ export default function SinistralidadeDashboardPage() {
         mes_reajuste?: string | null
         vidas: number
         valor_total: number
+        valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
       }>
       inativo: Array<{
         entidade: string
         mes_reajuste?: string | null
         vidas: number
         valor_total: number
+        valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
       }>
       nao_localizado: Array<{
         entidade: string
         mes_reajuste?: string | null
         vidas: number
         valor_total: number
+        valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
       }>
       total: Array<{
         entidade: string
         mes_reajuste?: string | null
         vidas: number
         valor_total: number
+        valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
       }>
     }
   } | null>(null)
@@ -518,12 +527,14 @@ export default function SinistralidadeDashboardPage() {
 
   // Função para agrupar entidades de todos os status (ativo, inativo, nao_localizado) por entidade e mês de reajuste
   // Usado no card "Total de Vidas" para somar todas as vidas de uma mesma entidade/mês de reajuste
+  // INTEGRAÇÃO: Incluídos campos de faturamento NET
   const agruparEntidadesTotal = useCallback((
     entidadesAtivo: Array<{
       entidade: string
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total?: number
       pct_vidas: number
       pct_valor: number
       por_plano?: Array<{ plano: string; vidas: number; valor: number }>
@@ -533,6 +544,7 @@ export default function SinistralidadeDashboardPage() {
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total?: number
       pct_vidas: number
       pct_valor: number
       por_plano?: Array<{ plano: string; vidas: number; valor: number }>
@@ -542,6 +554,7 @@ export default function SinistralidadeDashboardPage() {
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total?: number
       pct_vidas: number
       pct_valor: number
       por_plano?: Array<{ plano: string; vidas: number; valor: number }>
@@ -555,6 +568,7 @@ export default function SinistralidadeDashboardPage() {
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total: number
       pct_vidas: number
       pct_valor: number
       por_plano: Map<string, { vidas: number; valor: number }>
@@ -569,6 +583,7 @@ export default function SinistralidadeDashboardPage() {
         if (existente) {
           existente.vidas += ent.vidas
           existente.valor_total += ent.valor_total
+          existente.valor_net_total += ent.valor_net_total || 0
           
           // Agrupar planos também
           if (ent.por_plano) {
@@ -592,6 +607,7 @@ export default function SinistralidadeDashboardPage() {
             mes_reajuste: ent.mes_reajuste,
             vidas: ent.vidas,
             valor_total: ent.valor_total,
+            valor_net_total: ent.valor_net_total || 0,
             pct_vidas: 0, // Será calculado depois
             pct_valor: 0, // Será calculado depois
             por_plano: planosMap
@@ -611,6 +627,7 @@ export default function SinistralidadeDashboardPage() {
       mes_reajuste: ent.mes_reajuste,
       vidas: ent.vidas,
       valor_total: ent.valor_total,
+      valor_net_total: ent.valor_net_total,
       pct_vidas: totalVidasConsolidado > 0 ? ent.vidas / totalVidasConsolidado : 0,
       pct_valor: valorTotalConsolidado > 0 ? ent.valor_total / valorTotalConsolidado : 0,
       por_plano: Array.from(ent.por_plano.entries())
@@ -653,12 +670,14 @@ export default function SinistralidadeDashboardPage() {
 
   // Função para agrupar entidades por entidade e mês de reajuste
   // Ordenação: primeiro por mês de reajuste (maior volume de vidas), depois por entidade (maior quantidade de vidas)
+  // INTEGRAÇÃO: Incluídos campos de faturamento NET
   const agruparEntidadesPorMesReajuste = useCallback((
     entidades: Array<{
       entidade: string
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total?: number
       pct_vidas: number
       pct_valor: number
       por_plano?: Array<{ plano: string; vidas: number; valor: number }>
@@ -1282,6 +1301,11 @@ export default function SinistralidadeDashboardPage() {
                     <p className="text-xs text-muted-foreground mt-1">
                       Valor Total: {fmtBRL(cardsData?.consolidado?.valor_total_geral || 0)}
                     </p>
+                    {(cardsData?.consolidado?.valor_net_total_geral || 0) > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_total_geral || 0)}
+                      </p>
+                    )}
                     {/* Distribuição por plano - Drilldown */}
                     {cardsData?.consolidado?.por_plano?.total && cardsData.consolidado.por_plano.total.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
@@ -1346,6 +1370,11 @@ export default function SinistralidadeDashboardPage() {
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
                       </p>
+                      {((entidade as any).valor_net_total || 0) > 0 && (
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          NET: {fmtBRL((entidade as any).valor_net_total || 0)}
+                        </p>
+                      )}
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1414,6 +1443,11 @@ export default function SinistralidadeDashboardPage() {
                     <p className="text-xs text-muted-foreground mt-1">
                       Valor: {fmtBRL(cardsData?.consolidado?.valor_ativo || 0)}
                     </p>
+                    {(cardsData?.consolidado?.valor_net_ativo || 0) > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_ativo || 0)}
+                      </p>
+                    )}
                     {/* Distribuição por plano - Drilldown */}
                     {cardsData?.consolidado?.por_plano?.ativo && cardsData.consolidado.por_plano.ativo.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
@@ -1464,6 +1498,11 @@ export default function SinistralidadeDashboardPage() {
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas ativas
                       </p>
+                      {(entidade.valor_net_total || 0) > 0 && (
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          NET: {fmtBRL(entidade.valor_net_total || 0)}
+                        </p>
+                      )}
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1531,6 +1570,11 @@ export default function SinistralidadeDashboardPage() {
                     <p className="text-xs text-muted-foreground mt-1">
                       Valor: {fmtBRL(cardsData?.consolidado?.valor_inativo || 0)}
                     </p>
+                    {(cardsData?.consolidado?.valor_net_inativo || 0) > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_inativo || 0)}
+                      </p>
+                    )}
                     {/* Distribuição por plano - Drilldown */}
                     {cardsData?.consolidado?.por_plano?.inativo && cardsData.consolidado.por_plano.inativo.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
@@ -1581,6 +1625,11 @@ export default function SinistralidadeDashboardPage() {
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas inativas
                       </p>
+                      {(entidade.valor_net_total || 0) > 0 && (
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          NET: {fmtBRL(entidade.valor_net_total || 0)}
+                        </p>
+                      )}
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1649,6 +1698,11 @@ export default function SinistralidadeDashboardPage() {
                     <p className="text-xs text-muted-foreground mt-1">
                       Valor: {fmtBRL(cardsData?.consolidado?.valor_nao_localizado || 0)}
                     </p>
+                    {(cardsData?.consolidado?.valor_net_nao_localizado || 0) > 0 && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_nao_localizado || 0)}
+                      </p>
+                    )}
                     {/* Distribuição por plano - Drilldown */}
                     {cardsData?.consolidado?.por_plano?.nao_localizado && cardsData.consolidado.por_plano.nao_localizado.length > 0 && (
                       <div className="mt-4 pt-3 border-t border-slate-200">
@@ -1699,6 +1753,11 @@ export default function SinistralidadeDashboardPage() {
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas não localizadas
                       </p>
+                      {(entidade.valor_net_total || 0) > 0 && (
+                        <p className="text-xs text-slate-400 mt-0.5">
+                          NET: {fmtBRL(entidade.valor_net_total || 0)}
+                        </p>
+                      )}
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div

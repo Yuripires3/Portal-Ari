@@ -8,6 +8,7 @@ interface FaixaEtaria {
   faixa_etaria: string
   vidas: number
   valor: number
+  valor_net?: number
   is?: number | null
 }
 
@@ -136,6 +137,7 @@ export function AgeRangeDistribution({
           <span className="w-[90px] text-left">Faixa Etária</span>
           <span className="w-[60px] text-center">Vidas</span>
           <span className="w-[110px] text-center">Valor</span>
+          <span className="w-[110px] text-center">NET</span>
           <span className="w-[50px] text-center">%</span>
           <span className="w-[50px] text-center">IS</span>
         </div>
@@ -164,6 +166,11 @@ export function AgeRangeDistribution({
               {/* Valor */}
               <span className="w-[110px] text-center text-[#184286]">
                 {formatCurrency(faixa.valor)}
+              </span>
+
+              {/* NET */}
+              <span className="w-[110px] text-center text-[#184286]">
+                {faixa.valor_net && faixa.valor_net > 0 ? formatCurrency(faixa.valor_net) : "-"}
               </span>
 
               {/* Percentual */}

@@ -175,7 +175,8 @@ export async function GET(request: NextRequest) {
             ELSE 'inativo'
           END AS status_final,
           b.idade,
-          b.plano${!isCardMae ? `,
+          b.plano,
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf${!isCardMae ? `,
           b.entidade,
           b.mes_reajuste,
           b.tipo` : ''}
@@ -247,6 +248,14 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = pr.cpf
+        LEFT JOIN (
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
         WHERE b.plano = ?
           ${!isCardMae ? `AND (b.entidade IS NOT NULL AND b.entidade != '')` : ''}
           ${!isCardMae && entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
@@ -257,7 +266,8 @@ export async function GET(request: NextRequest) {
           cpf,
           valor_total_cpf_mes,
           status_final,
-          idade
+          idade,
+          vlr_net_cpf
         FROM base_mes_cpf
         -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
         -- com o status correto sejam considerados (respeitando o contexto do card)
@@ -268,6 +278,8 @@ export async function GET(request: NextRequest) {
           cpf,
           -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
+          -- Pegar valor NET de faturamento (1 valor por CPF, usar MAX para garantir único)
+          MAX(vlr_net_cpf) AS valor_net_cpf,
           -- Pegar status (já filtrado, então será consistente)
           MAX(status_final) AS status_final,
           -- Pegar a idade não-nula mais recente (ou NULL se todas forem NULL)
@@ -300,7 +312,9 @@ export async function GET(request: NextRequest) {
         -- Contar cada CPF apenas uma vez por faixa etária
         COUNT(DISTINCT base_cpf_agregado.cpf) AS vidas,
         -- Somar valores de todos os CPFs na faixa etária
-        SUM(base_cpf_agregado.valor_total_cpf) AS valor
+        SUM(base_cpf_agregado.valor_total_cpf) AS valor,
+        -- Somar valores NET de faturamento na faixa etária
+        SUM(base_cpf_agregado.valor_net_cpf) AS valor_net
       FROM base_cpf_agregado
       -- Filtro de status já foi aplicado no base_mes_cpf, então não precisa filtrar novamente aqui
       GROUP BY
@@ -353,13 +367,15 @@ export async function GET(request: NextRequest) {
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
 
     // Processar resultados
+    // INTEGRAÇÃO: Incluído campo valor_net
     const faixasEtarias: Array<{
       faixa_etaria: string
       vidas: number
       valor: number
+      valor_net: number
     }> = []
 
-    const faixasMap = new Map<string, { vidas: number; valor: number }>()
+    const faixasMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
 
     // Inicializar todas as faixas
     const todasFaixas = [
@@ -368,7 +384,7 @@ export async function GET(request: NextRequest) {
     ]
 
     todasFaixas.forEach(faixa => {
-      faixasMap.set(faixa, { vidas: 0, valor: 0 })
+      faixasMap.set(faixa, { vidas: 0, valor: 0, valor_net: 0 })
     })
 
     // Processar resultados da query
@@ -379,26 +395,29 @@ export async function GET(request: NextRequest) {
       const status = row.status_final || 'vazio'
       const vidas = Number(row.vidas) || 0
       const valor = Number(row.valor) || 0
+      const valorNet = Number(row.valor_net) || 0
 
       // Filtrar por status se especificado
       // Quando statusParam === "total", incluímos todos os status
       // Como já agrupamos por CPF no base_cpf, não há duplicação
       if (statusParam === "total" || statusParam === status) {
-        const atual = faixasMap.get(faixa) || { vidas: 0, valor: 0 }
+        const atual = faixasMap.get(faixa) || { vidas: 0, valor: 0, valor_net: 0 }
         atual.vidas += vidas
         atual.valor += valor
+        atual.valor_net += valorNet
         faixasMap.set(faixa, atual)
       }
     })
 
     // Converter para array ordenado
     todasFaixas.forEach(faixa => {
-      const dados = faixasMap.get(faixa) || { vidas: 0, valor: 0 }
+      const dados = faixasMap.get(faixa) || { vidas: 0, valor: 0, valor_net: 0 }
       // IS ainda não implementado - retornar null para mostrar "-"
       faixasEtarias.push({
         faixa_etaria: faixa,
         vidas: dados.vidas,
         valor: dados.valor,
+        valor_net: dados.valor_net,
         is: null
       })
     })

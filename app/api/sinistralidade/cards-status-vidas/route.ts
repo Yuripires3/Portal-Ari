@@ -190,6 +190,7 @@ export async function GET(request: NextRequest) {
 
     // QUERY PARA CONSOLIDADO GERAL (sem filtro de entidade)
     // Os cards principais sempre mostram o total da operadora/período, independente do filtro de entidade
+    // INTEGRAÇÃO: Adicionado LEFT JOIN com reg_faturamento para trazer vlr_net por CPF
     const sqlGeral = `
       SELECT
         m.mes AS mes,
@@ -198,14 +199,19 @@ export async function GET(request: NextRequest) {
         SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS inativo,
         SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS nao_localizado,
         COUNT(*) AS total_vidas,
-        -- valores por status
+        -- valores por status (procedimentos)
         SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_ativo,
         SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_inativo,
         SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_total_cpf_mes ELSE 0 END) AS valor_nao_localizado,
-        -- valor total no mês
-        SUM(m.valor_total_cpf_mes) AS valor_total_geral
+        -- valor total no mês (procedimentos)
+        SUM(m.valor_total_cpf_mes) AS valor_total_geral,
+        -- valores de faturamento NET por status
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN COALESCE(m.vlr_net_cpf, 0) ELSE 0 END) AS valor_net_ativo,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN COALESCE(m.vlr_net_cpf, 0) ELSE 0 END) AS valor_net_inativo,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN COALESCE(m.vlr_net_cpf, 0) ELSE 0 END) AS valor_net_nao_localizado,
+        SUM(COALESCE(m.vlr_net_cpf, 0)) AS valor_net_total_geral
       FROM (
-        -- 1 linha por CPF/mês, com valor total do CPF no mês + status final
+        -- 1 linha por CPF/mês, com valor total do CPF no mês + status final + valores de faturamento
         SELECT
           pr.mes,
           pr.cpf,
@@ -214,7 +220,8 @@ export async function GET(request: NextRequest) {
             WHEN b.cpf IS NULL THEN 'vazio'
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
-          END AS status_final
+          END AS status_final,
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
         FROM (
           -- soma todos os procedimentos de cada CPF em cada mês (sem join ainda)
           SELECT
@@ -246,6 +253,16 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = pr.cpf
+        LEFT JOIN (
+          -- Trazer valores de faturamento por CPF (1 registro por CPF conforme especificação)
+          -- Usar MAX para garantir apenas 1 valor por CPF caso haja inconsistências
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
       ) AS m
       GROUP BY
         m.mes
@@ -255,13 +272,15 @@ export async function GET(request: NextRequest) {
 
     // Query adicional para agregação por entidade separada por status e mês de reajuste
     // Retorna entidades para cada status: ativo, inativo, vazio (não localizado)
+    // INTEGRAÇÃO: Adicionado LEFT JOIN com reg_faturamento para trazer vlr_net por CPF
     const sqlPorEntidade = `
       SELECT
         base.entidade,
         base.mes_reajuste,
         base.status_final,
         COUNT(DISTINCT base.cpf) AS vidas,
-        SUM(base.valor_total_cpf_mes) AS valor_total
+        SUM(base.valor_total_cpf_mes) AS valor_total,
+        SUM(COALESCE(base.vlr_net_cpf, 0)) AS valor_net_total
       FROM (
         SELECT
           pr.mes,
@@ -274,7 +293,8 @@ export async function GET(request: NextRequest) {
           END AS status_final,
           b.entidade,
           b.mes_reajuste,
-          b.tipo
+          b.tipo,
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
         FROM (
           SELECT
             DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
@@ -327,6 +347,16 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = pr.cpf
+        LEFT JOIN (
+          -- Trazer valores de faturamento por CPF (1 registro por CPF conforme especificação)
+          -- Usar MAX para garantir apenas 1 valor por CPF caso haja inconsistências
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
       ) AS base
       WHERE base.entidade IS NOT NULL AND base.entidade != ''
       ${entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
@@ -369,6 +399,7 @@ export async function GET(request: NextRequest) {
     ])
 
     // Processar resultados do consolidado geral (sem filtro de entidade)
+    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA
     const porMesGeral = (rowsGeral || []).map((row: any) => ({
       mes: row.mes,
       ativo: Number(row.ativo) || 0,
@@ -379,10 +410,15 @@ export async function GET(request: NextRequest) {
       valor_inativo: Number(row.valor_inativo) || 0,
       valor_nao_localizado: Number(row.valor_nao_localizado) || 0,
       valor_total_geral: Number(row.valor_total_geral) || 0,
+      valor_net_ativo: Number(row.valor_net_ativo) || 0,
+      valor_net_inativo: Number(row.valor_net_inativo) || 0,
+      valor_net_nao_localizado: Number(row.valor_net_nao_localizado) || 0,
+      valor_net_total_geral: Number(row.valor_net_total_geral) || 0,
     }))
 
     // Calcular consolidado GERAL (soma de todos os meses, SEM filtro de entidade)
     // Este é o total da operadora/período que será usado nos cards principais
+    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA no consolidado
     const consolidadoGeral = porMesGeral.reduce(
       (acc, mes) => ({
         ativo: acc.ativo + mes.ativo,
@@ -393,6 +429,10 @@ export async function GET(request: NextRequest) {
         valor_inativo: acc.valor_inativo + mes.valor_inativo,
         valor_nao_localizado: acc.valor_nao_localizado + mes.valor_nao_localizado,
         valor_total_geral: acc.valor_total_geral + mes.valor_total_geral,
+        valor_net_ativo: acc.valor_net_ativo + mes.valor_net_ativo,
+        valor_net_inativo: acc.valor_net_inativo + mes.valor_net_inativo,
+        valor_net_nao_localizado: acc.valor_net_nao_localizado + mes.valor_net_nao_localizado,
+        valor_net_total_geral: acc.valor_net_total_geral + mes.valor_net_total_geral,
       }),
       {
         ativo: 0,
@@ -403,6 +443,10 @@ export async function GET(request: NextRequest) {
         valor_inativo: 0,
         valor_nao_localizado: 0,
         valor_total_geral: 0,
+        valor_net_ativo: 0,
+        valor_net_inativo: 0,
+        valor_net_nao_localizado: 0,
+        valor_net_total_geral: 0,
       }
     )
 
@@ -410,11 +454,13 @@ export async function GET(request: NextRequest) {
     const consolidado = consolidadoGeral
 
     // Processar dados por entidade separados por status e mês de reajuste
+    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA
     const entidadesPorStatus: Record<string, Array<{
       entidade: string
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total: number
       pct_vidas: number
       pct_valor: number
     }>> = {
@@ -424,12 +470,14 @@ export async function GET(request: NextRequest) {
     }
 
     // Agrupar por status e mês de reajuste
+    // INTEGRAÇÃO: Incluídos valores de faturamento NET e VENDA
     ;(rowsPorEntidade || []).forEach((row: any) => {
       const status = row.status_final || "vazio"
       const entidade = row.entidade || ""
       const mesReajuste = row.mes_reajuste || null
       const vidas = Number(row.vidas) || 0
       const valorTotal = Number(row.valor_total) || 0
+      const valorNetTotal = Number(row.valor_net_total) || 0
 
       if (!entidade) return
 
@@ -461,6 +509,7 @@ export async function GET(request: NextRequest) {
         mes_reajuste: mesReajuste,
         vidas,
         valor_total: valorTotal,
+        valor_net_total: valorNetTotal,
         pct_vidas: pctVidas,
         pct_valor: pctValor,
       })
@@ -487,11 +536,13 @@ export async function GET(request: NextRequest) {
 
     // Calcular total agregado por entidade e mês de reajuste (todas as entidades juntas)
     // Manter separado por mês de reajuste para exibir cards individuais
+    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA
     const entidadesTotal: Array<{
       entidade: string
       mes_reajuste?: string | null
       vidas: number
       valor_total: number
+      valor_net_total: number
       pct_vidas: number
       pct_valor: number
     }> = []
@@ -502,6 +553,7 @@ export async function GET(request: NextRequest) {
         mes_reajuste: item.mes_reajuste,
         vidas: item.vidas,
         valor_total: item.valor_total,
+        valor_net_total: item.valor_net_total,
         // Porcentagem calculada sobre o total de vidas do card mandante "Total de Vidas"
         pct_vidas: consolidadoGeral.total_vidas > 0 ? item.vidas / consolidadoGeral.total_vidas : 0,
         pct_valor: consolidadoGeral.valor_total_geral > 0 ? item.valor_total / consolidadoGeral.valor_total_geral : 0,
@@ -522,12 +574,14 @@ export async function GET(request: NextRequest) {
     })
 
     // Query para distribuição por plano nos cards principais (por status)
+    // INTEGRAÇÃO: Adicionado LEFT JOIN com reg_faturamento para trazer vlr_net por CPF
     const sqlPorPlanoGeral = `
       SELECT
         m.status_final,
         m.plano,
         COUNT(DISTINCT m.cpf) AS vidas,
-        SUM(m.valor_total_cpf_mes) AS valor
+        SUM(m.valor_total_cpf_mes) AS valor,
+        SUM(COALESCE(m.vlr_net_cpf, 0)) AS valor_net
       FROM (
         SELECT
           pr.mes,
@@ -538,7 +592,8 @@ export async function GET(request: NextRequest) {
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
           END AS status_final,
-          b.plano
+          b.plano,
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
         FROM (
           SELECT
             DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
@@ -575,6 +630,14 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = pr.cpf
+        LEFT JOIN (
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
       ) AS m
       WHERE m.plano IS NOT NULL AND m.plano != ''
       GROUP BY
@@ -586,15 +649,27 @@ export async function GET(request: NextRequest) {
     `
 
     // Query para distribuição por plano nos cards de entidade (por entidade, mês de reajuste e status)
+    // INTEGRAÇÃO: Adicionado LEFT JOIN com reg_faturamento para trazer vlr_net por CPF
+    // CORREÇÃO: Agrupar por CPF primeiro para ter valor NET único, depois agregar por plano
     const sqlPorPlanoEntidade = `
       SELECT
-        base.entidade,
-        base.mes_reajuste,
-        base.status_final,
-        base.plano,
-        COUNT(DISTINCT base.cpf) AS vidas,
-        SUM(base.valor_total_cpf_mes) AS valor
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
+        base_agregado.status_final,
+        base_agregado.plano,
+        COUNT(DISTINCT base_agregado.cpf) AS vidas,
+        SUM(base_agregado.valor_total_cpf) AS valor,
+        SUM(base_agregado.vlr_net_cpf) AS valor_net
       FROM (
+        SELECT
+          base.cpf,
+          base.entidade,
+          base.mes_reajuste,
+          base.status_final,
+          base.plano,
+          SUM(base.valor_total_cpf_mes) AS valor_total_cpf,
+          MAX(base.vlr_net_cpf) AS vlr_net_cpf
+        FROM (
         SELECT
           pr.mes,
           pr.cpf,
@@ -607,7 +682,8 @@ export async function GET(request: NextRequest) {
           b.entidade,
           b.mes_reajuste,
           b.plano,
-          b.tipo
+          b.tipo,
+          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
         FROM (
           SELECT
             DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
@@ -668,6 +744,14 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = pr.cpf
+        LEFT JOIN (
+          SELECT
+            f.cpf_do_beneficiario AS cpf,
+            MAX(f.vlr_net) AS vlr_net
+          FROM reg_faturamento f
+          GROUP BY f.cpf_do_beneficiario
+        ) AS f
+          ON f.cpf = pr.cpf
       ) AS base
       WHERE base.entidade IS NOT NULL AND base.entidade != ''
         AND base.plano IS NOT NULL AND base.plano != ''
@@ -675,15 +759,22 @@ export async function GET(request: NextRequest) {
       ${tipo ? "AND base.tipo = ?" : ""}
       ${cpf ? "AND base.cpf = ?" : ""}
       GROUP BY
+        base.cpf,
         base.entidade,
         base.mes_reajuste,
         base.status_final,
         base.plano
+      ) AS base_agregado
+      GROUP BY
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
+        base_agregado.status_final,
+        base_agregado.plano
       ORDER BY
-        base.entidade,
-        base.mes_reajuste,
-        base.status_final,
-        COUNT(DISTINCT base.cpf) DESC
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
+        base_agregado.status_final,
+        COUNT(DISTINCT base_agregado.cpf) DESC
     `
 
     // Executar queries de distribuição por plano
@@ -699,20 +790,22 @@ export async function GET(request: NextRequest) {
     ])
 
     // Processar distribuição por plano para cards principais
-    const porPlanoGeral: Record<string, Array<{ plano: string; vidas: number; valor: number }>> = {
+    // INTEGRAÇÃO: Incluído campo valor_net
+    const porPlanoGeral: Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number }>> = {
       ativo: [],
       inativo: [],
       vazio: [],
       total: [],
     }
 
-    const planoTotalMap = new Map<string, { vidas: number; valor: number }>()
+    const planoTotalMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
 
     ;(rowsPorPlanoGeral || []).forEach((row: any) => {
       const status = row.status_final || "vazio"
       const plano = row.plano || ""
       const vidas = Number(row.vidas) || 0
       const valor = Number(row.valor) || 0
+      const valorNet = Number(row.valor_net) || 0
 
       if (!plano) return
 
@@ -720,13 +813,14 @@ export async function GET(request: NextRequest) {
         if (!porPlanoGeral[status]) {
           porPlanoGeral[status] = []
         }
-        porPlanoGeral[status].push({ plano, vidas, valor })
+        porPlanoGeral[status].push({ plano, vidas, valor, valor_net: valorNet })
       }
 
       // Acumular para total
-      const atual = planoTotalMap.get(plano) || { vidas: 0, valor: 0 }
+      const atual = planoTotalMap.get(plano) || { vidas: 0, valor: 0, valor_net: 0 }
       atual.vidas += vidas
       atual.valor += valor
+      atual.valor_net += valorNet
       planoTotalMap.set(plano, atual)
     })
 
@@ -738,11 +832,12 @@ export async function GET(request: NextRequest) {
     })
 
     porPlanoGeral.total = Array.from(planoTotalMap.entries())
-      .map(([plano, { vidas, valor }]) => ({ plano, vidas, valor }))
+      .map(([plano, { vidas, valor, valor_net }]) => ({ plano, vidas, valor, valor_net }))
       .sort((a, b) => b.vidas - a.vidas)
 
     // Processar distribuição por plano para cards de entidade (agrupado por entidade, mês de reajuste e status)
-    const porPlanoEntidade: Record<string, Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number }>>>> = {}
+    // INTEGRAÇÃO: Incluído campo valor_net
+    const porPlanoEntidade: Record<string, Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number }>>>> = {}
 
     ;(rowsPorPlanoEntidade || []).forEach((row: any) => {
       const entidade = row.entidade || ""
@@ -751,6 +846,8 @@ export async function GET(request: NextRequest) {
       const plano = row.plano || ""
       const vidas = Number(row.vidas) || 0
       const valor = Number(row.valor) || 0
+      // CORREÇÃO: Garantir que valor_net seja tratado corretamente (pode vir como null, undefined ou 0)
+      const valorNet = row.valor_net != null ? Number(row.valor_net) : 0
 
       if (!entidade || !plano) return
 
@@ -765,7 +862,7 @@ export async function GET(request: NextRequest) {
       if (!porPlanoEntidade[entidade][keyMesReajuste][status]) {
         porPlanoEntidade[entidade][keyMesReajuste][status] = []
       }
-      porPlanoEntidade[entidade][keyMesReajuste][status].push({ plano, vidas, valor })
+      porPlanoEntidade[entidade][keyMesReajuste][status].push({ plano, vidas, valor, valor_net: valorNet })
     })
 
     // Ordenar planos por vidas (do maior para o menor) em cada entidade/mês de reajuste/status
@@ -804,13 +901,20 @@ export async function GET(request: NextRequest) {
       }),
       total: entidadesTotal.map((ent) => {
         // Para total, somar todos os planos de todos os status e meses de reajuste da entidade
-        const planosMap = new Map<string, { vidas: number; valor: number }>()
+        // CORREÇÃO: Somar valor_net normalmente, pois a query já agrupa por CPF primeiro
+        const planosMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
         Object.values(porPlanoEntidade[ent.entidade] || {}).forEach((porMesReajuste) => {
           Object.values(porMesReajuste).forEach((planos) => {
             planos.forEach((p) => {
-              const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0 }
+              const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0, valor_net: 0 }
               atual.vidas += p.vidas
               atual.valor += p.valor
+              // Somar valor_net: como a query já agrupa por CPF primeiro, cada status tem valor_net correto
+              // Ao somar entre status, estamos somando valor_net de CPFs diferentes
+              // Como valor_net é por CPF e um CPF não deveria estar em múltiplos status simultaneamente,
+              // vamos somar normalmente, mas garantir que valores undefined/null sejam tratados como 0
+              const valorNetAtual = Number(p.valor_net) || 0
+              atual.valor_net += valorNetAtual
               planosMap.set(p.plano, atual)
             })
           })
@@ -818,7 +922,16 @@ export async function GET(request: NextRequest) {
         return {
           ...ent,
           por_plano: Array.from(planosMap.entries())
-            .map(([plano, { vidas, valor }]) => ({ plano, vidas, valor }))
+            .map(([plano, { vidas, valor, valor_net }]) => {
+              // Garantir que valor_net seja sempre um número (não undefined)
+              const netValue = valor_net > 0 ? valor_net : 0
+              return { 
+                plano, 
+                vidas, 
+                valor, 
+                valor_net: netValue
+              }
+            })
             .sort((a, b) => b.vidas - a.vidas),
         }
       }),

@@ -9,6 +9,7 @@ interface Plano {
   plano: string
   vidas: number
   valor: number
+  valor_net?: number
   is?: number | null // Índice de sinistralidade (pode não estar disponível ainda)
 }
 
@@ -98,9 +99,10 @@ export function PlanDistributionList({
         {/* Cabeçalho fixo */}
         <div className="sticky top-0 z-10 bg-slate-50 border-b border-slate-200">
           <div className="flex items-center py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
-            <span className="w-[160px] pl-3 text-left border-r border-slate-200">Plano</span>
-            <span className="w-[65px] text-center border-r border-slate-200">Vidas</span>
-            <span className="w-[125px] text-center border-r border-slate-200">Valor</span>
+            <span className="w-[140px] pl-3 text-left border-r border-slate-200">Plano</span>
+            <span className="w-[60px] text-center border-r border-slate-200">Vidas</span>
+            <span className="w-[110px] text-center border-r border-slate-200">Valor</span>
+            <span className="w-[110px] text-center border-r border-slate-200">NET</span>
             <span className="w-[60px] pr-3 text-center">IS</span>
           </div>
         </div>
@@ -137,7 +139,7 @@ export function PlanDistributionList({
                   <span 
                     className={cn(
                       "truncate text-left font-semibold text-[#184286] border-r border-slate-100",
-                      filtros ? "w-[140px] pl-1" : "w-[160px] pl-3"
+                      filtros ? "w-[120px] pl-1" : "w-[140px] pl-3"
                     )}
                     title={plano.plano}
                   >
@@ -145,13 +147,18 @@ export function PlanDistributionList({
                   </span>
 
                   {/* Vidas */}
-                  <span className="w-[65px] text-center font-semibold text-[#184286] border-r border-slate-100">
+                  <span className="w-[60px] text-center font-semibold text-[#184286] border-r border-slate-100">
                     {formatNumber(plano.vidas)}
                   </span>
 
                   {/* Valor */}
-                  <span className="w-[125px] text-center text-[#184286] border-r border-slate-100">
+                  <span className="w-[110px] text-center text-[#184286] border-r border-slate-100">
                     {formatCurrency(plano.valor)}
+                  </span>
+
+                  {/* NET */}
+                  <span className="w-[110px] text-center text-[#184286] border-r border-slate-100">
+                    {plano.valor_net && plano.valor_net > 0 ? formatCurrency(plano.valor_net) : "-"}
                   </span>
 
                   {/* IS */}
