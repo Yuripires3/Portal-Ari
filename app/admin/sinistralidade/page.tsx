@@ -537,7 +537,7 @@ export default function SinistralidadeDashboardPage() {
       valor_net_total?: number
       pct_vidas: number
       pct_valor: number
-      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
     }>,
     entidadesInativo: Array<{
       entidade: string
@@ -547,7 +547,7 @@ export default function SinistralidadeDashboardPage() {
       valor_net_total?: number
       pct_vidas: number
       pct_valor: number
-      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
     }>,
     entidadesNaoLocalizado: Array<{
       entidade: string
@@ -557,7 +557,7 @@ export default function SinistralidadeDashboardPage() {
       valor_net_total?: number
       pct_vidas: number
       pct_valor: number
-      por_plano?: Array<{ plano: string; vidas: number; valor: number }>
+      por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
     }>,
     totalVidasConsolidado: number,
     valorTotalConsolidado: number
@@ -571,7 +571,7 @@ export default function SinistralidadeDashboardPage() {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-      por_plano: Map<string, { vidas: number; valor: number }>
+      por_plano: Map<string, { vidas: number; valor: number; valor_net: number }>
     }>()
 
     // Função auxiliar para processar uma lista de entidades
@@ -585,20 +585,33 @@ export default function SinistralidadeDashboardPage() {
           existente.valor_total += ent.valor_total
           existente.valor_net_total += ent.valor_net_total || 0
           
-          // Agrupar planos também
+          // Agrupar planos também - CORREÇÃO: preservar e somar valor_net
           if (ent.por_plano) {
             ent.por_plano.forEach(plano => {
-              const planoExistente = existente.por_plano.get(plano.plano) || { vidas: 0, valor: 0 }
+              const planoExistente = existente.por_plano.get(plano.plano) || { vidas: 0, valor: 0, valor_net: 0 }
               planoExistente.vidas += plano.vidas
               planoExistente.valor += plano.valor
+              // CORREÇÃO: Somar valor_net corretamente, tratando null/undefined como 0
+              const valorNetPlano = (plano.valor_net !== null && plano.valor_net !== undefined && !isNaN(Number(plano.valor_net))) 
+                ? Number(plano.valor_net) 
+                : 0
+              planoExistente.valor_net += valorNetPlano
               existente.por_plano.set(plano.plano, planoExistente)
             })
           }
         } else {
-          const planosMap = new Map<string, { vidas: number; valor: number }>()
+          const planosMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
           if (ent.por_plano) {
             ent.por_plano.forEach(plano => {
-              planosMap.set(plano.plano, { vidas: plano.vidas, valor: plano.valor })
+              // CORREÇÃO: Preservar valor_net ao criar novo Map
+              const valorNetPlano = (plano.valor_net !== null && plano.valor_net !== undefined && !isNaN(Number(plano.valor_net))) 
+                ? Number(plano.valor_net) 
+                : 0
+              planosMap.set(plano.plano, { 
+                vidas: plano.vidas, 
+                valor: plano.valor,
+                valor_net: valorNetPlano
+              })
             })
           }
           
@@ -631,7 +644,12 @@ export default function SinistralidadeDashboardPage() {
       pct_vidas: totalVidasConsolidado > 0 ? ent.vidas / totalVidasConsolidado : 0,
       pct_valor: valorTotalConsolidado > 0 ? ent.valor_total / valorTotalConsolidado : 0,
       por_plano: Array.from(ent.por_plano.entries())
-        .map(([plano, { vidas, valor }]) => ({ plano, vidas, valor }))
+        .map(([plano, { vidas, valor, valor_net }]) => ({ 
+          plano, 
+          vidas, 
+          valor,
+          valor_net: (valor_net !== null && valor_net !== undefined && !isNaN(valor_net)) ? valor_net : 0
+        }))
         .sort((a, b) => b.vidas - a.vidas)
     }))
 
