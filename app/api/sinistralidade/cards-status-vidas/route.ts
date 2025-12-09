@@ -650,7 +650,9 @@ export async function GET(request: NextRequest) {
 
     // Query para distribuição por plano nos cards de entidade (por entidade, mês de reajuste e status)
     // INTEGRAÇÃO: Adicionado LEFT JOIN com reg_faturamento para trazer vlr_net por CPF
-    // CORREÇÃO: Agrupar por CPF primeiro para ter valor NET único, depois agregar por plano
+    // CORREÇÃO PROBLEMA 1: Garantir que o NET seja somado corretamente no nível do plano
+    // IMPORTANTE: O NET é um valor único por CPF, não por mês. Precisamos garantir que cada CPF
+    // contribua apenas uma vez com seu NET, mesmo que apareça em múltiplos meses.
     const sqlPorPlanoEntidade = `
       SELECT
         base_agregado.entidade,
@@ -659,7 +661,14 @@ export async function GET(request: NextRequest) {
         base_agregado.plano,
         COUNT(DISTINCT base_agregado.cpf) AS vidas,
         SUM(base_agregado.valor_total_cpf) AS valor,
-        SUM(base_agregado.vlr_net_cpf) AS valor_net
+        -- CORREÇÃO PROBLEMA 1: Somar o NET de cada CPF único
+        -- Como cada CPF tem apenas 1 valor NET (já garantido no base_agregado com MAX),
+        -- e estamos agrupando por CPF no base_agregado, cada CPF aparece apenas uma vez
+        -- por combinação de (entidade, mes_reajuste, status_final, plano)
+        -- Portanto, a soma está correta - estamos somando o NET de CPFs diferentes
+        -- IMPORTANTE: Usar COALESCE para garantir que NULL seja tratado como 0
+        -- Mas preservar valores válidos (incluindo 0, que é um valor válido)
+        COALESCE(SUM(base_agregado.vlr_net_cpf), 0) AS valor_net
       FROM (
         SELECT
           base.cpf,
@@ -667,8 +676,14 @@ export async function GET(request: NextRequest) {
           base.mes_reajuste,
           base.status_final,
           base.plano,
+          -- Somar valores de procedimentos de todos os meses para este CPF
           SUM(base.valor_total_cpf_mes) AS valor_total_cpf,
-          MAX(base.vlr_net_cpf) AS vlr_net_cpf
+          -- CORREÇÃO PROBLEMA 1: Garantir que cada CPF tenha apenas 1 valor NET
+          -- Como cada CPF tem apenas 1 valor NET em reg_faturamento, e estamos fazendo
+          -- JOIN com uma subquery que já agrupa por CPF, todos os valores de vlr_net_cpf
+          -- para o mesmo CPF serão iguais. Usar MAX para garantir que pegamos o valor único.
+          -- IMPORTANTE: Não usar SUM aqui porque o NET é por CPF, não por mês!
+          MAX(COALESCE(base.vlr_net_cpf, 0)) AS vlr_net_cpf
         FROM (
         SELECT
           pr.mes,
@@ -683,6 +698,9 @@ export async function GET(request: NextRequest) {
           b.mes_reajuste,
           b.plano,
           b.tipo,
+          -- CORREÇÃO PROBLEMA 1: Garantir que o NET seja trazido corretamente
+          -- O JOIN com reg_faturamento já garante 1 valor por CPF (subquery com GROUP BY)
+          -- Usar COALESCE para garantir que sempre tenha um valor (0 se NULL)
           COALESCE(f.vlr_net, 0) AS vlr_net_cpf
         FROM (
           SELECT
@@ -745,6 +763,9 @@ export async function GET(request: NextRequest) {
         ) AS b
           ON b.cpf = pr.cpf
         LEFT JOIN (
+          -- CORREÇÃO PROBLEMA 1: Garantir apenas 1 registro por CPF de reg_faturamento
+          -- Usar subquery com GROUP BY para garantir unicidade antes do JOIN
+          -- Isso é CRÍTICO para evitar duplicação do NET
           SELECT
             f.cpf_do_beneficiario AS cpf,
             MAX(f.vlr_net) AS vlr_net
@@ -758,6 +779,10 @@ export async function GET(request: NextRequest) {
       ${entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
       ${tipo ? "AND base.tipo = ?" : ""}
       ${cpf ? "AND base.cpf = ?" : ""}
+      -- CORREÇÃO PROBLEMA 1: Agrupar por CPF + outros campos para garantir que cada CPF
+      -- apareça apenas uma vez por combinação de (entidade, mes_reajuste, status_final, plano)
+      -- IMPORTANTE: Não incluir 'mes' no GROUP BY porque queremos agregar todos os meses
+      -- Isso garante que o NET seja contado apenas uma vez por CPF, mesmo que apareça em múltiplos meses
       GROUP BY
         base.cpf,
         base.entidade,
@@ -765,6 +790,7 @@ export async function GET(request: NextRequest) {
         base.status_final,
         base.plano
       ) AS base_agregado
+      -- Agrupar por plano para obter totais por plano
       GROUP BY
         base_agregado.entidade,
         base_agregado.mes_reajuste,
@@ -788,6 +814,39 @@ export async function GET(request: NextRequest) {
       ...beneficiarioValues,
       ...entidadeValues
     ])
+
+    // DEBUG TEMPORÁRIO: Verificar se o NET está sendo retornado corretamente da query
+    if (rowsPorPlanoEntidade && rowsPorPlanoEntidade.length > 0) {
+      // Procurar por ANEC ASSIM MAX QC
+      const exemplo = rowsPorPlanoEntidade.find((r: any) => 
+        (r.entidade === "ANEC" || r.entidade === "UGES") && 
+        r.plano && 
+        (r.plano.includes("ASSIM MAX QC") || r.plano.includes("IDEAL QC R"))
+      )
+      if (exemplo) {
+        console.log("DEBUG NET - Exemplo encontrado:", {
+          entidade: exemplo.entidade,
+          plano: exemplo.plano,
+          status: exemplo.status_final,
+          vidas: exemplo.vidas,
+          valor: exemplo.valor,
+          valor_net: exemplo.valor_net,
+          valor_net_type: typeof exemplo.valor_net,
+          valor_net_is_null: exemplo.valor_net === null,
+          valor_net_is_undefined: exemplo.valor_net === undefined,
+          valor_net_raw: JSON.stringify(exemplo.valor_net)
+        })
+      } else {
+        console.log("DEBUG NET - Nenhum exemplo encontrado. Total de linhas:", rowsPorPlanoEntidade.length)
+        if (rowsPorPlanoEntidade.length > 0) {
+          console.log("DEBUG NET - Primeiras 3 linhas:", rowsPorPlanoEntidade.slice(0, 3).map((r: any) => ({
+            entidade: r.entidade,
+            plano: r.plano,
+            valor_net: r.valor_net
+          })))
+        }
+      }
+    }
 
     // Processar distribuição por plano para cards principais
     // INTEGRAÇÃO: Incluído campo valor_net
@@ -846,8 +905,29 @@ export async function GET(request: NextRequest) {
       const plano = row.plano || ""
       const vidas = Number(row.vidas) || 0
       const valor = Number(row.valor) || 0
-      // CORREÇÃO: Garantir que valor_net seja tratado corretamente (pode vir como null, undefined ou 0)
-      const valorNet = row.valor_net != null ? Number(row.valor_net) : 0
+      // CORREÇÃO PROBLEMA 1: Garantir que valor_net seja tratado corretamente
+      // IMPORTANTE: Não tratar 0 como ausência de valor - 0 é um valor válido
+      // Apenas tratar null/undefined como 0
+      const valorNetRaw = row.valor_net
+      const valorNet = (valorNetRaw !== null && valorNetRaw !== undefined && !isNaN(Number(valorNetRaw))) 
+        ? Number(valorNetRaw) 
+        : 0
+
+      // DEBUG TEMPORÁRIO: Log para ANEC ASSIM MAX QC
+      if (entidade === "ANEC" && plano && plano.includes("ASSIM MAX QC") && !plano.includes("R")) {
+        console.log("DEBUG NET - Processando ANEC ASSIM MAX QC:", {
+          entidade,
+          plano,
+          status,
+          vidas,
+          valor,
+          valor_net_raw: valorNetRaw,
+          valor_net_processed: valorNet,
+          valor_net_type: typeof valorNetRaw,
+          valor_net_is_null: valorNetRaw === null,
+          valor_net_is_undefined: valorNetRaw === undefined
+        })
+      }
 
       if (!entidade || !plano) return
 
@@ -901,19 +981,58 @@ export async function GET(request: NextRequest) {
       }),
       total: entidadesTotal.map((ent) => {
         // Para total, somar todos os planos de todos os status e meses de reajuste da entidade
-        // CORREÇÃO: Somar valor_net normalmente, pois a query já agrupa por CPF primeiro
+        // CORREÇÃO PROBLEMA 1: Somar valor_net corretamente, garantindo que valores null/undefined sejam tratados como 0
         const planosMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
-        Object.values(porPlanoEntidade[ent.entidade] || {}).forEach((porMesReajuste) => {
-          Object.values(porMesReajuste).forEach((planos) => {
+        
+        // DEBUG: Verificar estrutura de dados
+        if (ent.entidade === "ANEC") {
+          console.log("DEBUG NET TOTAL - Estrutura porPlanoEntidade para ANEC:", {
+            tem_dados: !!porPlanoEntidade[ent.entidade],
+            keys_mes_reajuste: porPlanoEntidade[ent.entidade] ? Object.keys(porPlanoEntidade[ent.entidade]) : [],
+            exemplo_mes_reajuste: porPlanoEntidade[ent.entidade] ? Object.keys(porPlanoEntidade[ent.entidade][Object.keys(porPlanoEntidade[ent.entidade])[0]] || {}) : []
+          })
+        }
+        
+        // CORREÇÃO PROBLEMA 1: Iterar sobre meses de reajuste e status de forma explícita
+        // para garantir que o NET seja preservado corretamente
+        Object.keys(porPlanoEntidade[ent.entidade] || {}).forEach((mesReajuste) => {
+          const porMesReajuste = porPlanoEntidade[ent.entidade][mesReajuste]
+          if (!porMesReajuste) return
+          
+          // Iterar sobre cada status (ativo, inativo, vazio)
+          Object.keys(porMesReajuste).forEach((status) => {
+            const planos = porMesReajuste[status]
+            if (!planos || !Array.isArray(planos)) return
+            
             planos.forEach((p) => {
               const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0, valor_net: 0 }
               atual.vidas += p.vidas
               atual.valor += p.valor
-              // Somar valor_net: como a query já agrupa por CPF primeiro, cada status tem valor_net correto
-              // Ao somar entre status, estamos somando valor_net de CPFs diferentes
-              // Como valor_net é por CPF e um CPF não deveria estar em múltiplos status simultaneamente,
-              // vamos somar normalmente, mas garantir que valores undefined/null sejam tratados como 0
-              const valorNetAtual = Number(p.valor_net) || 0
+              // CORREÇÃO PROBLEMA 1: Somar valor_net corretamente
+              // IMPORTANTE: Preservar o valor mesmo se for 0, apenas tratar null/undefined como 0
+              // Não usar || 0 porque isso transformaria 0 em 0, mas também pode mascarar problemas
+              // Usar verificação explícita para garantir que valores válidos (incluindo 0) sejam preservados
+              const valorNetAtual = (p.valor_net !== null && p.valor_net !== undefined && !isNaN(Number(p.valor_net))) 
+                ? Number(p.valor_net) 
+                : 0
+              
+              // DEBUG TEMPORÁRIO: Log para ANEC ASSIM MAX QC no total
+              if (ent.entidade === "ANEC" && p.plano && p.plano.includes("ASSIM MAX QC") && !p.plano.includes("R")) {
+                console.log("DEBUG NET TOTAL - Agregando ANEC ASSIM MAX QC:", {
+                  entidade: ent.entidade,
+                  plano: p.plano,
+                  mes_reajuste: mesReajuste,
+                  status: status,
+                  valor_net_original: p.valor_net,
+                  valor_net_type: typeof p.valor_net,
+                  valor_net_is_null: p.valor_net === null,
+                  valor_net_is_undefined: p.valor_net === undefined,
+                  valor_net_processado: valorNetAtual,
+                  acumulado_antes: atual.valor_net,
+                  acumulado_depois: atual.valor_net + valorNetAtual
+                })
+              }
+              
               atual.valor_net += valorNetAtual
               planosMap.set(p.plano, atual)
             })
@@ -923,8 +1042,13 @@ export async function GET(request: NextRequest) {
           ...ent,
           por_plano: Array.from(planosMap.entries())
             .map(([plano, { vidas, valor, valor_net }]) => {
-              // Garantir que valor_net seja sempre um número (não undefined)
-              const netValue = valor_net > 0 ? valor_net : 0
+              // CORREÇÃO PROBLEMA 1: Preservar o valor_net mesmo se for 0
+              // IMPORTANTE: Não zerar o valor, apenas garantir que seja um número válido
+              // O componente frontend decide se mostra "-" ou o valor baseado em > 0
+              // Mas aqui devemos preservar o valor real (mesmo que seja 0) para que a soma esteja correta
+              const netValue = (valor_net !== null && valor_net !== undefined && !isNaN(valor_net)) 
+                ? valor_net 
+                : 0
               return { 
                 plano, 
                 vidas, 

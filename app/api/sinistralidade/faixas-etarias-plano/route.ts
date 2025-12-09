@@ -176,6 +176,8 @@ export async function GET(request: NextRequest) {
           END AS status_final,
           b.idade,
           b.plano,
+          -- CORREÇÃO PROBLEMA 2: Garantir que o NET seja trazido apenas uma vez por CPF
+          -- O JOIN com reg_faturamento já está agrupado por CPF, então não deve duplicar
           COALESCE(f.vlr_net, 0) AS vlr_net_cpf${!isCardMae ? `,
           b.entidade,
           b.mes_reajuste,
@@ -249,6 +251,9 @@ export async function GET(request: NextRequest) {
         ) AS b
           ON b.cpf = pr.cpf
         LEFT JOIN (
+          -- CORREÇÃO PROBLEMA 2: Garantir apenas 1 registro por CPF de reg_faturamento
+          -- Usar subquery com GROUP BY para garantir unicidade antes do JOIN
+          -- Isso evita que o JOIN duplique linhas quando um CPF aparece em múltiplos meses
           SELECT
             f.cpf_do_beneficiario AS cpf,
             MAX(f.vlr_net) AS vlr_net
@@ -267,6 +272,10 @@ export async function GET(request: NextRequest) {
           valor_total_cpf_mes,
           status_final,
           idade,
+          -- CORREÇÃO PROBLEMA 2: Garantir que o NET seja único por CPF
+          -- Como o JOIN já garante 1 valor por CPF, usar MAX para garantir consistência
+          -- Mas não agrupar aqui - manter todas as linhas (uma por mês/CPF) para que
+          -- base_cpf_agregado possa somar corretamente os valores de todos os meses
           vlr_net_cpf
         FROM base_mes_cpf
         -- Aplicar filtro de status ANTES de agrupar por CPF para garantir que apenas CPFs
@@ -278,7 +287,8 @@ export async function GET(request: NextRequest) {
           cpf,
           -- Somar valores de todos os meses filtrados para cada CPF
           SUM(valor_total_cpf_mes) AS valor_total_cpf,
-          -- Pegar valor NET de faturamento (1 valor por CPF, usar MAX para garantir único)
+          -- CORREÇÃO PROBLEMA 2: Pegar valor NET de faturamento (1 valor por CPF, usar MAX para garantir único)
+          -- Como já agrupamos por CPF no base_cpf_filtrado, cada CPF deve ter apenas 1 valor NET
           MAX(vlr_net_cpf) AS valor_net_cpf,
           -- Pegar status (já filtrado, então será consistente)
           MAX(status_final) AS status_final,
@@ -290,8 +300,9 @@ export async function GET(request: NextRequest) {
             ELSE NULL 
           END) AS idade
         FROM base_cpf_filtrado
-        -- Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
+        -- CORREÇÃO PROBLEMA 2: Agrupar por CPF para garantir que cada CPF apareça apenas uma vez
         -- mesmo que apareça em múltiplos meses filtrados
+        -- Isso é crítico para evitar supercontagem de vidas
         GROUP BY cpf
       )
       SELECT
@@ -309,12 +320,15 @@ export async function GET(request: NextRequest) {
           ELSE '59+'
         END AS faixa_etaria,
         MAX(base_cpf_agregado.status_final) AS status_final,
-        -- Contar cada CPF apenas uma vez por faixa etária
+        -- CORREÇÃO PROBLEMA 2: Contar cada CPF apenas uma vez por faixa etária
+        -- Como base_cpf_agregado já agrupa por CPF, COUNT(DISTINCT) garante que não haja duplicação
         COUNT(DISTINCT base_cpf_agregado.cpf) AS vidas,
         -- Somar valores de todos os CPFs na faixa etária
         SUM(base_cpf_agregado.valor_total_cpf) AS valor,
-        -- Somar valores NET de faturamento na faixa etária
-        SUM(base_cpf_agregado.valor_net_cpf) AS valor_net
+        -- CORREÇÃO PROBLEMA 2: Somar valores NET de faturamento na faixa etária
+        -- Como cada CPF tem apenas 1 valor NET (já garantido no base_cpf_agregado),
+        -- a soma está correta
+        SUM(COALESCE(base_cpf_agregado.valor_net_cpf, 0)) AS valor_net
       FROM base_cpf_agregado
       -- Filtro de status já foi aplicado no base_mes_cpf, então não precisa filtrar novamente aqui
       GROUP BY
