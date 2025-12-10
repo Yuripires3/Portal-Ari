@@ -888,18 +888,25 @@ export async function GET(request: NextRequest) {
     `
 
     // Executar queries de distribuição por plano
-    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários
+    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários (b_status), beneficiários (b_plano)
+    // IMPORTANTE: beneficiarioWhereClauseGeral é usado duas vezes (b_status e b_plano), então precisamos passar os valores duas vezes
     const valoresPorPlanoGeral: any[] = [
       ...procedimentosValues,
       ...(operadoras.length > 0 ? operadoras : []),
-      ...beneficiarioValuesGeral
+      ...beneficiarioValuesGeral, // para b_status
+      ...beneficiarioValuesGeral  // para b_plano
     ]
     const [rowsPorPlanoGeral]: any = await connection.execute(sqlPorPlanoGeral, valoresPorPlanoGeral)
 
+    // Ordem dos valores para sqlPorPlanoEntidade:
+    // 1. procedimentosValues (para subquery de procedimentos)
+    // 2. beneficiarioValues (para subquery de beneficiários b)
+    // 3. operadoras (para subquery de faturamento f)
+    // 4. entidadeValues (para filtros WHERE externos: entidades, tipo, cpf)
     const valoresPorPlanoEntidade: any[] = [
       ...procedimentosValues,
-      ...(operadoras.length > 0 ? operadoras : []),
       ...beneficiarioValues,
+      ...(operadoras.length > 0 ? operadoras : []),
       ...entidadeValues
     ]
     const [rowsPorPlanoEntidade]: any = await connection.execute(sqlPorPlanoEntidade, valoresPorPlanoEntidade)
