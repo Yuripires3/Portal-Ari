@@ -419,8 +419,37 @@ export async function GET(request: NextRequest) {
     // Calcular consolidado GERAL (soma de todos os meses, SEM filtro de entidade)
     // Este é o total da operadora/período que será usado nos cards principais
     // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA no consolidado
+    type ConsolidadoTipo = {
+      ativo: number
+      inativo: number
+      nao_localizado: number
+      total_vidas: number
+      valor_ativo: number
+      valor_inativo: number
+      valor_nao_localizado: number
+      valor_total_geral: number
+      valor_net_ativo: number
+      valor_net_inativo: number
+      valor_net_nao_localizado: number
+      valor_net_total_geral: number
+    }
+    type PorMesTipo = ConsolidadoTipo & { mes: string }
+    const valorInicial: ConsolidadoTipo = {
+      ativo: 0,
+      inativo: 0,
+      nao_localizado: 0,
+      total_vidas: 0,
+      valor_ativo: 0,
+      valor_inativo: 0,
+      valor_nao_localizado: 0,
+      valor_total_geral: 0,
+      valor_net_ativo: 0,
+      valor_net_inativo: 0,
+      valor_net_nao_localizado: 0,
+      valor_net_total_geral: 0,
+    }
     const consolidadoGeral = porMesGeral.reduce(
-      (acc, mes) => ({
+      (acc: ConsolidadoTipo, mes: PorMesTipo): ConsolidadoTipo => ({
         ativo: acc.ativo + mes.ativo,
         inativo: acc.inativo + mes.inativo,
         nao_localizado: acc.nao_localizado + mes.nao_localizado,
@@ -434,20 +463,7 @@ export async function GET(request: NextRequest) {
         valor_net_nao_localizado: acc.valor_net_nao_localizado + mes.valor_net_nao_localizado,
         valor_net_total_geral: acc.valor_net_total_geral + mes.valor_net_total_geral,
       }),
-      {
-        ativo: 0,
-        inativo: 0,
-        nao_localizado: 0,
-        total_vidas: 0,
-        valor_ativo: 0,
-        valor_inativo: 0,
-        valor_nao_localizado: 0,
-        valor_total_geral: 0,
-        valor_net_ativo: 0,
-        valor_net_inativo: 0,
-        valor_net_nao_localizado: 0,
-        valor_net_total_geral: 0,
-      }
+      valorInicial
     )
 
     // Consolidado para retorno (sempre usa o geral, independente de filtro de entidade)
