@@ -241,8 +241,11 @@ export async function GET(request: NextRequest) {
           ) AS pr
           LEFT JOIN (
             -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
+            -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
             SELECT
               f.cpf_do_beneficiario AS cpf,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
               MAX(f.vlr_net) AS valor_faturamento
             FROM reg_faturamento f
             WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
@@ -294,13 +297,15 @@ export async function GET(request: NextRequest) {
           m.valor_procedimentos,
           m.valor_faturamento,
           m.status_final,
-          b.entidade,
-          b.mes_reajuste,
+          m.entidade,
+          COALESCE(b.mes_reajuste, NULL) AS mes_reajuste,
           b.tipo
         FROM (
           SELECT
             base.mes,
             base.cpf,
+            base.entidade,
+            base.plano,
             base.valor_faturamento,
             base.valor_procedimentos,
             CASE
@@ -312,6 +317,8 @@ export async function GET(request: NextRequest) {
             -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
             SELECT
               pr.mes,
+              fv.entidade,
+              fv.plano,
               pr.cpf,
               pr.valor_total_procedimentos AS valor_procedimentos,
               COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
@@ -329,8 +336,11 @@ export async function GET(request: NextRequest) {
             ) AS pr
             LEFT JOIN (
               -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
+              -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
               SELECT
                 f.cpf_do_beneficiario AS cpf,
+                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
                 MAX(f.vlr_net) AS valor_faturamento
               FROM reg_faturamento f
               WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
@@ -358,18 +368,10 @@ export async function GET(request: NextRequest) {
           ) AS b_status
             ON b_status.cpf = base.cpf
         ) AS m
-        ${entidades.length > 0 || tipo ? "INNER" : "LEFT"} JOIN (
-          -- Entidade, mês de reajuste e tipo mais recente por CPF
+        LEFT JOIN (
+          -- Mês de reajuste e tipo mais recente por CPF (entidade e plano vêm do faturamento)
           SELECT
             b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.entidade
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS entidade,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
                 b.mes_reajuste
@@ -654,14 +656,15 @@ export async function GET(request: NextRequest) {
             WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
           END AS status_final,
-          b_plano.plano
+          base.plano
         FROM (
           -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
           SELECT
             pr.mes,
             pr.cpf,
             pr.valor_total_procedimentos AS valor_procedimentos,
-            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento,
+            fv.plano
           FROM (
             -- PROCEDIMENTOS: 1 linha por mês x CPF
             SELECT
@@ -676,8 +679,11 @@ export async function GET(request: NextRequest) {
           ) AS pr
           LEFT JOIN (
             -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
+            -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
             SELECT
               f.cpf_do_beneficiario AS cpf,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
               MAX(f.vlr_net) AS valor_faturamento
             FROM reg_faturamento f
             WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
@@ -704,24 +710,6 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b_status
           ON b_status.cpf = base.cpf
-        LEFT JOIN (
-          -- Plano mais recente por CPF
-          SELECT
-            b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.plano
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS plano
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClauseGeral}
-          GROUP BY
-            b.cpf
-        ) AS b_plano
-          ON b_plano.cpf = base.cpf
       ) AS m
       WHERE m.plano IS NOT NULL AND m.plano != ''
       GROUP BY
@@ -761,118 +749,121 @@ export async function GET(request: NextRequest) {
           base.status_final,
           base.plano,
           -- Somar valores de procedimentos de todos os meses para este CPF
-          SUM(base.valor_total_cpf_mes) AS valor_total_cpf,
-          -- CORREÇÃO PROBLEMA 1: Garantir que cada CPF tenha apenas 1 valor NET
-          -- Como cada CPF tem apenas 1 valor NET em reg_faturamento, e estamos fazendo
-          -- JOIN com uma subquery que já agrupa por CPF, todos os valores de vlr_net_cpf
-          -- para o mesmo CPF serão iguais. Usar MAX para garantir que pegamos o valor único.
-          -- IMPORTANTE: Não usar SUM aqui porque o NET é por CPF, não por mês!
-          MAX(COALESCE(base.vlr_net_cpf, 0)) AS vlr_net_cpf
-        FROM (
-        SELECT
-          pr.mes,
-          pr.cpf,
-          pr.valor_total_cpf_mes,
-          CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END AS status_final,
-          b.entidade,
-          b.mes_reajuste,
-          b.plano,
-          b.tipo,
-          -- CORREÇÃO PROBLEMA 1: Garantir que o NET seja trazido corretamente
-          -- O JOIN com reg_faturamento já garante 1 valor por CPF (subquery com GROUP BY)
-          -- Usar COALESCE para garantir que sempre tenha um valor (0 se NULL)
-          COALESCE(f.vlr_net, 0) AS vlr_net_cpf
+          SUM(base.valor_procedimentos) AS valor_total_cpf,
+          -- CORREÇÃO: Garantir que cada CPF tenha apenas 1 valor de faturamento
+          -- Como cada CPF tem apenas 1 valor de faturamento em reg_faturamento, usar MAX
+          MAX(base.valor_faturamento) AS vlr_net_cpf
         FROM (
           SELECT
-            DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-            p.cpf,
-            SUM(p.valor_procedimento) AS valor_total_cpf_mes
-          FROM reg_procedimentos p
-          WHERE ${procedimentosConditions.join(" AND ")}
-          GROUP BY
-            DATE_FORMAT(p.data_competencia, '%Y-%m'),
-            p.cpf
-        ) AS pr
-        ${entidades.length > 0 || tipo ? "INNER" : "LEFT"} JOIN (
-          SELECT
-            b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS status_beneficiario,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.entidade
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS entidade,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.mes_reajuste
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS mes_reajuste,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.plano
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS plano,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.tipo
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',',
-              1
-            ) AS tipo
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClause}
-          GROUP BY
-            b.cpf
-        ) AS b
-          ON b.cpf = pr.cpf
-        LEFT JOIN (
-          -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
-          SELECT
-            f.cpf_do_beneficiario AS cpf,
-            MAX(f.vlr_net) AS vlr_net
-          FROM reg_faturamento f
-          WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
-          GROUP BY
-            f.cpf_do_beneficiario
-        ) AS f
-          ON f.cpf = pr.cpf
-      ) AS base
-      WHERE base.entidade IS NOT NULL AND base.entidade != ''
-        AND base.plano IS NOT NULL AND base.plano != ''
-      ${entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
-      ${tipo ? "AND base.tipo = ?" : ""}
-      ${cpf ? "AND base.cpf = ?" : ""}
-      -- CORREÇÃO PROBLEMA 1: Agrupar por CPF + outros campos para garantir que cada CPF
-      -- apareça apenas uma vez por combinação de (entidade, mes_reajuste, status_final, plano)
-      -- IMPORTANTE: Não incluir 'mes' no GROUP BY porque queremos agregar todos os meses
-      -- Isso garante que o NET seja contado apenas uma vez por CPF, mesmo que apareça em múltiplos meses
-      GROUP BY
-        base.cpf,
-        base.entidade,
-        base.mes_reajuste,
-        base.status_final,
-        base.plano
+            base.mes,
+            base.cpf,
+            base.valor_procedimentos,
+            base.valor_faturamento,
+            base.entidade,
+            base.plano,
+            CASE
+              WHEN b_status.cpf IS NULL THEN 'vazio'
+              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
+              ELSE 'inativo'
+            END AS status_final,
+            b.mes_reajuste,
+            b.tipo
+          FROM (
+            -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
+            SELECT
+              pr.mes,
+              fv.entidade,
+              fv.plano,
+              pr.cpf,
+              pr.valor_total_procedimentos AS valor_procedimentos,
+              COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+            FROM (
+              -- PROCEDIMENTOS: 1 linha por mês x CPF
+              SELECT
+                DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                p.cpf,
+                SUM(p.valor_procedimento) AS valor_total_procedimentos
+              FROM reg_procedimentos p
+              WHERE ${procedimentosConditions.join(" AND ")}
+              GROUP BY
+                DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                p.cpf
+            ) AS pr
+            LEFT JOIN (
+              -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
+              -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
+              SELECT
+                f.cpf_do_beneficiario AS cpf,
+                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                MAX(f.vlr_net) AS valor_faturamento
+              FROM reg_faturamento f
+              WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+              GROUP BY
+                f.cpf_do_beneficiario
+            ) AS fv
+              ON fv.cpf = pr.cpf
+          ) AS base
+          LEFT JOIN (
+            -- STATUS mais recente por CPF
+            SELECT
+              b.cpf,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(
+                  b.status_beneficiario
+                  ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                ),
+                ',',
+                1
+              ) AS status_beneficiario
+            FROM reg_beneficiarios b
+            ${beneficiarioWhereClauseGeral}
+            GROUP BY
+              b.cpf
+          ) AS b_status
+            ON b_status.cpf = base.cpf
+          LEFT JOIN (
+            -- Mês de reajuste e tipo mais recente por CPF (entidade e plano vêm do faturamento)
+            SELECT
+              b.cpf,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(
+                  b.mes_reajuste
+                  ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                ),
+                ',',
+                1
+              ) AS mes_reajuste,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(
+                  b.tipo
+                  ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                ),
+                ',',
+                1
+              ) AS tipo
+            FROM reg_beneficiarios b
+            ${beneficiarioWhereClause}
+            GROUP BY
+              b.cpf
+          ) AS b
+            ON b.cpf = base.cpf
+        ) AS base
+        WHERE base.entidade IS NOT NULL AND base.entidade != ''
+          AND base.plano IS NOT NULL AND base.plano != ''
+        ${entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+        ${tipo ? "AND base.tipo = ?" : ""}
+        ${cpf ? "AND base.cpf = ?" : ""}
+        -- CORREÇÃO PROBLEMA 1: Agrupar por CPF + outros campos para garantir que cada CPF
+        -- apareça apenas uma vez por combinação de (entidade, mes_reajuste, status_final, plano)
+        -- IMPORTANTE: Não incluir 'mes' no GROUP BY porque queremos agregar todos os meses
+        -- Isso garante que o NET seja contado apenas uma vez por CPF, mesmo que apareça em múltiplos meses
+        GROUP BY
+          base.cpf,
+          base.entidade,
+          base.mes_reajuste,
+          base.status_final,
+          base.plano
       ) AS base_agregado
       -- Agrupar por plano para obter totais por plano
       GROUP BY
@@ -888,25 +879,26 @@ export async function GET(request: NextRequest) {
     `
 
     // Executar queries de distribuição por plano
-    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários (b_status), beneficiários (b_plano)
-    // IMPORTANTE: beneficiarioWhereClauseGeral é usado duas vezes (b_status e b_plano), então precisamos passar os valores duas vezes
+    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários (b_status)
+    // O plano agora vem do faturamento, não dos beneficiários, então não precisamos mais do JOIN com b_plano
     const valoresPorPlanoGeral: any[] = [
       ...procedimentosValues,
       ...(operadoras.length > 0 ? operadoras : []),
-      ...beneficiarioValuesGeral, // para b_status
-      ...beneficiarioValuesGeral  // para b_plano
+      ...beneficiarioValuesGeral // para b_status
     ]
     const [rowsPorPlanoGeral]: any = await connection.execute(sqlPorPlanoGeral, valoresPorPlanoGeral)
 
     // Ordem dos valores para sqlPorPlanoEntidade:
     // 1. procedimentosValues (para subquery de procedimentos)
-    // 2. beneficiarioValues (para subquery de beneficiários b)
-    // 3. operadoras (para subquery de faturamento f)
-    // 4. entidadeValues (para filtros WHERE externos: entidades, tipo, cpf)
+    // 2. operadoras (para subquery de faturamento fv)
+    // 3. beneficiarioValuesGeral (para subquery de status b_status)
+    // 4. beneficiarioValues (para subquery de mês de reajuste b)
+    // 5. entidadeValues (para filtros WHERE externos: entidades, tipo, cpf)
     const valoresPorPlanoEntidade: any[] = [
       ...procedimentosValues,
-      ...beneficiarioValues,
       ...(operadoras.length > 0 ? operadoras : []),
+      ...beneficiarioValuesGeral,
+      ...beneficiarioValues,
       ...entidadeValues
     ]
     const [rowsPorPlanoEntidade]: any = await connection.execute(sqlPorPlanoEntidade, valoresPorPlanoEntidade)
