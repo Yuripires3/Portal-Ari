@@ -293,25 +293,25 @@ export async function GET(request: NextRequest) {
 
     // Query adicional para agregação por entidade separada por status e mês de reajuste
     // 🔵 QUERY OFICIAL: Usando a mesma estrutura base da query oficial
+    // IMPORTANTE: Agregar por CPF primeiro para garantir que cada CPF seja contado apenas uma vez
     // Retorna entidades para cada status: ativo, inativo, vazio (não localizado)
     const sqlPorEntidade = `
       SELECT
-        base.entidade,
-        base.mes_reajuste,
-        base.status_final,
-        COUNT(DISTINCT base.cpf) AS vidas,
-        SUM(base.valor_procedimentos) AS valor_total,
-        SUM(base.valor_faturamento) AS valor_net_total
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
+        base_agregado.status_final,
+        COUNT(DISTINCT base_agregado.cpf) AS vidas,
+        SUM(base_agregado.valor_procedimentos) AS valor_total,
+        SUM(base_agregado.valor_faturamento) AS valor_net_total
       FROM (
         SELECT
-          m.mes,
           m.cpf,
-          m.valor_procedimentos,
-          m.valor_faturamento,
-          m.status_final,
           m.entidade,
+          m.status_final,
           COALESCE(b.mes_reajuste, NULL) AS mes_reajuste,
-          b.tipo
+          b.tipo,
+          SUM(m.valor_procedimentos) AS valor_procedimentos,
+          MAX(m.valor_faturamento) AS valor_faturamento
         FROM (
           SELECT
             base.mes,
@@ -416,19 +416,25 @@ export async function GET(request: NextRequest) {
             b.cpf
         ) AS b
           ON b.cpf = m.cpf
-      ) AS base
-      WHERE base.entidade IS NOT NULL AND base.entidade != ''
-      ${entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
-      ${tipo ? "AND base.tipo = ?" : ""}
-      ${cpf ? "AND base.cpf = ?" : ""}
+        GROUP BY
+          m.cpf,
+          m.entidade,
+          m.status_final,
+          b.mes_reajuste,
+          b.tipo
+      ) AS base_agregado
+      WHERE base_agregado.entidade IS NOT NULL AND base_agregado.entidade != ''
+      ${entidades.length > 0 ? `AND base_agregado.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+      ${tipo ? "AND base_agregado.tipo = ?" : ""}
+      ${cpf ? "AND base_agregado.cpf = ?" : ""}
       GROUP BY
-        base.entidade,
-        base.mes_reajuste,
-        base.status_final
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
+        base_agregado.status_final
       ORDER BY
-        base.status_final,
-        base.entidade,
-        base.mes_reajuste,
+        base_agregado.status_final,
+        base_agregado.entidade,
+        base_agregado.mes_reajuste,
         valor_total DESC
     `
 
@@ -618,6 +624,35 @@ export async function GET(request: NextRequest) {
           return b.valor_total - a.valor_total
         })
     })
+
+    // 🔵 VALIDAÇÃO: Verificar se os cards filhos estão corretos
+    const totalVidasFilhosPorStatus = {
+      ativo: entidadesPorStatus.ativo.reduce((sum, e) => sum + e.vidas, 0),
+      inativo: entidadesPorStatus.inativo.reduce((sum, e) => sum + e.vidas, 0),
+      vazio: entidadesPorStatus.vazio.reduce((sum, e) => sum + e.vidas, 0),
+    }
+    
+    const diffAtivo = Math.abs(totalVidasFilhosPorStatus.ativo - consolidadoGeral.ativo)
+    const diffInativo = Math.abs(totalVidasFilhosPorStatus.inativo - consolidadoGeral.inativo)
+    const diffVazio = Math.abs(totalVidasFilhosPorStatus.vazio - consolidadoGeral.nao_localizado)
+    
+    if (diffAtivo > 0.01 || diffInativo > 0.01 || diffVazio > 0.01) {
+      console.warn("🔵 VALIDAÇÃO CARDS FILHOS - Diferenças encontradas:")
+      if (diffAtivo > 0.01) {
+        console.warn(`  ⚠️ Ativo: Cards filhos (${totalVidasFilhosPorStatus.ativo}) != Card mãe (${consolidadoGeral.ativo}). Diferença: ${diffAtivo}`)
+      }
+      if (diffInativo > 0.01) {
+        console.warn(`  ⚠️ Inativo: Cards filhos (${totalVidasFilhosPorStatus.inativo}) != Card mãe (${consolidadoGeral.inativo}). Diferença: ${diffInativo}`)
+      }
+      if (diffVazio > 0.01) {
+        console.warn(`  ⚠️ Não Localizado: Cards filhos (${totalVidasFilhosPorStatus.vazio}) != Card mãe (${consolidadoGeral.nao_localizado}). Diferença: ${diffVazio}`)
+      }
+    } else {
+      console.log("✅ VALIDAÇÃO CARDS FILHOS: Todos os valores estão corretos!")
+      console.log(`  Ativo: ${totalVidasFilhosPorStatus.ativo} = ${consolidadoGeral.ativo}`)
+      console.log(`  Inativo: ${totalVidasFilhosPorStatus.inativo} = ${consolidadoGeral.inativo}`)
+      console.log(`  Não Localizado: ${totalVidasFilhosPorStatus.vazio} = ${consolidadoGeral.nao_localizado}`)
+    }
 
     // Calcular total agregado por entidade e mês de reajuste (todas as entidades juntas)
     // Manter separado por mês de reajuste para exibir cards individuais
