@@ -143,10 +143,10 @@ export default function SinistralidadeDashboardPage() {
       valor_net_nao_localizado?: number
       valor_net_total_geral?: number
       por_plano?: {
-        ativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
-        inativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
-        nao_localizado: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
-        total: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        ativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
+        inativo: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
+        nao_localizado: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
+        total: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
       }
     }
     por_entidade?: {
@@ -158,7 +158,7 @@ export default function SinistralidadeDashboardPage() {
         valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
       }>
       inativo: Array<{
         entidade: string
@@ -168,7 +168,7 @@ export default function SinistralidadeDashboardPage() {
         valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
       }>
       nao_localizado: Array<{
         entidade: string
@@ -178,7 +178,7 @@ export default function SinistralidadeDashboardPage() {
         valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
       }>
       total: Array<{
         entidade: string
@@ -188,7 +188,7 @@ export default function SinistralidadeDashboardPage() {
         valor_net_total?: number
         pct_vidas: number
         pct_valor: number
-        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number }>
+        por_plano?: Array<{ plano: string; vidas: number; valor: number; valor_net?: number; is?: number | null }>
       }>
     }
   } | null>(null)
@@ -1383,11 +1383,14 @@ export default function SinistralidadeDashboardPage() {
                       {fmtNumber(cardsData?.consolidado?.total_vidas || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor Total: {fmtBRL(cardsData?.consolidado?.valor_total_geral || 0)}
+                      Receita: {fmtBRL(cardsData?.consolidado?.valor_net_total_geral || 0)}
                     </p>
-                    {(cardsData?.consolidado?.valor_net_total_geral || 0) > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Custo: {fmtBRL(cardsData?.consolidado?.valor_total_geral || 0)}
+                    </p>
+                    {(cardsData?.consolidado?.is != null) && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_total_geral || 0)}
+                        IS: {(cardsData.consolidado.is * 100).toFixed(2)}%
                       </p>
                     )}
                     {/* Distribuição por plano - Drilldown */}
@@ -1447,18 +1450,19 @@ export default function SinistralidadeDashboardPage() {
                     <div
                       key={key}
                       className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                      title={`Entidade: ${nomeExibicao}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                      title={`Entidade: ${nomeExibicao}\nTotal de vidas: ${fmtNumber(entidade.vidas)}\nReceita: ${fmtBRL(entidade.valor_net_total || 0)}\nCusto: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
                     >
                       <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
                       <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% do total de vidas
                       </p>
-                      {((entidade as any).valor_net_total || 0) > 0 && (
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          NET: {fmtBRL((entidade as any).valor_net_total || 0)}
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Receita: {fmtBRL((entidade as any).valor_net_total || 0)}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Custo: {fmtBRL(entidade.valor_total || 0)}
+                      </p>
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1525,11 +1529,14 @@ export default function SinistralidadeDashboardPage() {
                       {fmtNumber(cardsData?.consolidado?.ativo || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsData?.consolidado?.valor_ativo || 0)}
+                      Receita: {fmtBRL(cardsData?.consolidado?.valor_net_ativo || 0)}
                     </p>
-                    {(cardsData?.consolidado?.valor_net_ativo || 0) > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Custo: {fmtBRL(cardsData?.consolidado?.valor_ativo || 0)}
+                    </p>
+                    {((cardsData?.consolidado as any)?.is_ativo != null) && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_ativo || 0)}
+                        IS: {(((cardsData.consolidado as any).is_ativo) * 100).toFixed(2)}%
                       </p>
                     )}
                     {/* Distribuição por plano - Drilldown */}
@@ -1575,18 +1582,19 @@ export default function SinistralidadeDashboardPage() {
                     <div
                       key={key}
                       className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                      title={`Entidade: ${nomeExibicao}\nVidas ativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                      title={`Entidade: ${nomeExibicao}\nVidas ativas: ${fmtNumber(entidade.vidas)}\nReceita: ${fmtBRL(entidade.valor_net_total || 0)}\nCusto: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
                     >
                       <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
                       <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas ativas
                       </p>
-                      {(entidade.valor_net_total || 0) > 0 && (
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          NET: {fmtBRL(entidade.valor_net_total || 0)}
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Receita: {fmtBRL(entidade.valor_net_total || 0)}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Custo: {fmtBRL(entidade.valor_total || 0)}
+                      </p>
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1652,11 +1660,14 @@ export default function SinistralidadeDashboardPage() {
                       {fmtNumber(cardsData?.consolidado?.inativo || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsData?.consolidado?.valor_inativo || 0)}
+                      Receita: {fmtBRL(cardsData?.consolidado?.valor_net_inativo || 0)}
                     </p>
-                    {(cardsData?.consolidado?.valor_net_inativo || 0) > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Custo: {fmtBRL(cardsData?.consolidado?.valor_inativo || 0)}
+                    </p>
+                    {((cardsData?.consolidado as any)?.is_inativo != null) && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_inativo || 0)}
+                        IS: {(((cardsData.consolidado as any).is_inativo) * 100).toFixed(2)}%
                       </p>
                     )}
                     {/* Distribuição por plano - Drilldown */}
@@ -1702,18 +1713,19 @@ export default function SinistralidadeDashboardPage() {
                     <div
                       key={key}
                       className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                      title={`Entidade: ${nomeExibicao}\nVidas inativas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                      title={`Entidade: ${nomeExibicao}\nVidas inativas: ${fmtNumber(entidade.vidas)}\nReceita: ${fmtBRL(entidade.valor_net_total || 0)}\nCusto: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
                     >
                       <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
                       <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas inativas
                       </p>
-                      {(entidade.valor_net_total || 0) > 0 && (
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          NET: {fmtBRL(entidade.valor_net_total || 0)}
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Receita: {fmtBRL(entidade.valor_net_total || 0)}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Custo: {fmtBRL(entidade.valor_total || 0)}
+                      </p>
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div
@@ -1780,11 +1792,14 @@ export default function SinistralidadeDashboardPage() {
                       {fmtNumber(cardsData?.consolidado?.nao_localizado || 0)}
                     </div>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Valor: {fmtBRL(cardsData?.consolidado?.valor_nao_localizado || 0)}
+                      Receita: {fmtBRL(cardsData?.consolidado?.valor_net_nao_localizado || 0)}
                     </p>
-                    {(cardsData?.consolidado?.valor_net_nao_localizado || 0) > 0 && (
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Custo: {fmtBRL(cardsData?.consolidado?.valor_nao_localizado || 0)}
+                    </p>
+                    {((cardsData?.consolidado as any)?.is_nao_localizado != null) && (
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        NET: {fmtBRL(cardsData?.consolidado?.valor_net_nao_localizado || 0)}
+                        IS: {(((cardsData.consolidado as any).is_nao_localizado) * 100).toFixed(2)}%
                       </p>
                     )}
                     {/* Distribuição por plano - Drilldown */}
@@ -1830,18 +1845,19 @@ export default function SinistralidadeDashboardPage() {
                     <div
                       key={key}
                       className="bg-white rounded-xl border border-slate-200 p-3.5 hover:shadow-sm transition-shadow cursor-pointer"
-                      title={`Entidade: ${nomeExibicao}\nVidas não localizadas: ${fmtNumber(entidade.vidas)}\nValor em procedimentos: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
+                      title={`Entidade: ${nomeExibicao}\nVidas não localizadas: ${fmtNumber(entidade.vidas)}\nReceita: ${fmtBRL(entidade.valor_net_total || 0)}\nCusto: ${fmtBRL(entidade.valor_total)}\nParticipação em valor: ${(entidade.pct_valor * 100).toFixed(1)}%`}
                     >
                       <div className="text-sm font-medium truncate text-slate-900">{nomeExibicao}</div>
                       <div className="text-lg font-bold mt-1 text-slate-900">{fmtNumber(entidade.vidas)}</div>
                       <p className="text-xs text-slate-500 mt-0.5">
                         {(entidade.pct_vidas * 100).toFixed(1)}% das vidas não localizadas
                       </p>
-                      {(entidade.valor_net_total || 0) > 0 && (
-                        <p className="text-xs text-slate-400 mt-0.5">
-                          NET: {fmtBRL(entidade.valor_net_total || 0)}
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Receita: {fmtBRL(entidade.valor_net_total || 0)}
+                      </p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Custo: {fmtBRL(entidade.valor_total || 0)}
+                      </p>
                       <div className="mt-2">
                         <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
                           <div

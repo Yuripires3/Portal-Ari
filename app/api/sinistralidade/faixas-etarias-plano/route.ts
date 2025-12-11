@@ -436,16 +436,346 @@ export async function GET(request: NextRequest) {
       faixasMap.set(faixa, atual)
     })
 
-    // Converter para array ordenado
+    // Calcular IS para cada faixa etária
+    // IS = (Soma do Custo dos últimos 12 meses) / Receita do mês atual * 12
+    // O mês atual é o último mês de referência
+    const mesAtual = mesesReferencia.length > 0 ? mesesReferencia[mesesReferencia.length - 1] : null
+    
+    // Função auxiliar para calcular os últimos 12 meses a partir de um mês
+    const calcularUltimos12Meses = (mes: string): string[] => {
+      const [ano, mesNum] = mes.split("-")
+      const anoNum = parseInt(ano)
+      const mesNumInt = parseInt(mesNum)
+      const meses: string[] = []
+      
+      for (let i = 0; i < 12; i++) {
+        let anoCalculado = anoNum
+        let mesCalculado = mesNumInt - i
+        
+        while (mesCalculado <= 0) {
+          mesCalculado += 12
+          anoCalculado -= 1
+        }
+        
+        meses.push(`${anoCalculado}-${String(mesCalculado).padStart(2, '0')}`)
+      }
+      
+      return meses
+    }
+    
+    // Calcular IS para todas as faixas de uma vez (mais eficiente)
+    const calcularISParaTodasFaixas = async (): Promise<Map<string, number | null>> => {
+      const isMap = new Map<string, number | null>()
+      
+      if (!mesAtual) {
+        todasFaixas.forEach(faixa => isMap.set(faixa, null))
+        return isMap
+      }
+      
+      try {
+        const ultimos12Meses = calcularUltimos12Meses(mesAtual)
+        
+        // Construir condições WHERE para procedimentos dos últimos 12 meses
+        const procedimentosConditions12Meses: string[] = []
+        const procedimentosValues12Meses: any[] = []
+        
+        if (operadoras.length > 0) {
+          procedimentosConditions12Meses.push(`p.operadora IN (${operadoras.map(() => "?").join(",")})`)
+          procedimentosValues12Meses.push(...operadoras)
+        }
+        
+        procedimentosConditions12Meses.push("p.evento IS NOT NULL")
+        
+        // Calcular data_inicio e data_fim para os últimos 12 meses
+        const primeiroMes12 = ultimos12Meses[ultimos12Meses.length - 1]
+        const ultimoMes12 = ultimos12Meses[0]
+        const [anoInicio12, mesInicio12] = primeiroMes12.split("-")
+        const dataInicio12 = `${anoInicio12}-${mesInicio12}-01`
+        const [anoFim12, mesFim12] = ultimoMes12.split("-")
+        const anoFimNum12 = parseInt(anoFim12)
+        const mesFimNum12 = parseInt(mesFim12)
+        const ultimoDiaDate12 = new Date(anoFimNum12, mesFimNum12, 0)
+        const dataFim12 = ultimoDiaDate12.toISOString().split("T")[0]
+        
+        procedimentosConditions12Meses.push("DATE(p.data_competencia) BETWEEN ? AND ?")
+        procedimentosValues12Meses.push(dataInicio12, dataFim12)
+        procedimentosConditions12Meses.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${ultimos12Meses.map(() => "?").join(",")})`)
+        procedimentosValues12Meses.push(...ultimos12Meses)
+        
+        // Query para buscar custo dos últimos 12 meses agrupado por faixa etária
+        const sqlCusto12Meses = `
+          SELECT
+            m.faixa_etaria,
+            SUM(m.valor_procedimentos) AS custo_12_meses
+          FROM (
+            SELECT
+              base.mes,
+              base.entidade,
+              base.plano,
+              base.cpf,
+              base.valor_procedimentos,
+              b.mes_reajuste,
+              CASE
+                WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+                ELSE '59+'
+              END AS faixa_etaria,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.entidade,
+                fv.plano,
+                pr.cpf,
+                pr.valor_total_procedimentos AS valor_procedimentos
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf,
+                  SUM(p.valor_procedimento) AS valor_total_procedimentos
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions12Meses.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS idade,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS mes_reajuste
+              FROM reg_beneficiarios b
+              WHERE ${operadoras.length > 0 ? `b.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes IN (${ultimos12Meses.map(() => "?").join(",")})
+            ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+            ${mesesReajuste.length > 0 ? `AND m.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ""}
+            AND m.plano = ?
+            ${statusParam !== "total" ? `AND m.status_final = ?` : ""}
+          GROUP BY
+            m.faixa_etaria
+        `
+        
+        const valoresCusto12Meses: any[] = [
+          ...procedimentosValues12Meses,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...ultimos12Meses,
+          ...(entidades.length > 0 ? entidades : []),
+          ...(mesesReajuste.length > 0 ? mesesReajuste : []),
+          plano
+        ]
+        
+        if (statusParam !== "total") {
+          valoresCusto12Meses.push(statusParam)
+        }
+        
+        const [rowsCusto12Meses]: any = await connection.execute(sqlCusto12Meses, valoresCusto12Meses)
+        const custoPorFaixa = new Map<string, number>()
+        ;(rowsCusto12Meses || []).forEach((row: any) => {
+          const faixa = row.faixa_etaria || '00 a 18'
+          custoPorFaixa.set(faixa, Number(row.custo_12_meses) || 0)
+        })
+        
+        // Query para buscar receita do mês atual agrupado por faixa etária
+        const sqlReceitaMesAtual = `
+          SELECT
+            m.faixa_etaria,
+            SUM(m.valor_faturamento) AS receita_mes_atual
+          FROM (
+            SELECT
+              base.mes,
+              base.entidade,
+              base.plano,
+              base.cpf,
+              base.valor_faturamento,
+              b.mes_reajuste,
+              CASE
+                WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+                WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+                ELSE '59+'
+              END AS faixa_etaria,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.entidade,
+                fv.plano,
+                pr.cpf,
+                COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS idade,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS mes_reajuste
+              FROM reg_beneficiarios b
+              WHERE ${operadoras.length > 0 ? `b.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes = ?
+            ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+            ${mesesReajuste.length > 0 ? `AND m.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ""}
+            AND m.plano = ?
+            ${statusParam !== "total" ? `AND m.status_final = ?` : ""}
+          GROUP BY
+            m.faixa_etaria
+        `
+        
+        const valoresReceitaMesAtual: any[] = [
+          ...procedimentosValues,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          mesAtual,
+          ...(entidades.length > 0 ? entidades : []),
+          ...(mesesReajuste.length > 0 ? mesesReajuste : []),
+          plano
+        ]
+        
+        if (statusParam !== "total") {
+          valoresReceitaMesAtual.push(statusParam)
+        }
+        
+        const [rowsReceitaMesAtual]: any = await connection.execute(sqlReceitaMesAtual, valoresReceitaMesAtual)
+        const receitaPorFaixa = new Map<string, number>()
+        ;(rowsReceitaMesAtual || []).forEach((row: any) => {
+          const faixa = row.faixa_etaria || '00 a 18'
+          receitaPorFaixa.set(faixa, Number(row.receita_mes_atual) || 0)
+        })
+        
+        // Calcular IS para cada faixa
+        todasFaixas.forEach(faixa => {
+          const custo12Meses = custoPorFaixa.get(faixa) || 0
+          const receitaMesAtual = receitaPorFaixa.get(faixa) || 0
+          
+          if (receitaMesAtual > 0) {
+            const is = (custo12Meses / receitaMesAtual) * 12
+            isMap.set(faixa, is)
+          } else {
+            isMap.set(faixa, null)
+          }
+        })
+        
+        return isMap
+      } catch (error) {
+        console.error(`Erro ao calcular IS:`, error)
+        todasFaixas.forEach(faixa => isMap.set(faixa, null))
+        return isMap
+      }
+    }
+    
+    // Calcular IS para todas as faixas
+    const isMap = await calcularISParaTodasFaixas()
+    
+    // Converter para array ordenado e incluir IS
     todasFaixas.forEach(faixa => {
       const dados = faixasMap.get(faixa) || { vidas: 0, valor: 0, valor_net: 0 }
-      // IS ainda não implementado - retornar null para mostrar "-"
+      const is = isMap.get(faixa) ?? null
+      
       faixasEtarias.push({
         faixa_etaria: faixa,
         vidas: dados.vidas,
         valor: dados.valor,
         valor_net: dados.valor_net,
-        is: null
+        is: is
       })
     })
 

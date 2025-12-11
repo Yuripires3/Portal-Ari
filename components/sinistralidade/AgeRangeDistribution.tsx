@@ -136,8 +136,8 @@ export function AgeRangeDistribution({
         <div className="flex items-center py-1.5 text-[10px] font-semibold text-slate-500 uppercase tracking-wide">
           <span className="w-[90px] text-left">Faixa Etária</span>
           <span className="w-[60px] text-center">Vidas</span>
-          <span className="w-[110px] text-center">Valor</span>
-          <span className="w-[110px] text-center">NET</span>
+          <span className="w-[110px] text-center">Receita</span>
+          <span className="w-[110px] text-center">Custo</span>
           <span className="w-[50px] text-center">%</span>
           <span className="w-[50px] text-center">IS</span>
         </div>
@@ -163,14 +163,14 @@ export function AgeRangeDistribution({
                 {formatNumber(faixa.vidas)}
               </span>
 
-              {/* Valor */}
-              <span className="w-[110px] text-center text-[#184286]">
-                {formatCurrency(faixa.valor)}
-              </span>
-
-              {/* NET */}
+              {/* Receita */}
               <span className="w-[110px] text-center text-[#184286]">
                 {faixa.valor_net && faixa.valor_net > 0 ? formatCurrency(faixa.valor_net) : "-"}
+              </span>
+
+              {/* Custo */}
+              <span className="w-[110px] text-center text-[#184286]">
+                {formatCurrency(faixa.valor)}
               </span>
 
               {/* Percentual */}

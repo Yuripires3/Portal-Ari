@@ -188,260 +188,348 @@ export async function GET(request: NextRequest) {
       ? `WHERE ${beneficiarioConditions.join(" AND ")}`
       : ""
 
-    // QUERY PARA CONSOLIDADO GERAL (sem filtro de entidade)
-    // 🔵 QUERY OFICIAL: Seguindo EXATAMENTE a estrutura fornecida
-    // Agrupa por mes, entidade, plano, mes_reajuste, faixa_etaria (conforme query SQL fornecida)
+    // 🔵 QUERY REWRITTEN: Baseada em reg_beneficiarios como mandante (posição mensal)
+    // Seguindo especificações: posição → custos → receita → status_final → agregação
     const sqlGeral = `
-      SELECT
-        m.mes,
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS vidas_ativas,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS vidas_nao_localizadas,
-        COUNT(*) AS total_vidas,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_nao_localizado,
-        SUM(m.valor_faturamento) AS valor_faturamento_total,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_nao_localizado,
-        SUM(m.valor_procedimentos) AS valor_procedimentos_total
-      FROM (
+      WITH calendario AS (
+        ${mesesReferencia.map(mes => {
+          const [ano, mesNum] = mes.split("-")
+          return `SELECT DATE('${ano}-${mesNum}-01') AS mes_ref`
+        }).join(" UNION ALL ")}
+      ),
+      posicao AS (
         SELECT
-          base.mes,
-          base.entidade,
-          base.plano,
-          base.cpf,
-          base.valor_faturamento,
-          base.valor_procedimentos,
-          b.mes_reajuste,
-          CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END AS status_final,
-          CASE
-            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-            ELSE '59+'
-          END AS faixa_etaria
+          mes,
+          id_beneficiario,
+          cpf,
+          idade,
+          entidade,
+          plano,
+          mes_reajuste,
+          eh_ativo
         FROM (
           SELECT
-            pr.mes,
-            fv.entidade,
-            fv.plano,
-            pr.cpf,
-            pr.valor_total_procedimentos AS valor_procedimentos,
-            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
-          FROM (
-            SELECT
-              DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-              p.cpf,
-              SUM(p.valor_procedimento) AS valor_total_procedimentos
-            FROM reg_procedimentos p
-            WHERE ${procedimentosConditions.join(" AND ")}
-            GROUP BY
-              DATE_FORMAT(p.data_competencia, '%Y-%m'),
-              p.cpf
-          ) AS pr
-          LEFT JOIN (
-            SELECT
-              f.cpf_do_beneficiario AS cpf,
-              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
-              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
-              MAX(f.vlr_net) AS valor_faturamento
-            FROM reg_faturamento f
-            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
-            GROUP BY
-              f.cpf_do_beneficiario
-          ) AS fv
-            ON fv.cpf = pr.cpf
-        ) AS base
-        LEFT JOIN (
-          SELECT
+            DATE_FORMAT(m.mes_ref, '%Y-%m') AS mes,
+            b.id_beneficiario,
             b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS status_beneficiario,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS idade,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS mes_reajuste
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClauseGeral}
-          GROUP BY
-            b.cpf
-        ) AS b
-          ON b.cpf = base.cpf
-      ) AS m
+            b.idade,
+            b.entidade,
+            b.plano,
+            b.mes_reajuste,
+            CASE
+              WHEN (
+                (b.data_exclusao IS NULL AND LOWER(b.status_beneficiario) = 'ativo')
+                OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > LAST_DAY(m.mes_ref))
+              ) THEN 1
+              ELSE 0
+            END AS eh_ativo,
+            ROW_NUMBER() OVER (
+              PARTITION BY DATE_FORMAT(m.mes_ref, '%Y-%m'), b.cpf
+              ORDER BY b.data_inicio_vigencia_beneficiario DESC
+            ) AS rn
+          FROM calendario m
+          JOIN reg_beneficiarios b
+            ON b.data_inicio_vigencia_beneficiario <= LAST_DAY(m.mes_ref)
+            AND b.operadora IN (${operadoras.length > 0 ? operadoras.map(() => "?").join(",") : "'ASSIM SAÚDE'"})
+            ${tipo ? "AND b.tipo = ?" : ""}
+            ${cpf ? "AND b.cpf = ?" : ""}
+            AND (
+              UPPER(b.plano) NOT LIKE '%DENT%' 
+              AND UPPER(b.plano) NOT LIKE '%AESP%'
+            )
+        ) AS ranked
+        WHERE rn = 1
+      ),
+      proc_mes AS (
+        SELECT
+          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+          p.cpf,
+          SUM(p.valor_procedimento) AS valor_total_procedimentos,
+          GROUP_CONCAT(DISTINCT p.evento SEPARATOR ', ') AS procedimentos_nomes
+        FROM reg_procedimentos p
+        WHERE ${procedimentosConditions.join(" AND ")}
+        GROUP BY
+          DATE_FORMAT(p.data_competencia, '%Y-%m'),
+          p.cpf
+      ),
+      fat_cpf AS (
+        SELECT
+          f.cpf_do_beneficiario AS cpf,
+          MAX(f.vlr_net) AS valor_faturamento
+        FROM reg_faturamento f
+        WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "f.operadora = 'ASSIM SAÚDE'"}
+        GROUP BY
+          f.cpf_do_beneficiario
+      ),
+      base AS (
+        SELECT
+          pos.mes,
+          pos.id_beneficiario,
+          pos.cpf,
+          pos.entidade,
+          pos.plano,
+          pos.mes_reajuste,
+          pos.idade,
+          COALESCE(proc.valor_total_procedimentos, 0) AS valor_procedimentos,
+          COALESCE(fat.valor_faturamento, 0) AS valor_faturamento,
+          CASE
+            WHEN pos.eh_ativo = 1 THEN 'ativo'
+            WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+            ELSE 'fora'
+          END AS status_final,
+          CASE
+            WHEN pos.idade IS NULL OR CAST(pos.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
+        FROM posicao pos
+        LEFT JOIN proc_mes proc
+          ON pos.mes = proc.mes
+          AND pos.cpf = proc.cpf
+        LEFT JOIN fat_cpf fat
+          ON pos.cpf = fat.cpf
+        WHERE pos.mes IN (${mesesReferencia.map(() => "?").join(",")})
+          AND (
+            CASE
+              WHEN pos.eh_ativo = 1 THEN 'ativo'
+              WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+              ELSE 'fora'
+            END
+          ) IN ('ativo', 'inativo')
+          AND NOT (
+            CASE
+              WHEN pos.eh_ativo = 1 THEN 'ativo'
+              WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+              ELSE 'fora'
+            END = 'inativo' 
+            AND COALESCE(proc.valor_total_procedimentos, 0) = 0
+          )
+      )
+      SELECT
+        mes,
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria,
+        SUM(CASE WHEN status_final = 'ativo' THEN 1 ELSE 0 END) AS vidas_ativas,
+        SUM(CASE WHEN status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
+        0 AS vidas_nao_localizadas,
+        COUNT(*) AS total_vidas,
+        SUM(CASE WHEN status_final = 'ativo' THEN valor_faturamento ELSE 0 END) AS valor_fat_ativo,
+        SUM(CASE WHEN status_final = 'inativo' THEN valor_faturamento ELSE 0 END) AS valor_fat_inativo,
+        0 AS valor_fat_nao_localizado,
+        SUM(valor_faturamento) AS valor_faturamento_total,
+        SUM(CASE WHEN status_final = 'ativo' THEN valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
+        SUM(CASE WHEN status_final = 'inativo' THEN valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
+        0 AS valor_proc_nao_localizado,
+        SUM(valor_procedimentos) AS valor_procedimentos_total
+      FROM base
       GROUP BY
-        m.mes,
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria
+        mes,
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria
       ORDER BY
-        m.mes,
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria
+        mes,
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria
     `
 
     // Query adicional para agregação por entidade separada por status, mês de reajuste e faixa etária
-    // 🔵 QUERY OFICIAL: Seguindo EXATAMENTE a estrutura da query fornecida
-    // Agrupa por entidade, plano, mes_reajuste, faixa_etaria e status (conforme query SQL fornecida)
+    // 🔵 QUERY REWRITTEN: Usando a mesma estrutura baseada em reg_beneficiarios como mandante
     const sqlPorEntidade = `
-      SELECT
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria,
-        m.status_final,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS vidas_ativas,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS vidas_nao_localizadas,
-        COUNT(*) AS total_vidas,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_nao_localizado,
-        SUM(m.valor_faturamento) AS valor_faturamento_total,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_nao_localizado,
-        SUM(m.valor_procedimentos) AS valor_procedimentos_total
-      FROM (
+      WITH calendario AS (
+        ${mesesReferencia.map(mes => {
+          const [ano, mesNum] = mes.split("-")
+          return `SELECT DATE('${ano}-${mesNum}-01') AS mes_ref`
+        }).join(" UNION ALL ")}
+      ),
+      posicao AS (
         SELECT
-          base.mes,
-          base.entidade,
-          base.plano,
-          base.cpf,
-          base.valor_faturamento,
-          base.valor_procedimentos,
-          b.mes_reajuste,
-          CASE
-            WHEN b.cpf IS NULL THEN 'vazio'
-            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
-            ELSE 'inativo'
-          END AS status_final,
-          CASE
-            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-            ELSE '59+'
-          END AS faixa_etaria
+          mes,
+          id_beneficiario,
+          cpf,
+          idade,
+          entidade,
+          plano,
+          mes_reajuste,
+          eh_ativo
         FROM (
           SELECT
-            pr.mes,
-            fv.entidade,
-            fv.plano,
-            pr.cpf,
-            pr.valor_total_procedimentos AS valor_procedimentos,
-            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
-          FROM (
-            SELECT
-              DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-              p.cpf,
-              SUM(p.valor_procedimento) AS valor_total_procedimentos
-            FROM reg_procedimentos p
-            WHERE ${procedimentosConditions.join(" AND ")}
-            GROUP BY
-              DATE_FORMAT(p.data_competencia, '%Y-%m'),
-              p.cpf
-          ) AS pr
-          LEFT JOIN (
-            SELECT
-              f.cpf_do_beneficiario AS cpf,
-              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
-              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
-              MAX(f.vlr_net) AS valor_faturamento
-            FROM reg_faturamento f
-            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
-            GROUP BY
-              f.cpf_do_beneficiario
-          ) AS fv
-            ON fv.cpf = pr.cpf
-        ) AS base
-        LEFT JOIN (
-          SELECT
+            DATE_FORMAT(m.mes_ref, '%Y-%m') AS mes,
+            b.id_beneficiario,
             b.cpf,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS status_beneficiario,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS idade,
-            SUBSTRING_INDEX(
-              GROUP_CONCAT(
-                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
-              ),
-              ',', 1
-            ) AS mes_reajuste
-          FROM reg_beneficiarios b
-          ${beneficiarioWhereClauseGeral}
-          GROUP BY
-            b.cpf
-        ) AS b
-          ON b.cpf = base.cpf
-      ) AS m
-      WHERE m.entidade IS NOT NULL AND m.entidade != ''
-      ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
-      ${cpf ? "AND m.cpf = ?" : ""}
+            b.idade,
+            b.entidade,
+            b.plano,
+            b.mes_reajuste,
+            CASE
+              WHEN (
+                (b.data_exclusao IS NULL AND LOWER(b.status_beneficiario) = 'ativo')
+                OR (b.data_exclusao IS NOT NULL AND b.data_exclusao > LAST_DAY(m.mes_ref))
+              ) THEN 1
+              ELSE 0
+            END AS eh_ativo,
+            ROW_NUMBER() OVER (
+              PARTITION BY DATE_FORMAT(m.mes_ref, '%Y-%m'), b.cpf
+              ORDER BY b.data_inicio_vigencia_beneficiario DESC
+            ) AS rn
+          FROM calendario m
+          JOIN reg_beneficiarios b
+            ON b.data_inicio_vigencia_beneficiario <= LAST_DAY(m.mes_ref)
+            AND b.operadora IN (${operadoras.length > 0 ? operadoras.map(() => "?").join(",") : "'ASSIM SAÚDE'"})
+            ${entidades.length > 0 ? `AND b.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+            ${tipo ? "AND b.tipo = ?" : ""}
+            ${cpf ? "AND b.cpf = ?" : ""}
+            AND (
+              UPPER(b.plano) NOT LIKE '%DENT%' 
+              AND UPPER(b.plano) NOT LIKE '%AESP%'
+            )
+        ) AS ranked
+        WHERE rn = 1
+      ),
+      proc_mes AS (
+        SELECT
+          DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+          p.cpf,
+          SUM(p.valor_procedimento) AS valor_total_procedimentos,
+          GROUP_CONCAT(DISTINCT p.evento SEPARATOR ', ') AS procedimentos_nomes
+        FROM reg_procedimentos p
+        WHERE ${procedimentosConditions.join(" AND ")}
+        GROUP BY
+          DATE_FORMAT(p.data_competencia, '%Y-%m'),
+          p.cpf
+      ),
+      fat_cpf AS (
+        SELECT
+          f.cpf_do_beneficiario AS cpf,
+          MAX(f.vlr_net) AS valor_faturamento
+        FROM reg_faturamento f
+        WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "f.operadora = 'ASSIM SAÚDE'"}
+        GROUP BY
+          f.cpf_do_beneficiario
+      ),
+      base AS (
+        SELECT
+          pos.mes,
+          pos.id_beneficiario,
+          pos.cpf,
+          pos.entidade,
+          pos.plano,
+          pos.mes_reajuste,
+          pos.idade,
+          COALESCE(proc.valor_total_procedimentos, 0) AS valor_procedimentos,
+          COALESCE(fat.valor_faturamento, 0) AS valor_faturamento,
+          CASE
+            WHEN pos.eh_ativo = 1 THEN 'ativo'
+            WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+            ELSE 'fora'
+          END AS status_final,
+          CASE
+            WHEN pos.idade IS NULL OR CAST(pos.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(pos.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
+        FROM posicao pos
+        LEFT JOIN proc_mes proc
+          ON pos.mes = proc.mes
+          AND pos.cpf = proc.cpf
+        LEFT JOIN fat_cpf fat
+          ON pos.cpf = fat.cpf
+        WHERE pos.mes IN (${mesesReferencia.map(() => "?").join(",")})
+          AND pos.entidade IS NOT NULL AND pos.entidade != ''
+          AND (
+            CASE
+              WHEN pos.eh_ativo = 1 THEN 'ativo'
+              WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+              ELSE 'fora'
+            END
+          ) IN ('ativo', 'inativo')
+          AND NOT (
+            CASE
+              WHEN pos.eh_ativo = 1 THEN 'ativo'
+              WHEN pos.eh_ativo = 0 AND COALESCE(proc.valor_total_procedimentos, 0) > 0 THEN 'inativo'
+              ELSE 'fora'
+            END = 'inativo' 
+            AND COALESCE(proc.valor_total_procedimentos, 0) = 0
+          )
+      )
+      SELECT
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria,
+        status_final,
+        SUM(CASE WHEN status_final = 'ativo' THEN 1 ELSE 0 END) AS vidas_ativas,
+        SUM(CASE WHEN status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
+        0 AS vidas_nao_localizadas,
+        COUNT(*) AS total_vidas,
+        SUM(CASE WHEN status_final = 'ativo' THEN valor_faturamento ELSE 0 END) AS valor_fat_ativo,
+        SUM(CASE WHEN status_final = 'inativo' THEN valor_faturamento ELSE 0 END) AS valor_fat_inativo,
+        0 AS valor_fat_nao_localizado,
+        SUM(valor_faturamento) AS valor_faturamento_total,
+        SUM(CASE WHEN status_final = 'ativo' THEN valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
+        SUM(CASE WHEN status_final = 'inativo' THEN valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
+        0 AS valor_proc_nao_localizado,
+        SUM(valor_procedimentos) AS valor_procedimentos_total
+      FROM base
       GROUP BY
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria,
-        m.status_final
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria,
+        status_final
       ORDER BY
-        m.status_final,
-        m.entidade,
-        m.plano,
-        m.mes_reajuste,
-        m.faixa_etaria
+        status_final,
+        entidade,
+        plano,
+        mes_reajuste,
+        faixa_etaria
     `
 
     // Executar query de status por mês (CONSOLIDADO GERAL - sem filtro de entidade)
-    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários
-    const valoresGeral: any[] = [
-      ...procedimentosValues,
-      ...(operadoras.length > 0 ? operadoras : []),
-      ...beneficiarioValuesGeral
-    ]
+    // Valores para a nova query: operadoras (posicao), tipo/cpf (posicao), meses (base), operadoras (proc_mes), procedimentos, operadoras (fat_cpf)
+    const valoresGeral: any[] = []
+    
+    // Valores para CTE posicao
+    if (operadoras.length > 0) {
+      valoresGeral.push(...operadoras)
+    }
+    if (tipo) {
+      valoresGeral.push(tipo)
+    }
+    if (cpf) {
+      valoresGeral.push(cpf)
+    }
+    
+    // Valores para CTE base (filtro de meses)
+    valoresGeral.push(...mesesReferencia)
+    
+    // Valores para CTE proc_mes
+    valoresGeral.push(...procedimentosValues)
+    
+    // Valores para CTE fat_cpf
+    if (operadoras.length > 0) {
+      valoresGeral.push(...operadoras)
+    }
+    
     const [rowsGeral]: any = await connection.execute(sqlGeral, valoresGeral)
 
     // 🔵 QUERY OFICIAL: Calcular consolidado geral diretamente da query (sem agregações intermediárias)
@@ -477,8 +565,37 @@ export async function GET(request: NextRequest) {
     })
 
     // Preparar valores para query por entidade
-    // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários gerais (para status),
-    // entidades, cpf
+    // Valores para a nova query: operadoras (posicao), entidades (posicao), tipo/cpf (posicao), meses (base), operadoras (proc_mes), procedimentos, operadoras (fat_cpf)
+    const valoresPorEntidade: any[] = []
+    
+    // Valores para CTE posicao
+    if (operadoras.length > 0) {
+      valoresPorEntidade.push(...operadoras)
+    }
+    if (entidades.length > 0) {
+      valoresPorEntidade.push(...entidades)
+    }
+    if (tipo) {
+      valoresPorEntidade.push(tipo)
+    }
+    if (cpf) {
+      valoresPorEntidade.push(cpf)
+    }
+    
+    // Valores para CTE base (filtro de meses)
+    valoresPorEntidade.push(...mesesReferencia)
+    
+    // Valores para CTE proc_mes
+    valoresPorEntidade.push(...procedimentosValues)
+    
+    // Valores para CTE fat_cpf
+    if (operadoras.length > 0) {
+      valoresPorEntidade.push(...operadoras)
+    }
+    
+    const [rowsPorEntidade]: any = await connection.execute(sqlPorEntidade, valoresPorEntidade)
+    
+    // Preparar valores para outras queries que ainda usam a estrutura antiga
     const entidadeValues: any[] = []
     if (entidades.length > 0) {
       entidadeValues.push(...entidades)
@@ -486,15 +603,6 @@ export async function GET(request: NextRequest) {
     if (cpf) {
       entidadeValues.push(cpf)
     }
-
-    // Executar query por entidade
-    const valoresPorEntidade: any[] = [
-      ...procedimentosValues,
-      ...(operadoras.length > 0 ? operadoras : []),
-      ...beneficiarioValuesGeral,
-      ...entidadeValues
-    ]
-    const [rowsPorEntidade]: any = await connection.execute(sqlPorEntidade, valoresPorEntidade)
 
     // Processar resultados do consolidado geral (sem filtro de entidade)
     // 🔵 QUERY OFICIAL: Agregar por mês (a query retorna múltiplas linhas por mês - uma por cada combinação de entidade, plano, mes_reajuste, faixa_etaria)
@@ -564,6 +672,7 @@ export async function GET(request: NextRequest) {
       valor_net_inativo: number
       valor_net_nao_localizado: number
       valor_net_total_geral: number
+      is?: number | null
     }
     type PorMesTipo = ConsolidadoTipo & { mes: string }
     
@@ -571,8 +680,288 @@ export async function GET(request: NextRequest) {
     // O consolidadoGeralDireto já foi calculado somando TODAS as linhas retornadas pela query
     const consolidadoGeral: ConsolidadoTipo = consolidadoGeralDireto
 
+    // Calcular IS para o consolidado por status
+    // IS = (Soma do Custo dos últimos 12 meses) / Receita do mês atual * 12
+    const isConsolidadoPorStatus: Record<string, number | null> = {
+      ativo: null,
+      inativo: null,
+      nao_localizado: null,
+      total: null
+    }
+    if (mesesReferencia.length > 0) {
+      const mesAtualConsolidado = mesesReferencia[mesesReferencia.length - 1]
+      const calcularUltimos12MesesConsolidado = (mes: string): string[] => {
+        const [ano, mesNum] = mes.split("-")
+        const anoNum = parseInt(ano)
+        const mesNumInt = parseInt(mesNum)
+        const meses: string[] = []
+        
+        for (let i = 0; i < 12; i++) {
+          let anoCalculado = anoNum
+          let mesCalculado = mesNumInt - i
+          
+          while (mesCalculado <= 0) {
+            mesCalculado += 12
+            anoCalculado -= 1
+          }
+          
+          meses.push(`${anoCalculado}-${String(mesCalculado).padStart(2, '0')}`)
+        }
+        
+        return meses
+      }
+      
+      try {
+        const ultimos12MesesConsolidado = calcularUltimos12MesesConsolidado(mesAtualConsolidado)
+        
+        // Construir condições WHERE para procedimentos dos últimos 12 meses
+        const procedimentosConditions12MesesConsolidado: string[] = []
+        const procedimentosValues12MesesConsolidado: any[] = []
+        
+        if (operadoras.length > 0) {
+          procedimentosConditions12MesesConsolidado.push(`p.operadora IN (${operadoras.map(() => "?").join(",")})`)
+          procedimentosValues12MesesConsolidado.push(...operadoras)
+        }
+        
+        procedimentosConditions12MesesConsolidado.push("p.evento IS NOT NULL")
+        
+        const primeiroMes12Consolidado = ultimos12MesesConsolidado[ultimos12MesesConsolidado.length - 1]
+        const ultimoMes12Consolidado = ultimos12MesesConsolidado[0]
+        const [anoInicio12Consolidado, mesInicio12Consolidado] = primeiroMes12Consolidado.split("-")
+        const dataInicio12Consolidado = `${anoInicio12Consolidado}-${mesInicio12Consolidado}-01`
+        const [anoFim12Consolidado, mesFim12Consolidado] = ultimoMes12Consolidado.split("-")
+        const anoFimNum12Consolidado = parseInt(anoFim12Consolidado)
+        const mesFimNum12Consolidado = parseInt(mesFim12Consolidado)
+        const ultimoDiaDate12Consolidado = new Date(anoFimNum12Consolidado, mesFimNum12Consolidado, 0)
+        const dataFim12Consolidado = ultimoDiaDate12Consolidado.toISOString().split("T")[0]
+        
+        procedimentosConditions12MesesConsolidado.push("DATE(p.data_competencia) BETWEEN ? AND ?")
+        procedimentosValues12MesesConsolidado.push(dataInicio12Consolidado, dataFim12Consolidado)
+        procedimentosConditions12MesesConsolidado.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${ultimos12MesesConsolidado.map(() => "?").join(",")})`)
+        procedimentosValues12MesesConsolidado.push(...ultimos12MesesConsolidado)
+        
+        // Query para buscar custo dos últimos 12 meses (consolidado geral)
+        const sqlCusto12MesesConsolidado = `
+          SELECT
+            SUM(p.valor_procedimento) AS custo_12_meses
+          FROM reg_procedimentos p
+          WHERE ${procedimentosConditions12MesesConsolidado.join(" AND ")}
+        `
+        
+        const [rowsCusto12MesesConsolidado]: any = await connection.execute(sqlCusto12MesesConsolidado, procedimentosValues12MesesConsolidado)
+        const custo12MesesConsolidado = rowsCusto12MesesConsolidado && rowsCusto12MesesConsolidado.length > 0 
+          ? Number(rowsCusto12MesesConsolidado[0].custo_12_meses) || 0 
+          : 0
+        
+        // Query para buscar receita do mês atual (consolidado geral)
+        const sqlReceitaMesAtualConsolidado = `
+          SELECT
+            SUM(COALESCE(fv.valor_faturamento, 0)) AS receita_mes_atual
+          FROM (
+            SELECT DISTINCT
+              pr.cpf
+            FROM (
+              SELECT
+                DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                p.cpf
+              FROM reg_procedimentos p
+              WHERE ${procedimentosConditions.join(" AND ")}
+              GROUP BY
+                DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                p.cpf
+            ) AS pr
+            WHERE pr.mes = ?
+          ) AS cpf_list
+          LEFT JOIN (
+            SELECT
+              f.cpf_do_beneficiario AS cpf,
+              MAX(f.vlr_net) AS valor_faturamento
+            FROM reg_faturamento f
+            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+            GROUP BY
+              f.cpf_do_beneficiario
+          ) AS fv
+            ON fv.cpf = cpf_list.cpf
+        `
+        
+        const valoresReceitaMesAtualConsolidado: any[] = [
+          ...procedimentosValues,
+          ...(operadoras.length > 0 ? operadoras : []),
+          mesAtualConsolidado,
+          ...(operadoras.length > 0 ? operadoras : [])
+        ]
+        
+        const [rowsReceitaMesAtualConsolidado]: any = await connection.execute(sqlReceitaMesAtualConsolidado, valoresReceitaMesAtualConsolidado)
+        const receitaMesAtualConsolidado = rowsReceitaMesAtualConsolidado && rowsReceitaMesAtualConsolidado.length > 0 
+          ? Number(rowsReceitaMesAtualConsolidado[0].receita_mes_atual) || 0 
+          : 0
+        
+        if (receitaMesAtualConsolidado > 0) {
+          isConsolidadoPorStatus.total = (custo12MesesConsolidado / receitaMesAtualConsolidado) * 12
+        }
+        
+        // Calcular IS por status
+        for (const status of ['ativo', 'inativo', 'vazio']) {
+          try {
+            // Query para buscar custo dos últimos 12 meses por status
+            const sqlCusto12MesesStatus = `
+              SELECT
+                SUM(m.valor_procedimentos) AS custo_12_meses
+              FROM (
+                SELECT
+                  base.mes,
+                  base.cpf,
+                  base.valor_procedimentos,
+                  CASE
+                    WHEN b.cpf IS NULL THEN 'vazio'
+                    WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                    ELSE 'inativo'
+                  END AS status_final
+                FROM (
+                  SELECT
+                    pr.mes,
+                    pr.cpf,
+                    pr.valor_total_procedimentos AS valor_procedimentos
+                  FROM (
+                    SELECT
+                      DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                      p.cpf,
+                      SUM(p.valor_procedimento) AS valor_total_procedimentos
+                    FROM reg_procedimentos p
+                    WHERE ${procedimentosConditions12MesesConsolidado.join(" AND ")}
+                    GROUP BY
+                      DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                      p.cpf
+                  ) AS pr
+                ) AS base
+                LEFT JOIN (
+                  SELECT
+                    b.cpf,
+                    SUBSTRING_INDEX(
+                      GROUP_CONCAT(
+                        b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                      ),
+                      ',', 1
+                    ) AS status_beneficiario
+                  FROM reg_beneficiarios b
+                  WHERE ${beneficiarioWhereClauseGeral ? beneficiarioWhereClauseGeral.replace("WHERE ", "") : "1=1"}
+                  ${operadoras.length > 0 ? `AND b.operadora IN (${operadoras.map(() => "?").join(",")})` : ""}
+                  GROUP BY
+                    b.cpf
+                ) AS b
+                  ON b.cpf = base.cpf
+              ) AS m
+              WHERE
+                m.mes IN (${ultimos12MesesConsolidado.map(() => "?").join(",")})
+                AND m.status_final = ?
+            `
+            
+            const valoresCusto12MesesStatus: any[] = [
+              ...procedimentosValues12MesesConsolidado,
+              ...(operadoras.length > 0 ? operadoras : []),
+              ...beneficiarioValuesGeral,
+              ...ultimos12MesesConsolidado,
+              status
+            ]
+            
+            const [rowsCusto12MesesStatus]: any = await connection.execute(sqlCusto12MesesStatus, valoresCusto12MesesStatus)
+            const custo12MesesStatus = rowsCusto12MesesStatus && rowsCusto12MesesStatus.length > 0 
+              ? Number(rowsCusto12MesesStatus[0].custo_12_meses) || 0 
+              : 0
+            
+            // Query para buscar receita do mês atual por status
+            const sqlReceitaMesAtualStatus = `
+              SELECT
+                SUM(COALESCE(fv.valor_faturamento, 0)) AS receita_mes_atual
+              FROM (
+                SELECT
+                  pr.cpf,
+                  CASE
+                    WHEN b.cpf IS NULL THEN 'vazio'
+                    WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                    ELSE 'inativo'
+                  END AS status_final
+                FROM (
+                  SELECT
+                    DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                    p.cpf
+                  FROM reg_procedimentos p
+                  WHERE ${procedimentosConditions.join(" AND ")}
+                  GROUP BY
+                    DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                    p.cpf
+                ) AS pr
+                LEFT JOIN (
+                  SELECT
+                    b.cpf,
+                    SUBSTRING_INDEX(
+                      GROUP_CONCAT(
+                        b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                      ),
+                      ',', 1
+                    ) AS status_beneficiario
+                  FROM reg_beneficiarios b
+                  ${beneficiarioWhereClauseGeral}
+                  GROUP BY
+                    b.cpf
+                ) AS b
+                  ON b.cpf = pr.cpf
+                WHERE pr.mes = ?
+                  AND (
+                    CASE
+                      WHEN b.cpf IS NULL THEN 'vazio'
+                      WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                      ELSE 'inativo'
+                    END
+                  ) = ?
+              ) AS cpf_list
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = cpf_list.cpf
+            `
+            
+            const valoresReceitaMesAtualStatus: any[] = [
+              ...procedimentosValues,
+              ...(operadoras.length > 0 ? operadoras : []),
+              ...beneficiarioValuesGeral,
+              mesAtualConsolidado,
+              status,
+              ...(operadoras.length > 0 ? operadoras : [])
+            ]
+            
+            const [rowsReceitaMesAtualStatus]: any = await connection.execute(sqlReceitaMesAtualStatus, valoresReceitaMesAtualStatus)
+            const receitaMesAtualStatus = rowsReceitaMesAtualStatus && rowsReceitaMesAtualStatus.length > 0 
+              ? Number(rowsReceitaMesAtualStatus[0].receita_mes_atual) || 0 
+              : 0
+            
+            if (receitaMesAtualStatus > 0) {
+              const statusKey = status === 'vazio' ? 'nao_localizado' : status
+              isConsolidadoPorStatus[statusKey] = (custo12MesesStatus / receitaMesAtualStatus) * 12
+            }
+          } catch (error) {
+            console.error(`Erro ao calcular IS para consolidado ${status}:`, error)
+          }
+        }
+      } catch (error) {
+        console.error(`Erro ao calcular IS para consolidado:`, error)
+      }
+    }
+
     // Consolidado para retorno (sempre usa o geral, independente de filtro de entidade)
-    const consolidado = consolidadoGeral
+    const consolidado = {
+      ...consolidadoGeral,
+      is: isConsolidadoPorStatus.total,
+      is_ativo: isConsolidadoPorStatus.ativo,
+      is_inativo: isConsolidadoPorStatus.inativo,
+      is_nao_localizado: isConsolidadoPorStatus.nao_localizado
+    }
 
     // Processar dados por entidade separados por status e mês de reajuste
     // 🔵 QUERY OFICIAL: Agregar por entidade, mes_reajuste, status_final (a query retorna múltiplas linhas por combinação)
@@ -1645,8 +2034,8 @@ export async function GET(request: NextRequest) {
     }
 
     // Processar distribuição por plano para cards principais
-    // INTEGRAÇÃO: Incluído campo valor_net
-    const porPlanoGeral: Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number }>> = {
+    // INTEGRAÇÃO: Incluído campo valor_net e IS
+    const porPlanoGeral: Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number; is?: number | null }>> = {
       ativo: [],
       inativo: [],
       vazio: [],
@@ -1668,7 +2057,7 @@ export async function GET(request: NextRequest) {
         if (!porPlanoGeral[status]) {
           porPlanoGeral[status] = []
         }
-        porPlanoGeral[status].push({ plano, vidas, valor, valor_net: valorNet })
+        porPlanoGeral[status].push({ plano, vidas, valor, valor_net: valorNet, is: null })
       }
 
       // Acumular para total
@@ -1687,12 +2076,278 @@ export async function GET(request: NextRequest) {
     })
 
     porPlanoGeral.total = Array.from(planoTotalMap.entries())
-      .map(([plano, { vidas, valor, valor_net }]) => ({ plano, vidas, valor, valor_net }))
+      .map(([plano, { vidas, valor, valor_net }]) => ({ plano, vidas, valor, valor_net, is: null }))
       .sort((a, b) => b.vidas - a.vidas)
 
+    // Calcular IS para os planos gerais
+    // IS = (Soma do Custo dos últimos 12 meses) / Receita do mês atual * 12
+    const mesAtual = mesesReferencia.length > 0 ? mesesReferencia[mesesReferencia.length - 1] : null
+    
+    // Função auxiliar para calcular os últimos 12 meses a partir de um mês
+    const calcularUltimos12Meses = (mes: string): string[] => {
+      const [ano, mesNum] = mes.split("-")
+      const anoNum = parseInt(ano)
+      const mesNumInt = parseInt(mesNum)
+      const meses: string[] = []
+      
+      for (let i = 0; i < 12; i++) {
+        let anoCalculado = anoNum
+        let mesCalculado = mesNumInt - i
+        
+        while (mesCalculado <= 0) {
+          mesCalculado += 12
+          anoCalculado -= 1
+        }
+        
+        meses.push(`${anoCalculado}-${String(mesCalculado).padStart(2, '0')}`)
+      }
+      
+      return meses
+    }
+    
+    // Função para calcular IS para um plano específico
+    const calcularISParaPlano = async (plano: string, status?: string): Promise<number | null> => {
+      if (!mesAtual) return null
+      
+      try {
+        const ultimos12Meses = calcularUltimos12Meses(mesAtual)
+        
+        // Construir condições WHERE para procedimentos dos últimos 12 meses
+        const procedimentosConditions12Meses: string[] = []
+        const procedimentosValues12Meses: any[] = []
+        
+        if (operadoras.length > 0) {
+          procedimentosConditions12Meses.push(`p.operadora IN (${operadoras.map(() => "?").join(",")})`)
+          procedimentosValues12Meses.push(...operadoras)
+        }
+        
+        procedimentosConditions12Meses.push("p.evento IS NOT NULL")
+        
+        // Calcular data_inicio e data_fim para os últimos 12 meses
+        const primeiroMes12 = ultimos12Meses[ultimos12Meses.length - 1]
+        const ultimoMes12 = ultimos12Meses[0]
+        const [anoInicio12, mesInicio12] = primeiroMes12.split("-")
+        const dataInicio12 = `${anoInicio12}-${mesInicio12}-01`
+        const [anoFim12, mesFim12] = ultimoMes12.split("-")
+        const anoFimNum12 = parseInt(anoFim12)
+        const mesFimNum12 = parseInt(mesFim12)
+        const ultimoDiaDate12 = new Date(anoFimNum12, mesFimNum12, 0)
+        const dataFim12 = ultimoDiaDate12.toISOString().split("T")[0]
+        
+        procedimentosConditions12Meses.push("DATE(p.data_competencia) BETWEEN ? AND ?")
+        procedimentosValues12Meses.push(dataInicio12, dataFim12)
+        procedimentosConditions12Meses.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${ultimos12Meses.map(() => "?").join(",")})`)
+        procedimentosValues12Meses.push(...ultimos12Meses)
+        
+        // Query para buscar custo dos últimos 12 meses para este plano
+        const sqlCusto12Meses = `
+          SELECT
+            SUM(m.valor_procedimentos) AS custo_12_meses
+          FROM (
+            SELECT
+              base.mes,
+              base.plano,
+              base.cpf,
+              base.valor_procedimentos,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.plano,
+                pr.cpf,
+                pr.valor_total_procedimentos AS valor_procedimentos
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf,
+                  SUM(p.valor_procedimento) AS valor_total_procedimentos
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions12Meses.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario
+              FROM reg_beneficiarios b
+              WHERE ${operadoras.length > 0 ? `b.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes IN (${ultimos12Meses.map(() => "?").join(",")})
+            AND m.plano = ?
+            ${status ? `AND m.status_final = ?` : ""}
+        `
+        
+        const valoresCusto12Meses: any[] = [
+          ...procedimentosValues12Meses,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...ultimos12Meses,
+          plano
+        ]
+        
+        if (status) {
+          valoresCusto12Meses.push(status)
+        }
+        
+        const [rowsCusto12Meses]: any = await connection.execute(sqlCusto12Meses, valoresCusto12Meses)
+        const custo12Meses = rowsCusto12Meses && rowsCusto12Meses.length > 0 
+          ? Number(rowsCusto12Meses[0].custo_12_meses) || 0 
+          : 0
+        
+        // Query para buscar receita do mês atual para este plano
+        const sqlReceitaMesAtual = `
+          SELECT
+            SUM(m.valor_faturamento) AS receita_mes_atual
+          FROM (
+            SELECT
+              base.mes,
+              base.plano,
+              base.cpf,
+              base.valor_faturamento,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.plano,
+                pr.cpf,
+                COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario
+              FROM reg_beneficiarios b
+              WHERE ${beneficiarioWhereClauseGeral ? beneficiarioWhereClauseGeral.replace("WHERE ", "") : "1=1"}
+              ${operadoras.length > 0 ? `AND b.operadora IN (${operadoras.map(() => "?").join(",")})` : ""}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes = ?
+            AND m.plano = ?
+            ${status ? `AND m.status_final = ?` : ""}
+        `
+        
+        const valoresReceitaMesAtual: any[] = [
+          ...procedimentosValues,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...beneficiarioValuesGeral,
+          mesAtual,
+          plano
+        ]
+        
+        if (status) {
+          valoresReceitaMesAtual.push(status)
+        }
+        
+        const [rowsReceitaMesAtual]: any = await connection.execute(sqlReceitaMesAtual, valoresReceitaMesAtual)
+        const receitaMesAtual = rowsReceitaMesAtual && rowsReceitaMesAtual.length > 0 
+          ? Number(rowsReceitaMesAtual[0].receita_mes_atual) || 0 
+          : 0
+        
+        // Calcular IS
+        if (receitaMesAtual > 0) {
+          const is = (custo12Meses / receitaMesAtual) * 12
+          return is
+        }
+        
+        return null
+      } catch (error) {
+        console.error(`Erro ao calcular IS para plano ${plano}:`, error)
+        return null
+      }
+    }
+    
+    // Calcular IS para todos os planos gerais
+    const planosUnicos = new Set<string>()
+    Object.values(porPlanoGeral).forEach(lista => {
+      lista.forEach(p => planosUnicos.add(p.plano))
+    })
+    
+    const isPorPlano = new Map<string, Map<string, number | null>>() // plano -> status -> is
+    
+    for (const plano of planosUnicos) {
+      const isMap = new Map<string, number | null>()
+      for (const status of ['ativo', 'inativo', 'vazio', 'total']) {
+        const is = await calcularISParaPlano(plano, status === 'total' ? undefined : status)
+        isMap.set(status, is)
+      }
+      isPorPlano.set(plano, isMap)
+    }
+    
+    // Aplicar IS aos planos
+    Object.keys(porPlanoGeral).forEach((status) => {
+      porPlanoGeral[status].forEach(plano => {
+        const statusKey = status === 'vazio' ? 'vazio' : status === 'nao_localizado' ? 'vazio' : status
+        const is = isPorPlano.get(plano.plano)?.get(statusKey) ?? null
+        plano.is = is
+      })
+    })
+
     // Processar distribuição por plano para cards de entidade (agrupado por entidade, mês de reajuste e status)
-    // INTEGRAÇÃO: Incluído campo valor_net
-    const porPlanoEntidade: Record<string, Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number }>>>> = {}
+    // INTEGRAÇÃO: Incluído campo valor_net e IS
+    const porPlanoEntidade: Record<string, Record<string, Record<string, Array<{ plano: string; vidas: number; valor: number; valor_net: number; is?: number | null }>>>> = {}
 
     ;(rowsPorPlanoEntidade || []).forEach((row: any) => {
       const entidade = row.entidade || ""
@@ -1738,7 +2393,7 @@ export async function GET(request: NextRequest) {
       if (!porPlanoEntidade[entidade][keyMesReajuste][status]) {
         porPlanoEntidade[entidade][keyMesReajuste][status] = []
       }
-      porPlanoEntidade[entidade][keyMesReajuste][status].push({ plano, vidas, valor, valor_net: valorNet })
+      porPlanoEntidade[entidade][keyMesReajuste][status].push({ plano, vidas, valor, valor_net: valorNet, is: null })
     })
 
     // Ordenar planos por vidas (do maior para o menor) em cada entidade/mês de reajuste/status
@@ -1748,6 +2403,294 @@ export async function GET(request: NextRequest) {
           if (porPlanoEntidade[entidade][mesReajuste][status]) {
             porPlanoEntidade[entidade][mesReajuste][status].sort((a, b) => b.vidas - a.vidas)
           }
+        })
+      })
+    })
+    
+    // Calcular IS para os planos de entidade
+    // Função para calcular IS para um plano específico de uma entidade
+    const calcularISParaPlanoEntidade = async (plano: string, entidade: string, mesReajuste: string | null, status?: string): Promise<number | null> => {
+      if (!mesAtual) return null
+      
+      try {
+        const ultimos12Meses = calcularUltimos12Meses(mesAtual)
+        
+        // Construir condições WHERE para procedimentos dos últimos 12 meses
+        const procedimentosConditions12Meses: string[] = []
+        const procedimentosValues12Meses: any[] = []
+        
+        if (operadoras.length > 0) {
+          procedimentosConditions12Meses.push(`p.operadora IN (${operadoras.map(() => "?").join(",")})`)
+          procedimentosValues12Meses.push(...operadoras)
+        }
+        
+        procedimentosConditions12Meses.push("p.evento IS NOT NULL")
+        
+        // Calcular data_inicio e data_fim para os últimos 12 meses
+        const primeiroMes12 = ultimos12Meses[ultimos12Meses.length - 1]
+        const ultimoMes12 = ultimos12Meses[0]
+        const [anoInicio12, mesInicio12] = primeiroMes12.split("-")
+        const dataInicio12 = `${anoInicio12}-${mesInicio12}-01`
+        const [anoFim12, mesFim12] = ultimoMes12.split("-")
+        const anoFimNum12 = parseInt(anoFim12)
+        const mesFimNum12 = parseInt(mesFim12)
+        const ultimoDiaDate12 = new Date(anoFimNum12, mesFimNum12, 0)
+        const dataFim12 = ultimoDiaDate12.toISOString().split("T")[0]
+        
+        procedimentosConditions12Meses.push("DATE(p.data_competencia) BETWEEN ? AND ?")
+        procedimentosValues12Meses.push(dataInicio12, dataFim12)
+        procedimentosConditions12Meses.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${ultimos12Meses.map(() => "?").join(",")})`)
+        procedimentosValues12Meses.push(...ultimos12Meses)
+        
+        // Query para buscar custo dos últimos 12 meses para este plano/entidade
+        const sqlCusto12Meses = `
+          SELECT
+            SUM(m.valor_procedimentos) AS custo_12_meses
+          FROM (
+            SELECT
+              base.mes,
+              base.entidade,
+              base.plano,
+              base.cpf,
+              base.valor_procedimentos,
+              b.mes_reajuste,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.entidade,
+                fv.plano,
+                pr.cpf,
+                pr.valor_total_procedimentos AS valor_procedimentos
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf,
+                  SUM(p.valor_procedimento) AS valor_total_procedimentos
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions12Meses.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS mes_reajuste
+              FROM reg_beneficiarios b
+              WHERE ${beneficiarioWhereClause ? beneficiarioWhereClause.replace("WHERE ", "") : "1=1"}
+              ${operadoras.length > 0 ? `AND b.operadora IN (${operadoras.map(() => "?").join(",")})` : ""}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes IN (${ultimos12Meses.map(() => "?").join(",")})
+            AND m.entidade = ?
+            ${mesReajuste ? `AND m.mes_reajuste = ?` : "AND m.mes_reajuste IS NULL"}
+            AND m.plano = ?
+            ${status ? `AND m.status_final = ?` : ""}
+        `
+        
+        const valoresCusto12Meses: any[] = [
+          ...procedimentosValues12Meses,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...beneficiarioValues,
+          ...ultimos12Meses,
+          entidade
+        ]
+        
+        if (mesReajuste) {
+          valoresCusto12Meses.push(mesReajuste)
+        }
+        
+        valoresCusto12Meses.push(plano)
+        
+        if (status) {
+          valoresCusto12Meses.push(status)
+        }
+        
+        const [rowsCusto12Meses]: any = await connection.execute(sqlCusto12Meses, valoresCusto12Meses)
+        const custo12Meses = rowsCusto12Meses && rowsCusto12Meses.length > 0 
+          ? Number(rowsCusto12Meses[0].custo_12_meses) || 0 
+          : 0
+        
+        // Query para buscar receita do mês atual para este plano/entidade
+        const sqlReceitaMesAtual = `
+          SELECT
+            SUM(m.valor_faturamento) AS receita_mes_atual
+          FROM (
+            SELECT
+              base.mes,
+              base.entidade,
+              base.plano,
+              base.cpf,
+              base.valor_faturamento,
+              b.mes_reajuste,
+              CASE
+                WHEN b.cpf IS NULL THEN 'vazio'
+                WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+                ELSE 'inativo'
+              END AS status_final
+            FROM (
+              SELECT
+                pr.mes,
+                fv.entidade,
+                fv.plano,
+                pr.cpf,
+                COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+              FROM (
+                SELECT
+                  DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+                  p.cpf
+                FROM reg_procedimentos p
+                WHERE ${procedimentosConditions.join(" AND ")}
+                GROUP BY
+                  DATE_FORMAT(p.data_competencia, '%Y-%m'),
+                  p.cpf
+              ) AS pr
+              LEFT JOIN (
+                SELECT
+                  f.cpf_do_beneficiario AS cpf,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+                  SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+                  MAX(f.vlr_net) AS valor_faturamento
+                FROM reg_faturamento f
+                WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+                GROUP BY
+                  f.cpf_do_beneficiario
+              ) AS fv
+                ON fv.cpf = pr.cpf
+            ) AS base
+            LEFT JOIN (
+              SELECT
+                b.cpf,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS status_beneficiario,
+                SUBSTRING_INDEX(
+                  GROUP_CONCAT(
+                    b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  ),
+                  ',', 1
+                ) AS mes_reajuste
+              FROM reg_beneficiarios b
+              WHERE ${beneficiarioWhereClause ? beneficiarioWhereClause.replace("WHERE ", "") : "1=1"}
+              ${operadoras.length > 0 ? `AND b.operadora IN (${operadoras.map(() => "?").join(",")})` : ""}
+              GROUP BY
+                b.cpf
+            ) AS b
+              ON b.cpf = base.cpf
+          ) AS m
+          WHERE
+            m.mes = ?
+            AND m.entidade = ?
+            ${mesReajuste ? `AND m.mes_reajuste = ?` : "AND m.mes_reajuste IS NULL"}
+            AND m.plano = ?
+            ${status ? `AND m.status_final = ?` : ""}
+        `
+        
+        const valoresReceitaMesAtual: any[] = [
+          ...procedimentosValues,
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...(operadoras.length > 0 ? operadoras : []),
+          ...beneficiarioValues,
+          mesAtual,
+          entidade
+        ]
+        
+        if (mesReajuste) {
+          valoresReceitaMesAtual.push(mesReajuste)
+        }
+        
+        valoresReceitaMesAtual.push(plano)
+        
+        if (status) {
+          valoresReceitaMesAtual.push(status)
+        }
+        
+        const [rowsReceitaMesAtual]: any = await connection.execute(sqlReceitaMesAtual, valoresReceitaMesAtual)
+        const receitaMesAtual = rowsReceitaMesAtual && rowsReceitaMesAtual.length > 0 
+          ? Number(rowsReceitaMesAtual[0].receita_mes_atual) || 0 
+          : 0
+        
+        // Calcular IS
+        if (receitaMesAtual > 0) {
+          const is = (custo12Meses / receitaMesAtual) * 12
+          return is
+        }
+        
+        return null
+      } catch (error) {
+        console.error(`Erro ao calcular IS para plano ${plano} da entidade ${entidade}:`, error)
+        return null
+      }
+    }
+    
+    // Calcular IS para todos os planos de entidade
+    const planosEntidadeUnicos = new Set<string>()
+    Object.keys(porPlanoEntidade).forEach(entidade => {
+      Object.keys(porPlanoEntidade[entidade]).forEach(mesReajuste => {
+        Object.keys(porPlanoEntidade[entidade][mesReajuste]).forEach(status => {
+          porPlanoEntidade[entidade][mesReajuste][status].forEach(p => {
+            planosEntidadeUnicos.add(`${entidade}|${mesReajuste}|${p.plano}|${status}`)
+          })
+        })
+      })
+    })
+    
+    const isPorPlanoEntidade = new Map<string, number | null>()
+    
+    for (const key of planosEntidadeUnicos) {
+      const [entidade, mesReajuste, plano, status] = key.split('|')
+      const mesReajusteNull = mesReajuste === 'sem_mes' ? null : mesReajuste
+      const statusKey = status === 'vazio' ? 'vazio' : status
+      const is = await calcularISParaPlanoEntidade(plano, entidade, mesReajusteNull, statusKey)
+      isPorPlanoEntidade.set(key, is)
+    }
+    
+    // Aplicar IS aos planos de entidade
+    Object.keys(porPlanoEntidade).forEach((entidade) => {
+      Object.keys(porPlanoEntidade[entidade]).forEach((mesReajuste) => {
+        Object.keys(porPlanoEntidade[entidade][mesReajuste]).forEach((status) => {
+          porPlanoEntidade[entidade][mesReajuste][status].forEach(plano => {
+            const key = `${entidade}|${mesReajuste}|${plano.plano}|${status}`
+            const is = isPorPlanoEntidade.get(key) ?? null
+            plano.is = is
+          })
         })
       })
     })

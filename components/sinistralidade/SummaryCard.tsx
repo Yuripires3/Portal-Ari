@@ -22,7 +22,7 @@ function SummaryCardComponent({
   title,
   livesLabel = "Vidas",
   livesValue,
-  amountLabel = "Valor Total de Procedimentos",
+  amountLabel = "Custo",
   amountValue,
   accentColorClass,
   faixaEtaria,

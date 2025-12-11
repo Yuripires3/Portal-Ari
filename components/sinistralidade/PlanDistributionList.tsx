@@ -101,8 +101,8 @@ export function PlanDistributionList({
           <div className="flex items-center py-2.5 text-[11px] font-semibold text-slate-500 uppercase tracking-wide">
             <span className="w-[140px] pl-3 text-left border-r border-slate-200">Plano</span>
             <span className="w-[60px] text-center border-r border-slate-200">Vidas</span>
-            <span className="w-[110px] text-center border-r border-slate-200">Valor</span>
-            <span className="w-[110px] text-center border-r border-slate-200">NET</span>
+            <span className="w-[110px] text-center border-r border-slate-200">Receita</span>
+            <span className="w-[110px] text-center border-r border-slate-200">Custo</span>
             <span className="w-[60px] pr-3 text-center">IS</span>
           </div>
         </div>
@@ -151,14 +151,14 @@ export function PlanDistributionList({
                     {formatNumber(plano.vidas)}
                   </span>
 
-                  {/* Valor */}
-                  <span className="w-[110px] text-center text-[#184286] border-r border-slate-100">
-                    {formatCurrency(plano.valor)}
-                  </span>
-
-                  {/* NET */}
+                  {/* Receita */}
                   <span className="w-[110px] text-center text-[#184286] border-r border-slate-100">
                     {plano.valor_net && plano.valor_net > 0 ? formatCurrency(plano.valor_net) : "-"}
+                  </span>
+
+                  {/* Custo */}
+                  <span className="w-[110px] text-center text-[#184286] border-r border-slate-100">
+                    {formatCurrency(plano.valor)}
                   </span>
 
                   {/* IS */}
