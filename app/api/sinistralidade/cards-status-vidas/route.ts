@@ -189,18 +189,22 @@ export async function GET(request: NextRequest) {
       : ""
 
     // QUERY PARA CONSOLIDADO GERAL (sem filtro de entidade)
-    // 🔵 QUERY OFICIAL: Seguindo exatamente a estrutura fornecida
-    // Agrupa por mes, entidade, plano, faixa_etaria e depois agrega por mês
+    // 🔵 QUERY OFICIAL: Seguindo EXATAMENTE a estrutura fornecida
+    // Agrupa por mes, entidade, plano, mes_reajuste, faixa_etaria (conforme query SQL fornecida)
     const sqlGeral = `
       SELECT
-        m.mes AS mes,
+        m.mes,
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria,
         SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS vidas_ativas,
         SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
         SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS vidas_nao_localizadas,
         COUNT(*) AS total_vidas,
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento ELSE 0 END) AS valor_fat_ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento ELSE 0 END) AS valor_fat_inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento ELSE 0 END) AS valor_fat_nao_localizado,
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_ativo,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_inativo,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_nao_localizado,
         SUM(m.valor_faturamento) AS valor_faturamento_total,
         SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
         SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
@@ -214,6 +218,7 @@ export async function GET(request: NextRequest) {
           base.cpf,
           base.valor_faturamento,
           base.valor_procedimentos,
+          b.mes_reajuste,
           CASE
             WHEN b.cpf IS NULL THEN 'vazio'
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
@@ -263,7 +268,7 @@ export async function GET(request: NextRequest) {
           ) AS fv
             ON fv.cpf = pr.cpf
         ) AS base
-        ${tipo || cpf ? "INNER" : "LEFT"} JOIN (
+        LEFT JOIN (
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
@@ -277,7 +282,13 @@ export async function GET(request: NextRequest) {
                 b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
               ',', 1
-            ) AS idade
+            ) AS idade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS mes_reajuste
           FROM reg_beneficiarios b
           ${beneficiarioWhereClauseGeral}
           GROUP BY
@@ -286,156 +297,142 @@ export async function GET(request: NextRequest) {
           ON b.cpf = base.cpf
       ) AS m
       GROUP BY
-        m.mes
+        m.mes,
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria
       ORDER BY
-        m.mes
+        m.mes,
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria
     `
 
-    // Query adicional para agregação por entidade separada por status e mês de reajuste
-    // 🔵 QUERY OFICIAL: Usando a mesma estrutura base da query oficial
-    // IMPORTANTE: Agregar por CPF primeiro para garantir que cada CPF seja contado apenas uma vez
-    // Retorna entidades para cada status: ativo, inativo, vazio (não localizado)
+    // Query adicional para agregação por entidade separada por status, mês de reajuste e faixa etária
+    // 🔵 QUERY OFICIAL: Seguindo EXATAMENTE a estrutura da query fornecida
+    // Agrupa por entidade, plano, mes_reajuste, faixa_etaria e status (conforme query SQL fornecida)
     const sqlPorEntidade = `
       SELECT
-        base_agregado.entidade,
-        base_agregado.mes_reajuste,
-        base_agregado.status_final,
-        COUNT(DISTINCT base_agregado.cpf) AS vidas,
-        SUM(base_agregado.valor_procedimentos) AS valor_total,
-        SUM(base_agregado.valor_faturamento) AS valor_net_total
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria,
+        m.status_final,
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS vidas_ativas,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS vidas_nao_localizadas,
+        COUNT(*) AS total_vidas,
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_ativo,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_inativo,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento   ELSE 0 END) AS valor_fat_nao_localizado,
+        SUM(m.valor_faturamento) AS valor_faturamento_total,
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_nao_localizado,
+        SUM(m.valor_procedimentos) AS valor_procedimentos_total
       FROM (
         SELECT
-          m.cpf,
-          m.entidade,
-          m.status_final,
-          COALESCE(b.mes_reajuste, NULL) AS mes_reajuste,
-          b.tipo,
-          SUM(m.valor_procedimentos) AS valor_procedimentos,
-          MAX(m.valor_faturamento) AS valor_faturamento
+          base.mes,
+          base.entidade,
+          base.plano,
+          base.cpf,
+          base.valor_faturamento,
+          base.valor_procedimentos,
+          b.mes_reajuste,
+          CASE
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS status_final,
+          CASE
+            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
         FROM (
           SELECT
-            base.mes,
-            base.entidade,
-            base.plano,
-            base.cpf,
-            base.valor_faturamento,
-            base.valor_procedimentos,
-            CASE
-              WHEN b_status.cpf IS NULL THEN 'vazio'
-              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
-              ELSE 'inativo'
-            END AS status_final,
-            CASE
-              WHEN b_status.idade IS NULL OR CAST(b_status.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-              ELSE '59+'
-            END AS faixa_etaria
+            pr.mes,
+            fv.entidade,
+            fv.plano,
+            pr.cpf,
+            pr.valor_total_procedimentos AS valor_procedimentos,
+            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
           FROM (
             SELECT
-              pr.mes,
-              fv.entidade,
-              fv.plano,
-              pr.cpf,
-              pr.valor_total_procedimentos AS valor_procedimentos,
-              COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
-            FROM (
-              SELECT
-                DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-                p.cpf,
-                SUM(p.valor_procedimento) AS valor_total_procedimentos
-              FROM reg_procedimentos p
-              WHERE ${procedimentosConditions.join(" AND ")}
-              GROUP BY
-                DATE_FORMAT(p.data_competencia, '%Y-%m'),
-                p.cpf
-            ) AS pr
-            LEFT JOIN (
-              SELECT
-                f.cpf_do_beneficiario AS cpf,
-                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
-                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
-                MAX(f.vlr_net) AS valor_faturamento
-              FROM reg_faturamento f
-              WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
-              GROUP BY
-                f.cpf_do_beneficiario
-            ) AS fv
-              ON fv.cpf = pr.cpf
-          ) AS base
+              DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+              p.cpf,
+              SUM(p.valor_procedimento) AS valor_total_procedimentos
+            FROM reg_procedimentos p
+            WHERE ${procedimentosConditions.join(" AND ")}
+            GROUP BY
+              DATE_FORMAT(p.data_competencia, '%Y-%m'),
+              p.cpf
+          ) AS pr
           LEFT JOIN (
             SELECT
-              b.cpf,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS status_beneficiario,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS idade
-            FROM reg_beneficiarios b
-            ${beneficiarioWhereClauseGeral}
+              f.cpf_do_beneficiario AS cpf,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+              MAX(f.vlr_net) AS valor_faturamento
+            FROM reg_faturamento f
+            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
             GROUP BY
-              b.cpf
-          ) AS b_status
-            ON b_status.cpf = base.cpf
-        ) AS m
+              f.cpf_do_beneficiario
+          ) AS fv
+            ON fv.cpf = pr.cpf
+        ) AS base
         LEFT JOIN (
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
-                b.mes_reajuste
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
-              ',',
-              1
-            ) AS mes_reajuste,
+              ',', 1
+            ) AS status_beneficiario,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
-                b.tipo
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
-              ',',
-              1
-            ) AS tipo
+              ',', 1
+            ) AS idade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS mes_reajuste
           FROM reg_beneficiarios b
-          ${beneficiarioWhereClause}
+          ${beneficiarioWhereClauseGeral}
           GROUP BY
             b.cpf
         ) AS b
-          ON b.cpf = m.cpf
-        GROUP BY
-          m.cpf,
-          m.entidade,
-          m.status_final,
-          b.mes_reajuste,
-          b.tipo
-      ) AS base_agregado
-      WHERE base_agregado.entidade IS NOT NULL AND base_agregado.entidade != ''
-      ${entidades.length > 0 ? `AND base_agregado.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
-      ${tipo ? "AND base_agregado.tipo = ?" : ""}
-      ${cpf ? "AND base_agregado.cpf = ?" : ""}
+          ON b.cpf = base.cpf
+      ) AS m
+      WHERE m.entidade IS NOT NULL AND m.entidade != ''
+      ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+      ${cpf ? "AND m.cpf = ?" : ""}
       GROUP BY
-        base_agregado.entidade,
-        base_agregado.mes_reajuste,
-        base_agregado.status_final
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria,
+        m.status_final
       ORDER BY
-        base_agregado.status_final,
-        base_agregado.entidade,
-        base_agregado.mes_reajuste,
-        valor_total DESC
+        m.status_final,
+        m.entidade,
+        m.plano,
+        m.mes_reajuste,
+        m.faixa_etaria
     `
 
     // Executar query de status por mês (CONSOLIDADO GERAL - sem filtro de entidade)
@@ -449,13 +446,10 @@ export async function GET(request: NextRequest) {
 
     // Preparar valores para query por entidade
     // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários gerais (para status),
-    // beneficiários com filtros (para entidade), entidades, tipo, cpf
+    // entidades, cpf
     const entidadeValues: any[] = []
     if (entidades.length > 0) {
       entidadeValues.push(...entidades)
-    }
-    if (tipo) {
-      entidadeValues.push(tipo)
     }
     if (cpf) {
       entidadeValues.push(cpf)
@@ -466,30 +460,63 @@ export async function GET(request: NextRequest) {
       ...procedimentosValues,
       ...(operadoras.length > 0 ? operadoras : []),
       ...beneficiarioValuesGeral,
-      ...beneficiarioValues,
       ...entidadeValues
     ]
     const [rowsPorEntidade]: any = await connection.execute(sqlPorEntidade, valoresPorEntidade)
 
     // Processar resultados do consolidado geral (sem filtro de entidade)
-    // 🔵 QUERY OFICIAL: Usando os nomes de colunas da query oficial
-    const porMesGeral = (rowsGeral || []).map((row: any) => ({
-      mes: row.mes,
-      ativo: Number(row.vidas_ativas) || 0,
-      inativo: Number(row.vidas_inativas) || 0,
-      nao_localizado: Number(row.vidas_nao_localizadas) || 0,
-      total_vidas: Number(row.total_vidas) || 0,
-      // Valores de procedimentos
-      valor_ativo: Number(row.valor_proc_ativo) || 0,
-      valor_inativo: Number(row.valor_proc_inativo) || 0,
-      valor_nao_localizado: Number(row.valor_proc_nao_localizado) || 0,
-      valor_total_geral: Number(row.valor_procedimentos_total) || 0,
-      // Valores de faturamento NET
-      valor_net_ativo: Number(row.valor_fat_ativo) || 0,
-      valor_net_inativo: Number(row.valor_fat_inativo) || 0,
-      valor_net_nao_localizado: Number(row.valor_fat_nao_localizado) || 0,
-      valor_net_total_geral: Number(row.valor_faturamento_total) || 0,
-    }))
+    // 🔵 QUERY OFICIAL: Agregar por mês (a query retorna múltiplas linhas por mês - uma por cada combinação de entidade, plano, mes_reajuste, faixa_etaria)
+    const porMesMap = new Map<string, {
+      mes: string
+      ativo: number
+      inativo: number
+      nao_localizado: number
+      total_vidas: number
+      valor_ativo: number
+      valor_inativo: number
+      valor_nao_localizado: number
+      valor_total_geral: number
+      valor_net_ativo: number
+      valor_net_inativo: number
+      valor_net_nao_localizado: number
+      valor_net_total_geral: number
+    }>()
+
+    ;(rowsGeral || []).forEach((row: any) => {
+      const mes = row.mes
+      const atual = porMesMap.get(mes) || {
+        mes,
+        ativo: 0,
+        inativo: 0,
+        nao_localizado: 0,
+        total_vidas: 0,
+        valor_ativo: 0,
+        valor_inativo: 0,
+        valor_nao_localizado: 0,
+        valor_total_geral: 0,
+        valor_net_ativo: 0,
+        valor_net_inativo: 0,
+        valor_net_nao_localizado: 0,
+        valor_net_total_geral: 0,
+      }
+
+      atual.ativo += Number(row.vidas_ativas) || 0
+      atual.inativo += Number(row.vidas_inativas) || 0
+      atual.nao_localizado += Number(row.vidas_nao_localizadas) || 0
+      atual.total_vidas += Number(row.total_vidas) || 0
+      atual.valor_ativo += Number(row.valor_proc_ativo) || 0
+      atual.valor_inativo += Number(row.valor_proc_inativo) || 0
+      atual.valor_nao_localizado += Number(row.valor_proc_nao_localizado) || 0
+      atual.valor_total_geral += Number(row.valor_procedimentos_total) || 0
+      atual.valor_net_ativo += Number(row.valor_fat_ativo) || 0
+      atual.valor_net_inativo += Number(row.valor_fat_inativo) || 0
+      atual.valor_net_nao_localizado += Number(row.valor_fat_nao_localizado) || 0
+      atual.valor_net_total_geral += Number(row.valor_faturamento_total) || 0
+
+      porMesMap.set(mes, atual)
+    })
+
+    const porMesGeral = Array.from(porMesMap.values()).sort((a, b) => a.mes.localeCompare(b.mes))
 
     // Calcular consolidado GERAL (soma de todos os meses, SEM filtro de entidade)
     // Este é o total da operadora/período que será usado nos cards principais
@@ -545,7 +572,74 @@ export async function GET(request: NextRequest) {
     const consolidado = consolidadoGeral
 
     // Processar dados por entidade separados por status e mês de reajuste
-    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA
+    // 🔵 QUERY OFICIAL: Agregar por entidade, mes_reajuste, status_final (a query retorna múltiplas linhas por combinação)
+    // Também preservar drill-downs por plano e faixa_etaria
+    const entidadesPorStatusMap = new Map<string, {
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      valor_net_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano: Map<string, { plano: string; vidas: number; valor: number; valor_net: number }>
+      por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+    }>()
+
+    // Agrupar por entidade, mes_reajuste e status_final
+    ;(rowsPorEntidade || []).forEach((row: any) => {
+      const status = row.status_final || "vazio"
+      const entidade = row.entidade || ""
+      const mesReajuste = row.mes_reajuste || null
+      const plano = row.plano || ""
+      const faixaEtaria = row.faixa_etaria || ""
+      
+      if (!entidade) return
+
+      const key = `${entidade}|${mesReajuste || 'null'}|${status}`
+      const atual = entidadesPorStatusMap.get(key) || {
+        entidade,
+        mes_reajuste: mesReajuste,
+        vidas: 0,
+        valor_total: 0,
+        valor_net_total: 0,
+        pct_vidas: 0,
+        pct_valor: 0,
+        por_plano: new Map(),
+        por_faixa_etaria: new Map(),
+      }
+
+      // Agregar valores totais
+      const vidas = Number(row.total_vidas) || 0
+      const valorTotal = Number(row.valor_procedimentos_total) || 0
+      const valorNetTotal = Number(row.valor_faturamento_total) || 0
+
+      atual.vidas += vidas
+      atual.valor_total += valorTotal
+      atual.valor_net_total += valorNetTotal
+
+      // Drill-down por plano
+      if (plano) {
+        const planoAtual = atual.por_plano.get(plano) || { plano, vidas: 0, valor: 0, valor_net: 0 }
+        planoAtual.vidas += vidas
+        planoAtual.valor += valorTotal
+        planoAtual.valor_net += valorNetTotal
+        atual.por_plano.set(plano, planoAtual)
+      }
+
+      // Drill-down por faixa etária
+      if (faixaEtaria) {
+        const faixaAtual = atual.por_faixa_etaria.get(faixaEtaria) || { faixa_etaria: faixaEtaria, vidas: 0, valor: 0, valor_net: 0 }
+        faixaAtual.vidas += vidas
+        faixaAtual.valor += valorTotal
+        faixaAtual.valor_net += valorNetTotal
+        atual.por_faixa_etaria.set(faixaEtaria, faixaAtual)
+      }
+
+      entidadesPorStatusMap.set(key, atual)
+    })
+
+    // Converter Map para Array e calcular percentuais
     const entidadesPorStatus: Record<string, Array<{
       entidade: string
       mes_reajuste?: string | null
@@ -554,55 +648,52 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
+      por_plano: Array<{ plano: string; vidas: number; valor: number; valor_net: number }>
+      por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
     }>> = {
       ativo: [],
       inativo: [],
       vazio: [],
     }
 
-    // Agrupar por status e mês de reajuste
-    // INTEGRAÇÃO: Incluídos valores de faturamento NET e VENDA
-    ;(rowsPorEntidade || []).forEach((row: any) => {
-      const status = row.status_final || "vazio"
-      const entidade = row.entidade || ""
-      const mesReajuste = row.mes_reajuste || null
-      const vidas = Number(row.vidas) || 0
-      const valorTotal = Number(row.valor_total) || 0
-      const valorNetTotal = Number(row.valor_net_total) || 0
+    entidadesPorStatusMap.forEach((item, key) => {
+      const status = key.split('|')[2] || "vazio"
+      if (status !== "ativo" && status !== "inativo" && status !== "vazio") return
 
-      if (!entidade) return
-
-      // Calcular percentuais baseado no CONSOLIDADO GERAL (total da operadora/período)
-      // As porcentagens das entidades devem ser calculadas sobre o total das vidas dos cards mandante:
-      // - Card "Vidas Ativas" → porcentagens calculadas sobre consolidadoGeral.ativo
-      // - Card "Vidas Inativas" → porcentagens calculadas sobre consolidadoGeral.inativo
-      // - Card "Vidas Não Localizadas" → porcentagens calculadas sobre consolidadoGeral.nao_localizado
-      // - Card "Total de Vidas" → porcentagens calculadas sobre consolidadoGeral.total_vidas
+      // Calcular percentuais baseado no CONSOLIDADO GERAL
       let pctVidas = 0
       let pctValor = 0
 
       if (status === "ativo") {
-        // Porcentagem calculada sobre o total de vidas ativas do card mandante
-        pctVidas = consolidadoGeral.ativo > 0 ? vidas / consolidadoGeral.ativo : 0
-        pctValor = consolidadoGeral.valor_ativo > 0 ? valorTotal / consolidadoGeral.valor_ativo : 0
+        pctVidas = consolidadoGeral.ativo > 0 ? item.vidas / consolidadoGeral.ativo : 0
+        pctValor = consolidadoGeral.valor_ativo > 0 ? item.valor_total / consolidadoGeral.valor_ativo : 0
       } else if (status === "inativo") {
-        // Porcentagem calculada sobre o total de vidas inativas do card mandante
-        pctVidas = consolidadoGeral.inativo > 0 ? vidas / consolidadoGeral.inativo : 0
-        pctValor = consolidadoGeral.valor_inativo > 0 ? valorTotal / consolidadoGeral.valor_inativo : 0
+        pctVidas = consolidadoGeral.inativo > 0 ? item.vidas / consolidadoGeral.inativo : 0
+        pctValor = consolidadoGeral.valor_inativo > 0 ? item.valor_total / consolidadoGeral.valor_inativo : 0
       } else if (status === "vazio") {
-        // Porcentagem calculada sobre o total de vidas não localizadas do card mandante
-        pctVidas = consolidadoGeral.nao_localizado > 0 ? vidas / consolidadoGeral.nao_localizado : 0
-        pctValor = consolidadoGeral.valor_nao_localizado > 0 ? valorTotal / consolidadoGeral.valor_nao_localizado : 0
+        pctVidas = consolidadoGeral.nao_localizado > 0 ? item.vidas / consolidadoGeral.nao_localizado : 0
+        pctValor = consolidadoGeral.valor_nao_localizado > 0 ? item.valor_total / consolidadoGeral.valor_nao_localizado : 0
       }
 
       entidadesPorStatus[status].push({
-        entidade,
-        mes_reajuste: mesReajuste,
-        vidas,
-        valor_total: valorTotal,
-        valor_net_total: valorNetTotal,
+        entidade: item.entidade,
+        mes_reajuste: item.mes_reajuste,
+        vidas: item.vidas,
+        valor_total: item.valor_total,
+        valor_net_total: item.valor_net_total,
         pct_vidas: pctVidas,
         pct_valor: pctValor,
+        por_plano: Array.from(item.por_plano.values()).sort((a, b) => b.vidas - a.vidas),
+        por_faixa_etaria: Array.from(item.por_faixa_etaria.values()).sort((a, b) => {
+          // Ordenar faixas etárias numericamente
+          const getOrder = (faixa: string) => {
+            if (faixa === '00 a 18') return 0
+            if (faixa === '59+') return 10
+            const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
+            return match ? parseInt(match[1]) : 99
+          }
+          return getOrder(a.faixa_etaria) - getOrder(b.faixa_etaria)
+        }),
       })
     })
 
@@ -656,7 +747,68 @@ export async function GET(request: NextRequest) {
 
     // Calcular total agregado por entidade e mês de reajuste (todas as entidades juntas)
     // Manter separado por mês de reajuste para exibir cards individuais
-    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA
+    // 🔵 QUERY OFICIAL: Incluir drill-downs por plano e faixa_etaria
+    const entidadesTotalMap = new Map<string, {
+      entidade: string
+      mes_reajuste?: string | null
+      vidas: number
+      valor_total: number
+      valor_net_total: number
+      pct_vidas: number
+      pct_valor: number
+      por_plano: Map<string, { plano: string; vidas: number; valor: number; valor_net: number }>
+      por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+    }>()
+
+    ;[...entidadesPorStatus.ativo, ...entidadesPorStatus.inativo, ...entidadesPorStatus.vazio].forEach((item) => {
+      const key = `${item.entidade}|${item.mes_reajuste || 'null'}`
+      const atual = entidadesTotalMap.get(key) || {
+        entidade: item.entidade,
+        mes_reajuste: item.mes_reajuste,
+        vidas: 0,
+        valor_total: 0,
+        valor_net_total: 0,
+        pct_vidas: 0,
+        pct_valor: 0,
+        por_plano: new Map(),
+        por_faixa_etaria: new Map(),
+      }
+
+      atual.vidas += item.vidas
+      atual.valor_total += item.valor_total
+      atual.valor_net_total += item.valor_net_total
+
+      // Agregar drill-downs por plano
+      item.por_plano.forEach((planoItem) => {
+        const planoAtual = atual.por_plano.get(planoItem.plano) || { 
+          plano: planoItem.plano, 
+          vidas: 0, 
+          valor: 0, 
+          valor_net: 0 
+        }
+        planoAtual.vidas += planoItem.vidas
+        planoAtual.valor += planoItem.valor
+        planoAtual.valor_net += planoItem.valor_net
+        atual.por_plano.set(planoItem.plano, planoAtual)
+      })
+
+      // Agregar drill-downs por faixa etária
+      item.por_faixa_etaria.forEach((faixaItem) => {
+        const faixaAtual = atual.por_faixa_etaria.get(faixaItem.faixa_etaria) || { 
+          faixa_etaria: faixaItem.faixa_etaria, 
+          vidas: 0, 
+          valor: 0, 
+          valor_net: 0 
+        }
+        faixaAtual.vidas += faixaItem.vidas
+        faixaAtual.valor += faixaItem.valor
+        faixaAtual.valor_net += faixaItem.valor_net
+        atual.por_faixa_etaria.set(faixaItem.faixa_etaria, faixaAtual)
+      })
+
+      entidadesTotalMap.set(key, atual)
+    })
+
     const entidadesTotal: Array<{
       entidade: string
       mes_reajuste?: string | null
@@ -665,20 +817,23 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-    }> = []
-    
-    ;[...entidadesPorStatus.ativo, ...entidadesPorStatus.inativo, ...entidadesPorStatus.vazio].forEach((item) => {
-      entidadesTotal.push({
-        entidade: item.entidade,
-        mes_reajuste: item.mes_reajuste,
-        vidas: item.vidas,
-        valor_total: item.valor_total,
-        valor_net_total: item.valor_net_total,
-        // Porcentagem calculada sobre o total de vidas do card mandante "Total de Vidas"
-        pct_vidas: consolidadoGeral.total_vidas > 0 ? item.vidas / consolidadoGeral.total_vidas : 0,
-        pct_valor: consolidadoGeral.valor_total_geral > 0 ? item.valor_total / consolidadoGeral.valor_total_geral : 0,
-      })
-    })
+      por_plano: Array<{ plano: string; vidas: number; valor: number; valor_net: number }>
+      por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+    }> = Array.from(entidadesTotalMap.values()).map((item) => ({
+      ...item,
+      pct_vidas: consolidadoGeral.total_vidas > 0 ? item.vidas / consolidadoGeral.total_vidas : 0,
+      pct_valor: consolidadoGeral.valor_total_geral > 0 ? item.valor_total / consolidadoGeral.valor_total_geral : 0,
+      por_plano: Array.from(item.por_plano.values()).sort((a, b) => b.vidas - a.vidas),
+      por_faixa_etaria: Array.from(item.por_faixa_etaria.values()).sort((a, b) => {
+        const getOrder = (faixa: string) => {
+          if (faixa === '00 a 18') return 0
+          if (faixa === '59+') return 10
+          const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
+          return match ? parseInt(match[1]) : 99
+        }
+        return getOrder(a.faixa_etaria) - getOrder(b.faixa_etaria)
+      }),
+    }))
 
     // Ordenar por entidade, depois por mês de reajuste, depois por valor_total DESC
     entidadesTotal.sort((a, b) => {
@@ -1130,109 +1285,13 @@ export async function GET(request: NextRequest) {
       })
     })
 
-    // Adicionar distribuição por plano aos dados de entidade
+    // 🔵 QUERY OFICIAL: Os dados de por_plano e por_faixa_etaria já vêm de sqlPorEntidade
+    // Não precisamos mais usar porPlanoEntidade separadamente
     const entidadesComPlano = {
-      ativo: entidadesPorStatus.ativo.map((ent) => {
-        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
-        return {
-          ...ent,
-          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.ativo || [],
-        }
-      }),
-      inativo: entidadesPorStatus.inativo.map((ent) => {
-        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
-        return {
-          ...ent,
-          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.inativo || [],
-        }
-      }),
-      nao_localizado: entidadesPorStatus.vazio.map((ent) => {
-        const keyMesReajuste = ent.mes_reajuste || "sem_mes"
-        return {
-          ...ent,
-          por_plano: porPlanoEntidade[ent.entidade]?.[keyMesReajuste]?.vazio || [],
-        }
-      }),
-      total: entidadesTotal.map((ent) => {
-        // Para total, somar todos os planos de todos os status e meses de reajuste da entidade
-        // CORREÇÃO PROBLEMA 1: Somar valor_net corretamente, garantindo que valores null/undefined sejam tratados como 0
-        const planosMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
-        
-        // DEBUG: Verificar estrutura de dados
-        if (ent.entidade === "ANEC") {
-          console.log("DEBUG NET TOTAL - Estrutura porPlanoEntidade para ANEC:", {
-            tem_dados: !!porPlanoEntidade[ent.entidade],
-            keys_mes_reajuste: porPlanoEntidade[ent.entidade] ? Object.keys(porPlanoEntidade[ent.entidade]) : [],
-            exemplo_mes_reajuste: porPlanoEntidade[ent.entidade] ? Object.keys(porPlanoEntidade[ent.entidade][Object.keys(porPlanoEntidade[ent.entidade])[0]] || {}) : []
-          })
-        }
-        
-        // CORREÇÃO PROBLEMA 1: Iterar sobre meses de reajuste e status de forma explícita
-        // para garantir que o NET seja preservado corretamente
-        Object.keys(porPlanoEntidade[ent.entidade] || {}).forEach((mesReajuste) => {
-          const porMesReajuste = porPlanoEntidade[ent.entidade][mesReajuste]
-          if (!porMesReajuste) return
-          
-          // Iterar sobre cada status (ativo, inativo, vazio)
-          Object.keys(porMesReajuste).forEach((status) => {
-            const planos = porMesReajuste[status]
-            if (!planos || !Array.isArray(planos)) return
-            
-            planos.forEach((p) => {
-              const atual = planosMap.get(p.plano) || { vidas: 0, valor: 0, valor_net: 0 }
-              atual.vidas += p.vidas
-              atual.valor += p.valor
-              // CORREÇÃO PROBLEMA 1: Somar valor_net corretamente
-              // IMPORTANTE: Preservar o valor mesmo se for 0, apenas tratar null/undefined como 0
-              // Não usar || 0 porque isso transformaria 0 em 0, mas também pode mascarar problemas
-              // Usar verificação explícita para garantir que valores válidos (incluindo 0) sejam preservados
-              const valorNetAtual = (p.valor_net !== null && p.valor_net !== undefined && !isNaN(Number(p.valor_net))) 
-                ? Number(p.valor_net) 
-                : 0
-              
-              // DEBUG TEMPORÁRIO: Log para ANEC ASSIM MAX QC no total
-              if (ent.entidade === "ANEC" && p.plano && p.plano.includes("ASSIM MAX QC") && !p.plano.includes("R")) {
-                console.log("DEBUG NET TOTAL - Agregando ANEC ASSIM MAX QC:", {
-                  entidade: ent.entidade,
-                  plano: p.plano,
-                  mes_reajuste: mesReajuste,
-                  status: status,
-                  valor_net_original: p.valor_net,
-                  valor_net_type: typeof p.valor_net,
-                  valor_net_is_null: p.valor_net === null,
-                  valor_net_is_undefined: p.valor_net === undefined,
-                  valor_net_processado: valorNetAtual,
-                  acumulado_antes: atual.valor_net,
-                  acumulado_depois: atual.valor_net + valorNetAtual
-                })
-              }
-              
-              atual.valor_net += valorNetAtual
-              planosMap.set(p.plano, atual)
-            })
-          })
-        })
-        return {
-          ...ent,
-          por_plano: Array.from(planosMap.entries())
-            .map(([plano, { vidas, valor, valor_net }]) => {
-              // CORREÇÃO PROBLEMA 1: Preservar o valor_net mesmo se for 0
-              // IMPORTANTE: Não zerar o valor, apenas garantir que seja um número válido
-              // O componente frontend decide se mostra "-" ou o valor baseado em > 0
-              // Mas aqui devemos preservar o valor real (mesmo que seja 0) para que a soma esteja correta
-              const netValue = (valor_net !== null && valor_net !== undefined && !isNaN(valor_net)) 
-                ? valor_net 
-                : 0
-              return { 
-                plano, 
-                vidas, 
-                valor, 
-                valor_net: netValue
-              }
-            })
-            .sort((a, b) => b.vidas - a.vidas),
-        }
-      }),
+      ativo: entidadesPorStatus.ativo,
+      inativo: entidadesPorStatus.inativo,
+      nao_localizado: entidadesPorStatus.vazio,
+      total: entidadesTotal,
     }
 
     // 🔵 VALIDAÇÕES DE CONSISTÊNCIA (conforme solicitado)

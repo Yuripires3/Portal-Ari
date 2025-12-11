@@ -154,17 +154,35 @@ export async function GET(request: NextRequest) {
     // 🔵 QUERY OFICIAL: Usar exatamente a mesma estrutura da query oficial
     // O plano deve vir do faturamento (não dos beneficiários), conforme query oficial
     // A agregação deve garantir que a soma das faixas etárias seja igual ao total do plano
-    // 🔵 QUERY OFICIAL: Agregar por CPF primeiro para garantir que cada CPF seja contado apenas uma vez
+    // 🔵 QUERY OFICIAL: Agregar por CPF primeiro, depois calcular faixa etária baseada na idade do beneficiário
+    // IMPORTANTE: A faixa etária deve ser calculada UMA VEZ por CPF, não por mês
     const sqlFaixasEtarias = `
       SELECT
-        base_agregado.faixa_etaria,
+        CASE
+          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+          ELSE '59+'
+        END AS faixa_etaria,
         COUNT(DISTINCT base_agregado.cpf) AS vidas,
         SUM(base_agregado.valor_procedimentos) AS valor,
         SUM(base_agregado.valor_faturamento) AS valor_net
       FROM (
         SELECT
           m.cpf,
-          MAX(m.faixa_etaria) AS faixa_etaria,
+          -- Pegar a idade mais recente (pode ser NULL - será tratada como '00 a 18')
+          -- Usar MAX para pegar qualquer idade não NULL, ou NULL se todas forem NULL
+          MAX(CASE 
+            WHEN b_status.idade IS NOT NULL AND CAST(b_status.idade AS UNSIGNED) > 0 
+            THEN CAST(b_status.idade AS UNSIGNED) 
+            ELSE NULL 
+          END) AS idade,
           SUM(m.valor_procedimentos) AS valor_procedimentos,
           MAX(m.valor_faturamento) AS valor_faturamento
         FROM (
@@ -176,22 +194,11 @@ export async function GET(request: NextRequest) {
             base.valor_faturamento,
             base.valor_procedimentos,
             CASE
-              WHEN b.cpf IS NULL THEN 'vazio'
-              WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+              WHEN b_status.cpf IS NULL THEN 'vazio'
+              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
               ELSE 'inativo'
             END AS status_final,
-            CASE
-              WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-              WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-              ELSE '59+'
-            END AS faixa_etaria
+            b_status.idade
           FROM (
             SELECT
               pr.mes,
@@ -256,25 +263,46 @@ export async function GET(request: NextRequest) {
             ${beneficiarioWhereClausePlano}
             GROUP BY
               b.cpf
-          ) AS b
-            ON b.cpf = base.cpf
+          ) AS b_status
+            ON b_status.cpf = base.cpf
           WHERE base.plano IS NOT NULL AND base.plano != ''
             ${statusParam !== "total" ? `AND CASE
-              WHEN b.cpf IS NULL THEN 'vazio'
-              WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+              WHEN b_status.cpf IS NULL THEN 'vazio'
+              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
               ELSE 'inativo'
             END = ?` : ''}
             ${!isCardMae && entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
-            ${!isCardMae && mesesReajuste.length > 0 ? `AND b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
-            ${tipo ? "AND b.tipo = ?" : ""}
+            ${!isCardMae && mesesReajuste.length > 0 ? `AND b_status.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
         ) AS m
         GROUP BY
           m.cpf
       ) AS base_agregado
       GROUP BY
-        base_agregado.faixa_etaria
+        CASE
+          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+          ELSE '59+'
+        END
       ORDER BY
-        CASE base_agregado.faixa_etaria
+        CASE
+          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN 1
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN 2
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN 3
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN 4
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN 5
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN 6
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN 7
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN 8
+          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN 9
+          ELSE 10
+        END
           WHEN '00 a 18' THEN 1
           WHEN '19 a 23' THEN 2
           WHEN '24 a 28' THEN 3
@@ -320,16 +348,26 @@ export async function GET(request: NextRequest) {
       }
     }
     
-    // Adicionar tipo se especificado e não estiver em beneficiarioValuesPlano
-    if (tipo && !beneficiarioValuesPlano.includes(tipo)) {
-      queryValues.push(tipo)
-    }
-    
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
 
     // 🔵 VALIDAÇÃO: Verificar se a soma das faixas etárias bate com o total esperado
     const totalVidasFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.vidas) || 0), 0)
-    console.log(`🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Plano: ${plano}, Total vidas nas faixas: ${totalVidasFaixas}`)
+    const totalValorFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.valor) || 0), 0)
+    const totalValorNetFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.valor_net) || 0), 0)
+    
+    console.log(`🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Plano: ${plano}`)
+    console.log(`  Total vidas nas faixas: ${totalVidasFaixas}`)
+    console.log(`  Total valor nas faixas: ${totalValorFaixas}`)
+    console.log(`  Total valor NET nas faixas: ${totalValorNetFaixas}`)
+    console.log(`  Número de faixas retornadas: ${(rows || []).length}`)
+    if ((rows || []).length > 0) {
+      console.log(`  Detalhamento por faixa:`, (rows || []).map((r: any) => ({
+        faixa: r.faixa_etaria,
+        vidas: r.vidas,
+        valor: r.valor,
+        valor_net: r.valor_net
+      })))
+    }
 
     // Processar resultados
     const faixasEtarias: Array<{
