@@ -444,6 +444,38 @@ export async function GET(request: NextRequest) {
     ]
     const [rowsGeral]: any = await connection.execute(sqlGeral, valoresGeral)
 
+    // 🔵 QUERY OFICIAL: Calcular consolidado geral diretamente da query (sem agregações intermediárias)
+    // Esta query retorna o consolidado total somando TODAS as linhas retornadas por sqlGeral
+    const consolidadoGeralDireto = (rowsGeral || []).reduce((acc: any, row: any) => {
+      return {
+        ativo: acc.ativo + (Number(row.vidas_ativas) || 0),
+        inativo: acc.inativo + (Number(row.vidas_inativas) || 0),
+        nao_localizado: acc.nao_localizado + (Number(row.vidas_nao_localizadas) || 0),
+        total_vidas: acc.total_vidas + (Number(row.total_vidas) || 0),
+        valor_ativo: acc.valor_ativo + (Number(row.valor_proc_ativo) || 0),
+        valor_inativo: acc.valor_inativo + (Number(row.valor_proc_inativo) || 0),
+        valor_nao_localizado: acc.valor_nao_localizado + (Number(row.valor_proc_nao_localizado) || 0),
+        valor_total_geral: acc.valor_total_geral + (Number(row.valor_procedimentos_total) || 0),
+        valor_net_ativo: acc.valor_net_ativo + (Number(row.valor_fat_ativo) || 0),
+        valor_net_inativo: acc.valor_net_inativo + (Number(row.valor_fat_inativo) || 0),
+        valor_net_nao_localizado: acc.valor_net_nao_localizado + (Number(row.valor_fat_nao_localizado) || 0),
+        valor_net_total_geral: acc.valor_net_total_geral + (Number(row.valor_faturamento_total) || 0),
+      }
+    }, {
+      ativo: 0,
+      inativo: 0,
+      nao_localizado: 0,
+      total_vidas: 0,
+      valor_ativo: 0,
+      valor_inativo: 0,
+      valor_nao_localizado: 0,
+      valor_total_geral: 0,
+      valor_net_ativo: 0,
+      valor_net_inativo: 0,
+      valor_net_nao_localizado: 0,
+      valor_net_total_geral: 0,
+    })
+
     // Preparar valores para query por entidade
     // Valores: procedimentos (inclui operadoras), operadoras para faturamento, beneficiários gerais (para status),
     // entidades, cpf
@@ -518,9 +550,7 @@ export async function GET(request: NextRequest) {
 
     const porMesGeral = Array.from(porMesMap.values()).sort((a, b) => a.mes.localeCompare(b.mes))
 
-    // Calcular consolidado GERAL (soma de todos os meses, SEM filtro de entidade)
-    // Este é o total da operadora/período que será usado nos cards principais
-    // INTEGRAÇÃO: Incluídos campos de faturamento NET e VENDA no consolidado
+    // 🔵 QUERY OFICIAL: Tipo para consolidado
     type ConsolidadoTipo = {
       ativo: number
       inativo: number
@@ -536,37 +566,10 @@ export async function GET(request: NextRequest) {
       valor_net_total_geral: number
     }
     type PorMesTipo = ConsolidadoTipo & { mes: string }
-    const valorInicial: ConsolidadoTipo = {
-      ativo: 0,
-      inativo: 0,
-      nao_localizado: 0,
-      total_vidas: 0,
-      valor_ativo: 0,
-      valor_inativo: 0,
-      valor_nao_localizado: 0,
-      valor_total_geral: 0,
-      valor_net_ativo: 0,
-      valor_net_inativo: 0,
-      valor_net_nao_localizado: 0,
-      valor_net_total_geral: 0,
-    }
-    const consolidadoGeral = porMesGeral.reduce(
-      (acc: ConsolidadoTipo, mes: PorMesTipo): ConsolidadoTipo => ({
-        ativo: acc.ativo + mes.ativo,
-        inativo: acc.inativo + mes.inativo,
-        nao_localizado: acc.nao_localizado + mes.nao_localizado,
-        total_vidas: acc.total_vidas + mes.total_vidas,
-        valor_ativo: acc.valor_ativo + mes.valor_ativo,
-        valor_inativo: acc.valor_inativo + mes.valor_inativo,
-        valor_nao_localizado: acc.valor_nao_localizado + mes.valor_nao_localizado,
-        valor_total_geral: acc.valor_total_geral + mes.valor_total_geral,
-        valor_net_ativo: acc.valor_net_ativo + mes.valor_net_ativo,
-        valor_net_inativo: acc.valor_net_inativo + mes.valor_net_inativo,
-        valor_net_nao_localizado: acc.valor_net_nao_localizado + mes.valor_net_nao_localizado,
-        valor_net_total_geral: acc.valor_net_total_geral + mes.valor_net_total_geral,
-      }),
-      valorInicial
-    )
+    
+    // 🔵 QUERY OFICIAL: Usar o consolidado calculado diretamente da query (sem agregações intermediárias)
+    // O consolidadoGeralDireto já foi calculado somando TODAS as linhas retornadas pela query
+    const consolidadoGeral: ConsolidadoTipo = consolidadoGeralDireto
 
     // Consolidado para retorno (sempre usa o geral, independente de filtro de entidade)
     const consolidado = consolidadoGeral
@@ -582,11 +585,24 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-      por_plano: Map<string, { plano: string; vidas: number; valor: number; valor_net: number }>
+      por_plano: Map<string, { 
+        plano: string
+        vidas: number
+        valor: number
+        valor_net: number
+        por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+      }>
       por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
     }>()
 
     // Agrupar por entidade, mes_reajuste e status_final
+    // DEBUG: Criar um mapa para rastrear linhas específicas do CLASSIFOC QC
+    const debugMap = new Map<string, any[]>()
+    // DEBUG: Rastrear todas as linhas processadas para verificar duplicações
+    const linhasProcessadas = new Map<string, { count: number; valores: any[] }>()
+    // CORREÇÃO: Usar um mapa para garantir que cada combinação única seja processada apenas uma vez
+    const linhasUnicasMap = new Map<string, any>()
+    
     ;(rowsPorEntidade || []).forEach((row: any) => {
       const status = row.status_final || "vazio"
       const entidade = row.entidade || ""
@@ -595,6 +611,67 @@ export async function GET(request: NextRequest) {
       const faixaEtaria = row.faixa_etaria || ""
       
       if (!entidade) return
+
+      // CORREÇÃO: Criar chave única para cada combinação
+      const linhaKey = `${entidade}|${mesReajuste || 'null'}|${status}|${plano}|${faixaEtaria}`
+      
+      // DEBUG: Verificar duplicações
+      const existing = linhasProcessadas.get(linhaKey)
+      if (existing) {
+        existing.count++
+        existing.valores.push(row)
+        if (entidade === "ANEC" && plano && plano.includes("CLASSIFOC QC")) {
+          console.warn(`⚠️ DUPLICAÇÃO DETECTADA: ${linhaKey} (${existing.count} vezes)`)
+          console.warn(`  Valores:`, existing.valores.map((r: any) => ({
+            total_vidas: r.total_vidas,
+            valor_procedimentos_total: r.valor_procedimentos_total
+          })))
+        }
+      } else {
+        linhasProcessadas.set(linhaKey, { count: 1, valores: [row] })
+      }
+      
+      // CORREÇÃO: Se já processamos esta combinação, usar o valor acumulado
+      if (linhasUnicasMap.has(linhaKey)) {
+        const existente = linhasUnicasMap.get(linhaKey)!
+        existente.total_vidas += Number(row.total_vidas) || 0
+        existente.valor_procedimentos_total += Number(row.valor_procedimentos_total) || 0
+        existente.valor_faturamento_total += Number(row.valor_faturamento_total) || 0
+        return // Não processar novamente, já foi acumulado
+      }
+      
+      // Armazenar linha única
+      linhasUnicasMap.set(linhaKey, {
+        ...row,
+        total_vidas: Number(row.total_vidas) || 0,
+        valor_procedimentos_total: Number(row.valor_procedimentos_total) || 0,
+        valor_faturamento_total: Number(row.valor_faturamento_total) || 0
+      })
+
+    })
+    
+    // CORREÇÃO: Processar apenas linhas únicas
+    linhasUnicasMap.forEach((row, linhaKey) => {
+      const status = row.status_final || "vazio"
+      const entidade = row.entidade || ""
+      const mesReajuste = row.mes_reajuste || null
+      const plano = row.plano || ""
+      const faixaEtaria = row.faixa_etaria || ""
+      
+      // DEBUG: Rastrear linhas do CLASSIFOC QC da ANEC em julho
+      if (entidade === "ANEC" && plano && plano.includes("CLASSIFOC QC") && mesReajuste && mesReajuste.toLowerCase().includes("julho")) {
+        const debugKey = `${entidade}|${mesReajuste}|${status}|${plano}`
+        if (!debugMap.has(debugKey)) {
+          debugMap.set(debugKey, [])
+        }
+        debugMap.get(debugKey)!.push({
+          faixa_etaria: faixaEtaria,
+          total_vidas: row.total_vidas,
+          valor_procedimentos_total: row.valor_procedimentos_total,
+          valor_faturamento_total: row.valor_faturamento_total,
+          row: row
+        })
+      }
 
       const key = `${entidade}|${mesReajuste || 'null'}|${status}`
       const atual = entidadesPorStatusMap.get(key) || {
@@ -609,34 +686,95 @@ export async function GET(request: NextRequest) {
         por_faixa_etaria: new Map(),
       }
 
-      // Agregar valores totais
-      const vidas = Number(row.total_vidas) || 0
-      const valorTotal = Number(row.valor_procedimentos_total) || 0
-      const valorNetTotal = Number(row.valor_faturamento_total) || 0
+      // Agregar valores totais (já acumulados no linhasUnicasMap)
+      const vidas = row.total_vidas || 0
+      const valorTotal = row.valor_procedimentos_total || 0
+      const valorNetTotal = row.valor_faturamento_total || 0
 
       atual.vidas += vidas
       atual.valor_total += valorTotal
       atual.valor_net_total += valorNetTotal
 
+      // CORREÇÃO: Garantir que todas as linhas sejam contadas, mesmo sem faixa_etaria
+      const faixaEtariaFinal = faixaEtaria || "Não informado"
+
       // Drill-down por plano
       if (plano) {
-        const planoAtual = atual.por_plano.get(plano) || { plano, vidas: 0, valor: 0, valor_net: 0 }
+        const planoAtual = atual.por_plano.get(plano) || { 
+          plano, 
+          vidas: 0, 
+          valor: 0, 
+          valor_net: 0,
+          por_faixa_etaria: new Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>()
+        }
+        const vidasAntes = planoAtual.vidas
         planoAtual.vidas += vidas
         planoAtual.valor += valorTotal
         planoAtual.valor_net += valorNetTotal
+        
+        // Adicionar faixa etária ao plano específico
+        const faixaPlanoAtual = planoAtual.por_faixa_etaria.get(faixaEtariaFinal) || { 
+          faixa_etaria: faixaEtariaFinal, 
+          vidas: 0, 
+          valor: 0, 
+          valor_net: 0 
+        }
+        faixaPlanoAtual.vidas += vidas
+        faixaPlanoAtual.valor += valorTotal
+        faixaPlanoAtual.valor_net += valorNetTotal
+        planoAtual.por_faixa_etaria.set(faixaEtariaFinal, faixaPlanoAtual)
+        
+        // DEBUG: Log para CLASSIFOC QC durante a construção
+        if (entidade === "ANEC" && plano.includes("CLASSIFOC QC") && mesReajuste && mesReajuste.toLowerCase().includes("julho")) {
+          console.log(`🔍 DEBUG CONSTRUÇÃO POR_PLANO - ${entidade} ${mesReajuste} ${status} ${plano}:`)
+          console.log(`  Faixa: ${faixaEtariaFinal}, Vidas desta linha: ${vidas}, Vidas antes: ${vidasAntes}, Vidas depois: ${planoAtual.vidas}`)
+        }
+        
         atual.por_plano.set(plano, planoAtual)
       }
 
-      // Drill-down por faixa etária
-      if (faixaEtaria) {
-        const faixaAtual = atual.por_faixa_etaria.get(faixaEtaria) || { faixa_etaria: faixaEtaria, vidas: 0, valor: 0, valor_net: 0 }
-        faixaAtual.vidas += vidas
-        faixaAtual.valor += valorTotal
-        faixaAtual.valor_net += valorNetTotal
-        atual.por_faixa_etaria.set(faixaEtaria, faixaAtual)
+      // Drill-down por faixa etária (da entidade)
+      const faixaAtual = atual.por_faixa_etaria.get(faixaEtariaFinal) || { faixa_etaria: faixaEtariaFinal, vidas: 0, valor: 0, valor_net: 0 }
+      faixaAtual.vidas += vidas
+      faixaAtual.valor += valorTotal
+      faixaAtual.valor_net += valorNetTotal
+      atual.por_faixa_etaria.set(faixaEtariaFinal, faixaAtual)
+      
+      // DEBUG: Log para linhas sem faixa etária
+      if (!faixaEtaria && entidade === "ANEC" && plano && plano.includes("CLASSIFOC QC")) {
+        console.warn(`⚠️ LINHA SEM FAIXA ETÁRIA: ${entidade} ${mesReajuste} ${status} ${plano} - ${vidas} vidas`)
       }
 
       entidadesPorStatusMap.set(key, atual)
+    })
+
+    // DEBUG: Log detalhado para CLASSIFOC QC
+    debugMap.forEach((linhas, key) => {
+      const parts = key.split('|')
+      const entidade = parts[0]
+      const mesReajuste = parts[1]
+      const status = parts[2]
+      const plano = parts[3]
+      
+      const somaVidas = linhas.reduce((sum, l) => sum + (Number(l.total_vidas) || 0), 0)
+      console.log(`🔍 DEBUG CLASSIFOC QC - ${entidade} ${mesReajuste} ${status} ${plano}:`)
+      console.log(`  Total de linhas únicas processadas: ${linhas.length}`)
+      console.log(`  Soma de vidas das faixas: ${somaVidas}`)
+      linhas.forEach(l => {
+        console.log(`    Faixa ${l.faixa_etaria}: ${l.total_vidas} vidas`)
+      })
+      
+      // Verificar se há duplicações na query original
+      const linhasOriginais = (rowsPorEntidade || []).filter((r: any) => 
+        r.entidade === entidade && 
+        r.plano && r.plano.includes("CLASSIFOC QC") && 
+        r.mes_reajuste && r.mes_reajuste.toLowerCase().includes("julho") &&
+        r.status_final === status
+      )
+      console.log(`  Total de linhas na query original: ${linhasOriginais.length}`)
+      if (linhasOriginais.length !== linhas.length) {
+        console.warn(`  ⚠️ DIFERENÇA: Query original tem ${linhasOriginais.length} linhas, mas processamos ${linhas.length} linhas únicas`)
+      }
     })
 
     // Converter Map para Array e calcular percentuais
@@ -648,7 +786,13 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-      por_plano: Array<{ plano: string; vidas: number; valor: number; valor_net: number }>
+      por_plano: Array<{ 
+        plano: string
+        vidas: number
+        valor: number
+        valor_net: number
+        por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+      }>
       por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
     }>> = {
       ativo: [],
@@ -675,6 +819,44 @@ export async function GET(request: NextRequest) {
         pctValor = consolidadoGeral.valor_nao_localizado > 0 ? item.valor_total / consolidadoGeral.valor_nao_localizado : 0
       }
 
+      // Função auxiliar para ordenar faixas etárias
+      const getOrderFaixa = (faixa: string) => {
+        if (faixa === '00 a 18') return 0
+        if (faixa === '59+') return 10
+        if (faixa === 'Não informado') return 11
+        const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
+        return match ? parseInt(match[1]) : 99
+      }
+      
+      const porPlanoArray = Array.from(item.por_plano.values()).map(plano => ({
+        ...plano,
+        por_faixa_etaria: Array.from(plano.por_faixa_etaria.values()).sort((a, b) => 
+          getOrderFaixa(a.faixa_etaria) - getOrderFaixa(b.faixa_etaria)
+        )
+      })).sort((a, b) => b.vidas - a.vidas)
+      
+      const porFaixaArray = Array.from(item.por_faixa_etaria.values()).sort((a, b) => 
+        getOrderFaixa(a.faixa_etaria) - getOrderFaixa(b.faixa_etaria)
+      )
+
+      // DEBUG: Verificar CLASSIFOC QC após agregação
+      if (item.entidade === "ANEC" && item.mes_reajuste && item.mes_reajuste.toLowerCase().includes("julho")) {
+        const classifocPlano = porPlanoArray.find(p => p.plano && p.plano.includes("CLASSIFOC QC"))
+        if (classifocPlano) {
+          const somaFaixasPlano = classifocPlano.por_faixa_etaria.reduce((sum, f) => sum + f.vidas, 0)
+          const somaFaixasEntidade = porFaixaArray.reduce((sum, f) => sum + f.vidas, 0)
+          console.log(`🔍 DEBUG CLASSIFOC QC APÓS AGREGAÇÃO - ${item.entidade} ${item.mes_reajuste} ${status}:`)
+          console.log(`  Plano CLASSIFOC QC - Total vidas: ${classifocPlano.vidas}`)
+          console.log(`  Soma das faixas do plano: ${somaFaixasPlano}`)
+          console.log(`  Soma de todas as faixas da entidade: ${somaFaixasEntidade}`)
+          console.log(`  Total da entidade: ${item.vidas}`)
+          console.log(`  Faixas do plano CLASSIFOC QC:`)
+          classifocPlano.por_faixa_etaria.forEach(f => {
+            console.log(`    ${f.faixa_etaria}: ${f.vidas} vidas`)
+          })
+        }
+      }
+
       entidadesPorStatus[status].push({
         entidade: item.entidade,
         mes_reajuste: item.mes_reajuste,
@@ -683,17 +865,8 @@ export async function GET(request: NextRequest) {
         valor_net_total: item.valor_net_total,
         pct_vidas: pctVidas,
         pct_valor: pctValor,
-        por_plano: Array.from(item.por_plano.values()).sort((a, b) => b.vidas - a.vidas),
-        por_faixa_etaria: Array.from(item.por_faixa_etaria.values()).sort((a, b) => {
-          // Ordenar faixas etárias numericamente
-          const getOrder = (faixa: string) => {
-            if (faixa === '00 a 18') return 0
-            if (faixa === '59+') return 10
-            const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
-            return match ? parseInt(match[1]) : 99
-          }
-          return getOrder(a.faixa_etaria) - getOrder(b.faixa_etaria)
-        }),
+        por_plano: porPlanoArray,
+        por_faixa_etaria: porFaixaArray,
       })
     })
 
@@ -745,6 +918,191 @@ export async function GET(request: NextRequest) {
       console.log(`  Não Localizado: ${totalVidasFilhosPorStatus.vazio} = ${consolidadoGeral.nao_localizado}`)
     }
 
+    // 🔵 VALIDAÇÃO: Verificar se a soma das faixas etárias corresponde ao total da entidade/status
+    console.log("🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Verificando entidades por status:")
+    const validacoesFaixas: string[] = []
+    
+    Object.keys(entidadesPorStatus).forEach((status) => {
+      entidadesPorStatus[status].forEach((entidade) => {
+        const somaVidasFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.vidas, 0)
+        const somaValorFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.valor, 0)
+        const somaValorNetFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.valor_net, 0)
+        
+        const diffVidas = Math.abs(somaVidasFaixas - entidade.vidas)
+        const diffValor = Math.abs(somaValorFaixas - entidade.valor_total)
+        const diffValorNet = Math.abs(somaValorNetFaixas - entidade.valor_net_total)
+        
+        if (diffVidas > 0.01 || diffValor > 0.01 || diffValorNet > 0.01) {
+          validacoesFaixas.push(
+            `⚠️ ${status.toUpperCase()} - ${entidade.entidade}${entidade.mes_reajuste ? ` (${entidade.mes_reajuste})` : ''}: ` +
+            `Vidas faixas (${somaVidasFaixas}) != Total (${entidade.vidas}), ` +
+            `Valor faixas (${somaValorFaixas}) != Total (${entidade.valor_total}), ` +
+            `Valor Net faixas (${somaValorNetFaixas}) != Total (${entidade.valor_net_total})`
+          )
+        }
+      })
+    })
+    
+    if (validacoesFaixas.length > 0) {
+      console.warn("🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Problemas encontrados:")
+      validacoesFaixas.forEach(v => console.warn(`  ${v}`))
+    } else {
+      console.log("✅ VALIDAÇÃO FAIXAS ETÁRIAS: Todas as somas de faixas estão corretas para entidades por status!")
+    }
+
+    // Validação mais precisa: verificar nas linhas originais da query
+    const validacoesFaixasPlanosDetalhadas: string[] = []
+    const faixasPorPlanoMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
+    
+    // DEBUG: Rastrear linhas do CLASSIFOC QC para verificar duplicações
+    const debugClassifocLinhas: any[] = []
+    
+    ;(rowsPorEntidade || []).forEach((row: any) => {
+      const status = row.status_final || "vazio"
+      const entidade = row.entidade || ""
+      const mesReajuste = row.mes_reajuste || null
+      const plano = row.plano || ""
+      const faixaEtaria = row.faixa_etaria || "Não informado"
+      
+      if (!entidade || !plano) return
+      
+      // DEBUG: Rastrear CLASSIFOC QC
+      if (entidade === "ANEC" && plano && plano.includes("CLASSIFOC QC") && mesReajuste && mesReajuste.toLowerCase().includes("julho")) {
+        debugClassifocLinhas.push({
+          status,
+          entidade,
+          mesReajuste,
+          plano,
+          faixaEtaria,
+          total_vidas: row.total_vidas,
+          valor_procedimentos_total: row.valor_procedimentos_total,
+          valor_faturamento_total: row.valor_faturamento_total
+        })
+      }
+      
+      const key = `${entidade}|${mesReajuste || 'null'}|${status}|${plano}|${faixaEtaria}`
+      const atual = faixasPorPlanoMap.get(key) || { vidas: 0, valor: 0, valor_net: 0 }
+      
+      atual.vidas += Number(row.total_vidas) || 0
+      atual.valor += Number(row.valor_procedimentos_total) || 0
+      atual.valor_net += Number(row.valor_faturamento_total) || 0
+      
+      faixasPorPlanoMap.set(key, atual)
+    })
+    
+    // DEBUG: Log das linhas do CLASSIFOC QC
+    if (debugClassifocLinhas.length > 0) {
+      console.log(`🔍 DEBUG CLASSIFOC QC - Linhas originais da query (${debugClassifocLinhas.length} linhas):`)
+      const somaPorStatus = new Map<string, number>()
+      debugClassifocLinhas.forEach(l => {
+        const statusKey = l.status || "vazio"
+        const atual = somaPorStatus.get(statusKey) || 0
+        somaPorStatus.set(statusKey, atual + (Number(l.total_vidas) || 0))
+        console.log(`  ${l.status} - ${l.faixaEtaria}: ${l.total_vidas} vidas`)
+      })
+      somaPorStatus.forEach((soma, status) => {
+        console.log(`  Total ${status}: ${soma} vidas`)
+      })
+      
+      // Verificar se há duplicações
+      const linhasUnicas = new Set(debugClassifocLinhas.map(l => `${l.status}|${l.faixaEtaria}`))
+      if (linhasUnicas.size !== debugClassifocLinhas.length) {
+        console.warn(`⚠️ DUPLICAÇÃO: ${debugClassifocLinhas.length} linhas, mas apenas ${linhasUnicas.size} combinações únicas`)
+      }
+    }
+    
+    // DEBUG: Log do mapa de faixas por plano
+    if (debugClassifocLinhas.length > 0) {
+      console.log(`🔍 DEBUG CLASSIFOC QC - FaixasPorPlanoMap:`)
+      Array.from(faixasPorPlanoMap.entries())
+        .filter(([key]) => key.includes("ANEC") && key.includes("CLASSIFOC QC") && key.toLowerCase().includes("julho"))
+        .forEach(([key, valores]) => {
+          const parts = key.split('|')
+          console.log(`  ${parts[2]} - ${parts[4]}: ${valores.vidas} vidas`)
+        })
+    }
+    
+    // Função auxiliar para normalizar mês de reajuste para comparação
+    const normalizarMesReajuste = (mes: string | null | undefined): string => {
+      if (!mes) return 'null'
+      // Normalizar para minúsculas e remover espaços extras
+      return mes.toLowerCase().trim()
+    }
+    
+    // Agora validar: para cada plano em cada entidade/status, somar suas faixas
+    Object.keys(entidadesPorStatus).forEach((status) => {
+      entidadesPorStatus[status].forEach((entidade) => {
+        entidade.por_plano.forEach((plano) => {
+          // Somar todas as faixas deste plano nesta entidade/status
+          const mesReajusteNormalizado = normalizarMesReajuste(entidade.mes_reajuste)
+          const faixasFiltradas = Array.from(faixasPorPlanoMap.entries())
+            .filter(([key]) => {
+              const parts = key.split('|')
+              const mesReajusteKey = normalizarMesReajuste(parts[1])
+              return parts[0] === entidade.entidade &&
+                     mesReajusteKey === mesReajusteNormalizado &&
+                     parts[2] === status &&
+                     parts[3] === plano.plano
+            })
+          
+          const somaFaixas = faixasFiltradas.reduce((acc, [, valores]) => ({
+            vidas: acc.vidas + valores.vidas,
+            valor: acc.valor + valores.valor,
+            valor_net: acc.valor_net + valores.valor_net
+          }), { vidas: 0, valor: 0, valor_net: 0 })
+          
+          const diffVidas = Math.abs(somaFaixas.vidas - plano.vidas)
+          const diffValor = Math.abs(somaFaixas.valor - plano.valor)
+          const diffValorNet = Math.abs(somaFaixas.valor_net - plano.valor_net)
+          
+          // Validar usando por_faixa_etaria do plano (se disponível)
+          const somaFaixasPlano = plano.por_faixa_etaria ? 
+            plano.por_faixa_etaria.reduce((acc, f) => ({
+              vidas: acc.vidas + f.vidas,
+              valor: acc.valor + f.valor,
+              valor_net: acc.valor_net + f.valor_net
+            }), { vidas: 0, valor: 0, valor_net: 0 }) :
+            somaFaixas
+          
+          const diffVidasPlano = Math.abs(somaFaixasPlano.vidas - plano.vidas)
+          const diffValorPlano = Math.abs(somaFaixasPlano.valor - plano.valor)
+          const diffValorNetPlano = Math.abs(somaFaixasPlano.valor_net - plano.valor_net)
+          
+          // DEBUG detalhado para CLASSIFOC QC
+          if (entidade.entidade === "ANEC" && plano.plano && plano.plano.includes("CLASSIFOC QC") && entidade.mes_reajuste && entidade.mes_reajuste.toLowerCase().includes("julho")) {
+            console.log(`🔍 DEBUG VALIDAÇÃO CLASSIFOC QC - ${entidade.entidade} ${entidade.mes_reajuste} ${status} ${plano.plano}:`)
+            console.log(`  Total vidas do plano (por_plano): ${plano.vidas}`)
+            console.log(`  Soma vidas das faixas do plano (por_faixa_etaria): ${somaFaixasPlano.vidas}`)
+            console.log(`  Soma vidas das faixas (faixasPorPlanoMap): ${somaFaixas.vidas}`)
+            console.log(`  Diferença (plano): ${diffVidasPlano}`)
+            console.log(`  Diferença (mapa): ${diffVidas}`)
+            if (plano.por_faixa_etaria) {
+              console.log(`  Faixas do plano:`)
+              plano.por_faixa_etaria.forEach(f => {
+                console.log(`    ${f.faixa_etaria}: ${f.vidas} vidas`)
+              })
+            }
+          }
+          
+          if (diffVidasPlano > 0.01 || diffValorPlano > 0.01 || diffValorNetPlano > 0.01) {
+            validacoesFaixasPlanosDetalhadas.push(
+              `⚠️ ${status.toUpperCase()} - ${entidade.entidade}${entidade.mes_reajuste ? ` (${entidade.mes_reajuste})` : ''} - Plano ${plano.plano}: ` +
+              `Vidas faixas (${somaFaixasPlano.vidas}) != Total plano (${plano.vidas}), ` +
+              `Valor faixas (${somaFaixasPlano.valor}) != Total plano (${plano.valor}), ` +
+              `Valor Net faixas (${somaFaixasPlano.valor_net}) != Total plano (${plano.valor_net})`
+            )
+          }
+        })
+      })
+    })
+    
+    if (validacoesFaixasPlanosDetalhadas.length > 0) {
+      console.warn("🔵 VALIDAÇÃO FAIXAS ETÁRIAS POR PLANO - Problemas encontrados:")
+      validacoesFaixasPlanosDetalhadas.forEach(v => console.warn(`  ${v}`))
+    } else {
+      console.log("✅ VALIDAÇÃO FAIXAS ETÁRIAS POR PLANO: Todas as somas de faixas estão corretas para os planos!")
+    }
+
     // Calcular total agregado por entidade e mês de reajuste (todas as entidades juntas)
     // Manter separado por mês de reajuste para exibir cards individuais
     // 🔵 QUERY OFICIAL: Incluir drill-downs por plano e faixa_etaria
@@ -756,7 +1114,13 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-      por_plano: Map<string, { plano: string; vidas: number; valor: number; valor_net: number }>
+      por_plano: Map<string, { 
+        plano: string
+        vidas: number
+        valor: number
+        valor_net: number
+        por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+      }>
       por_faixa_etaria: Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
     }>()
 
@@ -784,11 +1148,27 @@ export async function GET(request: NextRequest) {
           plano: planoItem.plano, 
           vidas: 0, 
           valor: 0, 
-          valor_net: 0 
+          valor_net: 0,
+          por_faixa_etaria: new Map<string, { faixa_etaria: string; vidas: number; valor: number; valor_net: number }>()
         }
         planoAtual.vidas += planoItem.vidas
         planoAtual.valor += planoItem.valor
         planoAtual.valor_net += planoItem.valor_net
+        
+        // Agregar faixas etárias do plano
+        planoItem.por_faixa_etaria.forEach((faixaItem) => {
+          const faixaAtual = planoAtual.por_faixa_etaria.get(faixaItem.faixa_etaria) || {
+            faixa_etaria: faixaItem.faixa_etaria,
+            vidas: 0,
+            valor: 0,
+            valor_net: 0
+          }
+          faixaAtual.vidas += faixaItem.vidas
+          faixaAtual.valor += faixaItem.valor
+          faixaAtual.valor_net += faixaItem.valor_net
+          planoAtual.por_faixa_etaria.set(faixaItem.faixa_etaria, faixaAtual)
+        })
+        
         atual.por_plano.set(planoItem.plano, planoAtual)
       })
 
@@ -809,6 +1189,14 @@ export async function GET(request: NextRequest) {
       entidadesTotalMap.set(key, atual)
     })
 
+    const getOrderFaixaTotal = (faixa: string) => {
+      if (faixa === '00 a 18') return 0
+      if (faixa === '59+') return 10
+      if (faixa === 'Não informado') return 11
+      const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
+      return match ? parseInt(match[1]) : 99
+    }
+    
     const entidadesTotal: Array<{
       entidade: string
       mes_reajuste?: string | null
@@ -817,22 +1205,27 @@ export async function GET(request: NextRequest) {
       valor_net_total: number
       pct_vidas: number
       pct_valor: number
-      por_plano: Array<{ plano: string; vidas: number; valor: number; valor_net: number }>
+      por_plano: Array<{ 
+        plano: string
+        vidas: number
+        valor: number
+        valor_net: number
+        por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
+      }>
       por_faixa_etaria: Array<{ faixa_etaria: string; vidas: number; valor: number; valor_net: number }>
     }> = Array.from(entidadesTotalMap.values()).map((item) => ({
       ...item,
       pct_vidas: consolidadoGeral.total_vidas > 0 ? item.vidas / consolidadoGeral.total_vidas : 0,
       pct_valor: consolidadoGeral.valor_total_geral > 0 ? item.valor_total / consolidadoGeral.valor_total_geral : 0,
-      por_plano: Array.from(item.por_plano.values()).sort((a, b) => b.vidas - a.vidas),
-      por_faixa_etaria: Array.from(item.por_faixa_etaria.values()).sort((a, b) => {
-        const getOrder = (faixa: string) => {
-          if (faixa === '00 a 18') return 0
-          if (faixa === '59+') return 10
-          const match = faixa.match(/(\d+)\s+a\s+(\d+)/)
-          return match ? parseInt(match[1]) : 99
-        }
-        return getOrder(a.faixa_etaria) - getOrder(b.faixa_etaria)
-      }),
+      por_plano: Array.from(item.por_plano.values()).map(plano => ({
+        ...plano,
+        por_faixa_etaria: Array.from(plano.por_faixa_etaria.values()).sort((a, b) => 
+          getOrderFaixaTotal(a.faixa_etaria) - getOrderFaixaTotal(b.faixa_etaria)
+        )
+      })).sort((a, b) => b.vidas - a.vidas),
+      por_faixa_etaria: Array.from(item.por_faixa_etaria.values()).sort((a, b) => 
+        getOrderFaixaTotal(a.faixa_etaria) - getOrderFaixaTotal(b.faixa_etaria)
+      ),
     }))
 
     // Ordenar por entidade, depois por mês de reajuste, depois por valor_total DESC
@@ -847,6 +1240,80 @@ export async function GET(request: NextRequest) {
       }
       return b.valor_total - a.valor_total
     })
+
+    // 🔵 VALIDAÇÃO: Verificar se a soma das faixas etárias corresponde ao total da entidade (entidadesTotal)
+    console.log("🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Verificando entidades total:")
+    const validacoesFaixasTotal: string[] = []
+    
+    entidadesTotal.forEach((entidade) => {
+      const somaVidasFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.vidas, 0)
+      const somaValorFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.valor, 0)
+      const somaValorNetFaixas = entidade.por_faixa_etaria.reduce((sum, f) => sum + f.valor_net, 0)
+      
+      const diffVidas = Math.abs(somaVidasFaixas - entidade.vidas)
+      const diffValor = Math.abs(somaValorFaixas - entidade.valor_total)
+      const diffValorNet = Math.abs(somaValorNetFaixas - entidade.valor_net_total)
+      
+      if (diffVidas > 0.01 || diffValor > 0.01 || diffValorNet > 0.01) {
+        validacoesFaixasTotal.push(
+          `⚠️ TOTAL - ${entidade.entidade}${entidade.mes_reajuste ? ` (${entidade.mes_reajuste})` : ''}: ` +
+          `Vidas faixas (${somaVidasFaixas}) != Total (${entidade.vidas}), ` +
+          `Valor faixas (${somaValorFaixas}) != Total (${entidade.valor_total}), ` +
+          `Valor Net faixas (${somaValorNetFaixas}) != Total (${entidade.valor_net_total})`
+        )
+      }
+    })
+    
+    if (validacoesFaixasTotal.length > 0) {
+      console.warn("🔵 VALIDAÇÃO FAIXAS ETÁRIAS TOTAL - Problemas encontrados:")
+      validacoesFaixasTotal.forEach(v => console.warn(`  ${v}`))
+    } else {
+      console.log("✅ VALIDAÇÃO FAIXAS ETÁRIAS TOTAL: Todas as somas de faixas estão corretas para entidades total!")
+    }
+
+    // 🔵 VALIDAÇÃO: Verificar se a soma das faixas etárias corresponde ao total do plano (entidadesTotal)
+    console.log("🔵 VALIDAÇÃO FAIXAS ETÁRIAS POR PLANO - Verificando planos em entidades total:")
+    const validacoesFaixasPlanosTotal: string[] = []
+    
+    entidadesTotal.forEach((entidade) => {
+      entidade.por_plano.forEach((plano) => {
+        // Somar todas as faixas deste plano nesta entidade (todas as faixas que pertencem a este plano)
+        // Como não temos a informação direta de qual faixa pertence a qual plano no entidadesTotal,
+        // vamos usar os dados originais da query para validar
+        const somaFaixas = Array.from(faixasPorPlanoMap.entries())
+          .filter(([key]) => {
+            const parts = key.split('|')
+            return parts[0] === entidade.entidade &&
+                   parts[1] === (entidade.mes_reajuste || 'null') &&
+                   parts[3] === plano.plano
+          })
+          .reduce((acc, [, valores]) => ({
+            vidas: acc.vidas + valores.vidas,
+            valor: acc.valor + valores.valor,
+            valor_net: acc.valor_net + valores.valor_net
+          }), { vidas: 0, valor: 0, valor_net: 0 })
+        
+        const diffVidas = Math.abs(somaFaixas.vidas - plano.vidas)
+        const diffValor = Math.abs(somaFaixas.valor - plano.valor)
+        const diffValorNet = Math.abs(somaFaixas.valor_net - plano.valor_net)
+        
+        if (diffVidas > 0.01 || diffValor > 0.01 || diffValorNet > 0.01) {
+          validacoesFaixasPlanosTotal.push(
+            `⚠️ TOTAL - ${entidade.entidade}${entidade.mes_reajuste ? ` (${entidade.mes_reajuste})` : ''} - Plano ${plano.plano}: ` +
+            `Vidas faixas (${somaFaixas.vidas}) != Total plano (${plano.vidas}), ` +
+            `Valor faixas (${somaFaixas.valor}) != Total plano (${plano.valor}), ` +
+            `Valor Net faixas (${somaFaixas.valor_net}) != Total plano (${plano.valor_net})`
+          )
+        }
+      })
+    })
+    
+    if (validacoesFaixasPlanosTotal.length > 0) {
+      console.warn("🔵 VALIDAÇÃO FAIXAS ETÁRIAS POR PLANO TOTAL - Problemas encontrados:")
+      validacoesFaixasPlanosTotal.forEach(v => console.warn(`  ${v}`))
+    } else {
+      console.log("✅ VALIDAÇÃO FAIXAS ETÁRIAS POR PLANO TOTAL: Todas as somas de faixas estão corretas para os planos em entidades total!")
+    }
 
     // Query para distribuição por plano nos cards principais (por status)
     // 🔵 QUERY OFICIAL: Usando a mesma estrutura base da query oficial
@@ -1351,6 +1818,23 @@ export async function GET(request: NextRequest) {
     } else {
       console.log("✅ VALIDAÇÕES DE CONSISTÊNCIA: Todas as validações passaram!")
     }
+
+    // 🔵 QUERY OFICIAL: Log dos valores retornados para debug
+    console.log("🔵 VALIDAÇÃO - Consolidado Geral (calculado diretamente da query):", {
+      ativo: consolidado.ativo,
+      inativo: consolidado.inativo,
+      nao_localizado: consolidado.nao_localizado,
+      total_vidas: consolidado.total_vidas,
+      valor_ativo: consolidado.valor_ativo,
+      valor_inativo: consolidado.valor_inativo,
+      valor_nao_localizado: consolidado.valor_nao_localizado,
+      valor_total_geral: consolidado.valor_total_geral,
+      valor_net_ativo: consolidado.valor_net_ativo,
+      valor_net_inativo: consolidado.valor_net_inativo,
+      valor_net_nao_localizado: consolidado.valor_net_nao_localizado,
+      valor_net_total_geral: consolidado.valor_net_total_geral,
+    })
+    console.log("🔵 VALIDAÇÃO - Total de linhas retornadas pela query:", rowsGeral?.length || 0)
 
     return NextResponse.json({
       por_mes: porMesGeral,

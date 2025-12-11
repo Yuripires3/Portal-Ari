@@ -107,202 +107,120 @@ export async function GET(request: NextRequest) {
     procedimentosConditions.push(`DATE_FORMAT(p.data_competencia, '%Y-%m') IN (${mesesReferencia.map(() => "?").join(",")})`)
     procedimentosValues.push(...mesesReferencia)
 
-    // Detectar contexto: card MÃE ou card FILHO
-    // Cards MÃE: não filtram por entidade/mês de reajuste (mesmo que venham nos parâmetros)
-    // Cards FILHOS: filtram por entidade/mês de reajuste quando aplicável
-    const isCardMae = entidades.length === 0 && mesesReajuste.length === 0
+    // 🔵 QUERY PERFEITA: Não usar filtros diferentes na subconsulta de beneficiários
+    // Todos os filtros (entidade, mes_reajuste, plano) são aplicados no WHERE final
+    // A subconsulta de beneficiários usa apenas o filtro de operadora
 
-    // WHERE de beneficiários - mesma lógica dos cards correspondentes
-    const beneficiarioConditionsPlano: string[] = []
-    const beneficiarioValuesPlano: any[] = []
-
-    if (operadoras.length > 0) {
-      beneficiarioConditionsPlano.push(`b.operadora IN (${operadoras.map(() => "?").join(",")})`)
-      beneficiarioValuesPlano.push(...operadoras)
-    }
-
-    // Para cards FILHOS, aplicar filtros de entidade e mês de reajuste
-    if (!isCardMae) {
-      if (entidades.length > 0) {
-        beneficiarioConditionsPlano.push(`b.entidade IN (${entidades.map(() => "?").join(",")})`)
-        beneficiarioValuesPlano.push(...entidades)
-      }
-
-      if (mesesReajuste.length > 0) {
-        beneficiarioConditionsPlano.push(`b.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})`)
-        beneficiarioValuesPlano.push(...mesesReajuste)
-      }
-    }
-
-    if (tipo) {
-      beneficiarioConditionsPlano.push("b.tipo = ?")
-      beneficiarioValuesPlano.push(tipo)
-    }
-
-    beneficiarioConditionsPlano.push(`(
-      UPPER(b.plano) NOT LIKE '%DENT%' 
-      AND UPPER(b.plano) NOT LIKE '%AESP%' 
-    )`)
-
-    const beneficiarioWhereClausePlano = beneficiarioConditionsPlano.length > 0
-      ? `WHERE ${beneficiarioConditionsPlano.join(" AND ")}`
-      : ""
-
-    // Tipo de JOIN baseado no contexto (igual aos cards)
-    const joinType = (isCardMae ? (tipo ? "INNER" : "LEFT") : (entidades.length > 0 || tipo ? "INNER" : "LEFT"))
-
-    // 🔵 QUERY OFICIAL: Usar exatamente a mesma estrutura da query oficial
-    // O plano deve vir do faturamento (não dos beneficiários), conforme query oficial
-    // A agregação deve garantir que a soma das faixas etárias seja igual ao total do plano
-    // 🔵 QUERY OFICIAL: Agregar por CPF primeiro, depois calcular faixa etária baseada na idade do beneficiário
-    // IMPORTANTE: A faixa etária deve ser calculada UMA VEZ por CPF, não por mês
+    // 🔵 QUERY PERFEITA: Usar EXATAMENTE a mesma subconsulta 'm' da query perfeita
+    // Aplicar filtros apenas no WHERE final (mes, entidade, mes_reajuste, plano)
+    // Não usar COUNT(DISTINCT cpf), usar COUNT(*) como na query perfeita
     const sqlFaixasEtarias = `
       SELECT
-        CASE
-          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-          ELSE '59+'
-        END AS faixa_etaria,
-        COUNT(DISTINCT base_agregado.cpf) AS vidas,
-        SUM(base_agregado.valor_procedimentos) AS valor,
-        SUM(base_agregado.valor_faturamento) AS valor_net
+        m.faixa_etaria,
+        COUNT(*) AS vidas,
+        SUM(m.valor_procedimentos) AS valor,
+        SUM(m.valor_faturamento) AS valor_net
       FROM (
+        -- MESMA SUBCONSULTA 'm' DA QUERY PERFEITA
         SELECT
-          m.cpf,
-          -- Pegar a idade mais recente (pode ser NULL - será tratada como '00 a 18')
-          -- Usar MAX para pegar qualquer idade não NULL, ou NULL se todas forem NULL
-          MAX(CASE 
-            WHEN b_status.idade IS NOT NULL AND CAST(b_status.idade AS UNSIGNED) > 0 
-            THEN CAST(b_status.idade AS UNSIGNED) 
-            ELSE NULL 
-          END) AS idade,
-          SUM(m.valor_procedimentos) AS valor_procedimentos,
-          MAX(m.valor_faturamento) AS valor_faturamento
+          base.mes,
+          base.entidade,
+          base.plano,
+          base.cpf,
+          base.valor_faturamento,
+          base.valor_procedimentos,
+          b.mes_reajuste,
+          CASE
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS status_final,
+          CASE
+            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
         FROM (
+          -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
           SELECT
-            base.mes,
-            base.entidade,
-            base.plano,
-            base.cpf,
-            base.valor_faturamento,
-            base.valor_procedimentos,
-            CASE
-              WHEN b_status.cpf IS NULL THEN 'vazio'
-              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
-              ELSE 'inativo'
-            END AS status_final,
-            b_status.idade
+            pr.mes,
+            fv.entidade,
+            fv.plano,
+            pr.cpf,
+            pr.valor_total_procedimentos AS valor_procedimentos,
+            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
           FROM (
+            -- PROCEDIMENTOS: 1 linha por mês x CPF
             SELECT
-              pr.mes,
-              fv.entidade,
-              fv.plano,
-              pr.cpf,
-              pr.valor_total_procedimentos AS valor_procedimentos,
-              COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
-            FROM (
-              SELECT
-                DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
-                p.cpf,
-                SUM(p.valor_procedimento) AS valor_total_procedimentos
-              FROM reg_procedimentos p
-              WHERE ${procedimentosConditions.join(" AND ")}
-              GROUP BY
-                DATE_FORMAT(p.data_competencia, '%Y-%m'),
-                p.cpf
-            ) AS pr
-            LEFT JOIN (
-              SELECT
-                f.cpf_do_beneficiario AS cpf,
-                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
-                SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
-                MAX(f.vlr_net) AS valor_faturamento
-              FROM reg_faturamento f
-              WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
-              GROUP BY
-                f.cpf_do_beneficiario
-            ) AS fv
-              ON fv.cpf = pr.cpf
-            WHERE fv.plano = ?
-          ) AS base
-          ${joinType} JOIN (
-            SELECT
-              b.cpf,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS status_beneficiario,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS idade${!isCardMae ? `,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.entidade ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS entidade,
-              SUBSTRING_INDEX(
-                GROUP_CONCAT(
-                  b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
-                ),
-                ',', 1
-              ) AS mes_reajuste` : ''}
-            FROM reg_beneficiarios b
-            ${beneficiarioWhereClausePlano}
+              DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+              p.cpf,
+              SUM(p.valor_procedimento) AS valor_total_procedimentos
+            FROM reg_procedimentos p
+            WHERE ${procedimentosConditions.join(" AND ")}
             GROUP BY
-              b.cpf
-          ) AS b_status
-            ON b_status.cpf = base.cpf
-          WHERE base.plano IS NOT NULL AND base.plano != ''
-            ${statusParam !== "total" ? `AND CASE
-              WHEN b_status.cpf IS NULL THEN 'vazio'
-              WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
-              ELSE 'inativo'
-            END = ?` : ''}
-            ${!isCardMae && entidades.length > 0 ? `AND base.entidade IN (${entidades.map(() => "?").join(",")})` : ''}
-            ${!isCardMae && mesesReajuste.length > 0 ? `AND b_status.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ''}
-        ) AS m
-        GROUP BY
-          m.cpf
-      ) AS base_agregado
+              DATE_FORMAT(p.data_competencia, '%Y-%m'),
+              p.cpf
+          ) AS pr
+          LEFT JOIN (
+            -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
+            SELECT
+              f.cpf_do_beneficiario AS cpf,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+              MAX(f.vlr_net) AS valor_faturamento
+            FROM reg_faturamento f
+            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+            GROUP BY
+              f.cpf_do_beneficiario
+          ) AS fv
+            ON fv.cpf = pr.cpf
+        ) AS base
+        LEFT JOIN (
+          -- STATUS + IDADE + MÊS DE REAJUSTE mais recente por CPF
+          SELECT
+            b.cpf,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS idade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS mes_reajuste
+          FROM reg_beneficiarios b
+          WHERE ${operadoras.length > 0 ? `b.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+          GROUP BY
+            b.cpf
+        ) AS b
+          ON b.cpf = base.cpf
+      ) AS m
+      WHERE
+        m.mes IN (${mesesReferencia.map(() => "?").join(",")})
+        ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+        ${mesesReajuste.length > 0 ? `AND m.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ""}
+        AND m.plano = ?
+        ${statusParam !== "total" ? `AND m.status_final = ?` : ""}
       GROUP BY
-        CASE
-          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN '00 a 18'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
-          ELSE '59+'
-        END
+        m.faixa_etaria
       ORDER BY
-        CASE
-          WHEN base_agregado.idade IS NULL OR CAST(base_agregado.idade AS UNSIGNED) <= 18 THEN 1
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN 2
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN 3
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN 4
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN 5
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN 6
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN 7
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN 8
-          WHEN CAST(base_agregado.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN 9
-          ELSE 10
-        END
+        CASE m.faixa_etaria
           WHEN '00 a 18' THEN 1
           WHEN '19 a 23' THEN 2
           WHEN '24 a 28' THEN 3
@@ -312,25 +230,27 @@ export async function GET(request: NextRequest) {
           WHEN '44 a 48' THEN 7
           WHEN '49 a 53' THEN 8
           WHEN '54 a 58' THEN 9
-          WHEN '59+' THEN 10
-          ELSE 11
+          ELSE 10
         END
     `
 
-    // 🔵 QUERY OFICIAL: Ordem dos valores conforme a nova estrutura
+    // 🔵 QUERY PERFEITA: Ordem dos valores conforme a estrutura da query perfeita
     // 1. procedimentosValues (para WHERE dos procedimentos)
     // 2. operadoras (para JOIN com faturamento)
-    // 3. plano (para filtro WHERE fv.plano = ?)
-    // 4. beneficiarioValuesPlano (para JOIN com beneficiários)
-    // 5. status (se não for "total")
-    // 6. entidades (se cards filhos)
-    // 7. mesesReajuste (se cards filhos)
-    // 8. tipo (se especificado e não estiver em beneficiarioValuesPlano)
+    // 3. operadoras (para JOIN com beneficiários - mesma lista)
+    // 4. mesesReferencia (para filtro WHERE m.mes IN (...))
+    // 5. entidades (para filtro WHERE m.entidade IN (...))
+    // 6. mesesReajuste (para filtro WHERE m.mes_reajuste IN (...))
+    // 7. plano (para filtro WHERE m.plano = ?)
+    // 8. status (se não for "total")
     const queryValues: any[] = [
       ...procedimentosValues,
       ...(operadoras.length > 0 ? operadoras : []),
-      plano,
-      ...beneficiarioValuesPlano
+      ...(operadoras.length > 0 ? operadoras : []), // Para beneficiários
+      ...mesesReferencia,
+      ...(entidades.length > 0 ? entidades : []),
+      ...(mesesReajuste.length > 0 ? mesesReajuste : []),
+      plano
     ]
     
     // Adicionar status se não for "total"
@@ -338,43 +258,153 @@ export async function GET(request: NextRequest) {
       queryValues.push(statusParam)
     }
     
-    // Adicionar entidades e mesesReajuste para cards filhos (filtros no WHERE final)
-    if (!isCardMae) {
-      if (entidades.length > 0) {
-        queryValues.push(...entidades)
-      }
-      if (mesesReajuste.length > 0) {
-        queryValues.push(...mesesReajuste)
-      }
-    }
-    
     const [rows]: any = await connection.execute(sqlFaixasEtarias, queryValues)
 
-    // 🔵 VALIDAÇÃO: Verificar se a soma das faixas etárias bate com o total esperado
+    // 🔵 VALIDAÇÃO OBRIGATÓRIA: Verificar se a soma das faixas = total_vidas do plano
+    // Query auxiliar para buscar o total_vidas do plano usando a mesma base
+    const sqlTotalPlano = `
+      SELECT
+        COUNT(*) AS total_vidas
+      FROM (
+        -- MESMA SUBCONSULTA 'm' DA QUERY PERFEITA
+        SELECT
+          base.mes,
+          base.entidade,
+          base.plano,
+          base.cpf,
+          base.valor_faturamento,
+          base.valor_procedimentos,
+          b.mes_reajuste,
+          CASE
+            WHEN b.cpf IS NULL THEN 'vazio'
+            WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
+            ELSE 'inativo'
+          END AS status_final,
+          CASE
+            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
+        FROM (
+          SELECT
+            pr.mes,
+            fv.entidade,
+            fv.plano,
+            pr.cpf,
+            pr.valor_total_procedimentos AS valor_procedimentos,
+            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
+          FROM (
+            SELECT
+              DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
+              p.cpf,
+              SUM(p.valor_procedimento) AS valor_total_procedimentos
+            FROM reg_procedimentos p
+            WHERE ${procedimentosConditions.join(" AND ")}
+            GROUP BY
+              DATE_FORMAT(p.data_competencia, '%Y-%m'),
+              p.cpf
+          ) AS pr
+          LEFT JOIN (
+            SELECT
+              f.cpf_do_beneficiario AS cpf,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
+              SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.plano), ',', 1) AS plano,
+              MAX(f.vlr_net) AS valor_faturamento
+            FROM reg_faturamento f
+            WHERE ${operadoras.length > 0 ? `f.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+            GROUP BY
+              f.cpf_do_beneficiario
+          ) AS fv
+            ON fv.cpf = pr.cpf
+        ) AS base
+        LEFT JOIN (
+          SELECT
+            b.cpf,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS idade,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.mes_reajuste ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS mes_reajuste
+          FROM reg_beneficiarios b
+          WHERE ${operadoras.length > 0 ? `b.operadora IN (${operadoras.map(() => "?").join(",")})` : "1=1"}
+          GROUP BY
+            b.cpf
+        ) AS b
+          ON b.cpf = base.cpf
+      ) AS m
+      WHERE
+        m.mes IN (${mesesReferencia.map(() => "?").join(",")})
+        ${entidades.length > 0 ? `AND m.entidade IN (${entidades.map(() => "?").join(",")})` : ""}
+        ${mesesReajuste.length > 0 ? `AND m.mes_reajuste IN (${mesesReajuste.map(() => "?").join(",")})` : ""}
+        AND m.plano = ?
+        ${statusParam !== "total" ? `AND m.status_final = ?` : ""}
+    `
+    
+    const [rowsTotalPlano]: any = await connection.execute(sqlTotalPlano, queryValues)
+    const totalVidasPlano = rowsTotalPlano && rowsTotalPlano.length > 0 ? Number(rowsTotalPlano[0].total_vidas) || 0 : 0
+
+    // 🔵 QUERY PERFEITA: Processar resultados usando os campos da query perfeita
+    // A query retorna: faixa_etaria, vidas, valor, valor_net
+    
+    // Calcular total de vidas (soma de todas as faixas)
     const totalVidasFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.vidas) || 0), 0)
     const totalValorFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.valor) || 0), 0)
     const totalValorNetFaixas = (rows || []).reduce((sum: number, row: any) => sum + (Number(row.valor_net) || 0), 0)
+    
+    // 🔵 VALIDAÇÃO OBRIGATÓRIA: Verificar se a soma das faixas = total_vidas do plano
+    const diffVidas = Math.abs(totalVidasFaixas - totalVidasPlano)
+    if (diffVidas > 0.01) {
+      console.error(`❌ VALIDAÇÃO FALHOU - Plano: ${plano}`)
+      console.error(`  Total vidas do plano (query de planos): ${totalVidasPlano}`)
+      console.error(`  Soma das faixas etárias: ${totalVidasFaixas}`)
+      console.error(`  Diferença: ${diffVidas}`)
+      console.error(`  Entidade: ${entidades.length > 0 ? entidades.join(", ") : "Todas"}`)
+      console.error(`  Mês de reajuste: ${mesesReajuste.length > 0 ? mesesReajuste.join(", ") : "Todos"}`)
+      console.error(`  Mês de referência: ${mesesReferencia.join(", ")}`)
+      console.error(`  Status: ${statusParam}`)
+      console.error(`  Detalhamento por faixa:`, (rows || []).map((r: any) => ({
+        faixa: r.faixa_etaria,
+        vidas: r.vidas
+      })))
+    } else {
+      console.log(`✅ VALIDAÇÃO PASSOU - Plano: ${plano}`)
+      console.log(`  Total vidas do plano: ${totalVidasPlano}`)
+      console.log(`  Soma das faixas etárias: ${totalVidasFaixas}`)
+    }
     
     console.log(`🔵 VALIDAÇÃO FAIXAS ETÁRIAS - Plano: ${plano}`)
     console.log(`  Total vidas nas faixas: ${totalVidasFaixas}`)
     console.log(`  Total valor nas faixas: ${totalValorFaixas}`)
     console.log(`  Total valor NET nas faixas: ${totalValorNetFaixas}`)
     console.log(`  Número de faixas retornadas: ${(rows || []).length}`)
-    if ((rows || []).length > 0) {
-      console.log(`  Detalhamento por faixa:`, (rows || []).map((r: any) => ({
-        faixa: r.faixa_etaria,
-        vidas: r.vidas,
-        valor: r.valor,
-        valor_net: r.valor_net
-      })))
-    }
 
-    // Processar resultados
+    // Processar resultados - usar EXATAMENTE os valores retornados pela query
     const faixasEtarias: Array<{
       faixa_etaria: string
       vidas: number
       valor: number
       valor_net: number
+      is?: number | null
     }> = []
 
     const faixasMap = new Map<string, { vidas: number; valor: number; valor_net: number }>()
@@ -389,11 +419,14 @@ export async function GET(request: NextRequest) {
       faixasMap.set(faixa, { vidas: 0, valor: 0, valor_net: 0 })
     })
 
-    // Processar resultados da query
+    // 🔵 QUERY PERFEITA: Processar resultados usando os campos da query perfeita
     ;(rows || []).forEach((row: any) => {
       const faixa = row.faixa_etaria || '00 a 18'
+      // Usar vidas (COUNT(*) da query perfeita)
       const vidas = Number(row.vidas) || 0
+      // Usar valor (SUM(valor_procedimentos))
       const valor = Number(row.valor) || 0
+      // Usar valor_net (SUM(valor_faturamento))
       const valorNet = Number(row.valor_net) || 0
 
       const atual = faixasMap.get(faixa) || { vidas: 0, valor: 0, valor_net: 0 }
