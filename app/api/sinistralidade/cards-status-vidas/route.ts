@@ -189,22 +189,19 @@ export async function GET(request: NextRequest) {
       : ""
 
     // QUERY PARA CONSOLIDADO GERAL (sem filtro de entidade)
-    // Usando a mesma lógica da query fornecida: reg_procedimentos + reg_faturamento + reg_beneficiarios
-    // Os cards principais sempre mostram o total da operadora/período, independente do filtro de entidade
+    // 🔵 QUERY OFICIAL: Seguindo exatamente a estrutura fornecida
+    // Agrupa por mes, entidade, plano, faixa_etaria e depois agrega por mês
     const sqlGeral = `
       SELECT
         m.mes AS mes,
-        -- quantidades de CPFs
-        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS ativo,
-        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS inativo,
-        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS nao_localizado,
+        SUM(CASE WHEN m.status_final = 'ativo'   THEN 1 ELSE 0 END) AS vidas_ativas,
+        SUM(CASE WHEN m.status_final = 'inativo' THEN 1 ELSE 0 END) AS vidas_inativas,
+        SUM(CASE WHEN m.status_final = 'vazio'   THEN 1 ELSE 0 END) AS vidas_nao_localizadas,
         COUNT(*) AS total_vidas,
-        -- valores de faturamento por status (fixo por CPF, somado por mês)
         SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_faturamento ELSE 0 END) AS valor_fat_ativo,
         SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_faturamento ELSE 0 END) AS valor_fat_inativo,
         SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_faturamento ELSE 0 END) AS valor_fat_nao_localizado,
         SUM(m.valor_faturamento) AS valor_faturamento_total,
-        -- valores de procedimentos por status
         SUM(CASE WHEN m.status_final = 'ativo'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_ativo,
         SUM(CASE WHEN m.status_final = 'inativo' THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_inativo,
         SUM(CASE WHEN m.status_final = 'vazio'   THEN m.valor_procedimentos ELSE 0 END) AS valor_proc_nao_localizado,
@@ -212,6 +209,8 @@ export async function GET(request: NextRequest) {
       FROM (
         SELECT
           base.mes,
+          base.entidade,
+          base.plano,
           base.cpf,
           base.valor_faturamento,
           base.valor_procedimentos,
@@ -219,16 +218,28 @@ export async function GET(request: NextRequest) {
             WHEN b.cpf IS NULL THEN 'vazio'
             WHEN LOWER(b.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
-          END AS status_final
+          END AS status_final,
+          CASE
+            WHEN b.idade IS NULL OR CAST(b.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(b.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
         FROM (
-          -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
           SELECT
             pr.mes,
+            fv.entidade,
+            fv.plano,
             pr.cpf,
             pr.valor_total_procedimentos AS valor_procedimentos,
             COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
           FROM (
-            -- PROCEDIMENTOS: 1 linha por mês x CPF
             SELECT
               DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
               p.cpf,
@@ -240,8 +251,6 @@ export async function GET(request: NextRequest) {
               p.cpf
           ) AS pr
           LEFT JOIN (
-            -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
-            -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
             SELECT
               f.cpf_do_beneficiario AS cpf,
               SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
@@ -255,17 +264,20 @@ export async function GET(request: NextRequest) {
             ON fv.cpf = pr.cpf
         ) AS base
         ${tipo || cpf ? "INNER" : "LEFT"} JOIN (
-          -- STATUS mais recente por CPF
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
-              ',',
-              1
-            ) AS status_beneficiario
+              ',', 1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS idade
           FROM reg_beneficiarios b
           ${beneficiarioWhereClauseGeral}
           GROUP BY
@@ -280,7 +292,7 @@ export async function GET(request: NextRequest) {
     `
 
     // Query adicional para agregação por entidade separada por status e mês de reajuste
-    // Usando a mesma lógica da query fornecida: reg_procedimentos + reg_faturamento + reg_beneficiarios
+    // 🔵 QUERY OFICIAL: Usando a mesma estrutura base da query oficial
     // Retorna entidades para cada status: ativo, inativo, vazio (não localizado)
     const sqlPorEntidade = `
       SELECT
@@ -303,18 +315,29 @@ export async function GET(request: NextRequest) {
         FROM (
           SELECT
             base.mes,
-            base.cpf,
             base.entidade,
             base.plano,
+            base.cpf,
             base.valor_faturamento,
             base.valor_procedimentos,
             CASE
               WHEN b_status.cpf IS NULL THEN 'vazio'
               WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
               ELSE 'inativo'
-            END AS status_final
+            END AS status_final,
+            CASE
+              WHEN b_status.idade IS NULL OR CAST(b_status.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+              ELSE '59+'
+            END AS faixa_etaria
           FROM (
-            -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
             SELECT
               pr.mes,
               fv.entidade,
@@ -323,7 +346,6 @@ export async function GET(request: NextRequest) {
               pr.valor_total_procedimentos AS valor_procedimentos,
               COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
             FROM (
-              -- PROCEDIMENTOS: 1 linha por mês x CPF
               SELECT
                 DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
                 p.cpf,
@@ -335,8 +357,6 @@ export async function GET(request: NextRequest) {
                 p.cpf
             ) AS pr
             LEFT JOIN (
-              -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
-              -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
               SELECT
                 f.cpf_do_beneficiario AS cpf,
                 SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
@@ -350,17 +370,20 @@ export async function GET(request: NextRequest) {
               ON fv.cpf = pr.cpf
           ) AS base
           LEFT JOIN (
-            -- STATUS mais recente por CPF
             SELECT
               b.cpf,
               SUBSTRING_INDEX(
                 GROUP_CONCAT(
-                  b.status_beneficiario
-                  ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
                 ),
-                ',',
-                1
-              ) AS status_beneficiario
+                ',', 1
+              ) AS status_beneficiario,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(
+                  b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                ),
+                ',', 1
+              ) AS idade
             FROM reg_beneficiarios b
             ${beneficiarioWhereClauseGeral}
             GROUP BY
@@ -369,7 +392,6 @@ export async function GET(request: NextRequest) {
             ON b_status.cpf = base.cpf
         ) AS m
         LEFT JOIN (
-          -- Mês de reajuste e tipo mais recente por CPF (entidade e plano vêm do faturamento)
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
@@ -444,19 +466,19 @@ export async function GET(request: NextRequest) {
     const [rowsPorEntidade]: any = await connection.execute(sqlPorEntidade, valoresPorEntidade)
 
     // Processar resultados do consolidado geral (sem filtro de entidade)
-    // Usando os novos nomes de colunas da query: valor_fat_* e valor_proc_*
+    // 🔵 QUERY OFICIAL: Usando os nomes de colunas da query oficial
     const porMesGeral = (rowsGeral || []).map((row: any) => ({
       mes: row.mes,
-      ativo: Number(row.ativo) || 0,
-      inativo: Number(row.inativo) || 0,
-      nao_localizado: Number(row.nao_localizado) || 0,
+      ativo: Number(row.vidas_ativas) || 0,
+      inativo: Number(row.vidas_inativas) || 0,
+      nao_localizado: Number(row.vidas_nao_localizadas) || 0,
       total_vidas: Number(row.total_vidas) || 0,
-      // Valores de procedimentos (mantidos para compatibilidade)
+      // Valores de procedimentos
       valor_ativo: Number(row.valor_proc_ativo) || 0,
       valor_inativo: Number(row.valor_proc_inativo) || 0,
       valor_nao_localizado: Number(row.valor_proc_nao_localizado) || 0,
       valor_total_geral: Number(row.valor_procedimentos_total) || 0,
-      // Valores de faturamento NET (usando valor_fat_*)
+      // Valores de faturamento NET
       valor_net_ativo: Number(row.valor_fat_ativo) || 0,
       valor_net_inativo: Number(row.valor_fat_inativo) || 0,
       valor_net_nao_localizado: Number(row.valor_fat_nao_localizado) || 0,
@@ -637,7 +659,7 @@ export async function GET(request: NextRequest) {
     })
 
     // Query para distribuição por plano nos cards principais (por status)
-    // Usando a mesma lógica da query fornecida: reg_procedimentos + reg_faturamento + reg_beneficiarios
+    // 🔵 QUERY OFICIAL: Usando a mesma estrutura base da query oficial
     const sqlPorPlanoGeral = `
       SELECT
         m.status_final,
@@ -648,6 +670,8 @@ export async function GET(request: NextRequest) {
       FROM (
         SELECT
           base.mes,
+          base.entidade,
+          base.plano,
           base.cpf,
           base.valor_procedimentos,
           base.valor_faturamento,
@@ -656,17 +680,27 @@ export async function GET(request: NextRequest) {
             WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
             ELSE 'inativo'
           END AS status_final,
-          base.plano
+          CASE
+            WHEN b_status.idade IS NULL OR CAST(b_status.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+            WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+            ELSE '59+'
+          END AS faixa_etaria
         FROM (
-          -- mês x CPF + valor procedimentos + valor faturamento fixo por CPF
           SELECT
             pr.mes,
+            fv.entidade,
+            fv.plano,
             pr.cpf,
             pr.valor_total_procedimentos AS valor_procedimentos,
-            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento,
-            fv.plano
+            COALESCE(fv.valor_faturamento, 0) AS valor_faturamento
           FROM (
-            -- PROCEDIMENTOS: 1 linha por mês x CPF
             SELECT
               DATE_FORMAT(p.data_competencia, '%Y-%m') AS mes,
               p.cpf,
@@ -678,8 +712,6 @@ export async function GET(request: NextRequest) {
               p.cpf
           ) AS pr
           LEFT JOIN (
-            -- FATURAMENTO: 1 VALOR FIXO POR CPF (independente de dt_competencia)
-            -- Traz também entidade e plano do faturamento (se por algum motivo tivesse mais de uma, pega a primeira)
             SELECT
               f.cpf_do_beneficiario AS cpf,
               SUBSTRING_INDEX(GROUP_CONCAT(DISTINCT f.entidade), ',', 1) AS entidade,
@@ -693,17 +725,20 @@ export async function GET(request: NextRequest) {
             ON fv.cpf = pr.cpf
         ) AS base
         ${tipo || cpf ? "INNER" : "LEFT"} JOIN (
-          -- STATUS mais recente por CPF
           SELECT
             b.cpf,
             SUBSTRING_INDEX(
               GROUP_CONCAT(
-                b.status_beneficiario
-                ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
               ),
-              ',',
-              1
-            ) AS status_beneficiario
+              ',', 1
+            ) AS status_beneficiario,
+            SUBSTRING_INDEX(
+              GROUP_CONCAT(
+                b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+              ),
+              ',', 1
+            ) AS idade
           FROM reg_beneficiarios b
           ${beneficiarioWhereClauseGeral}
           GROUP BY
@@ -756,16 +791,28 @@ export async function GET(request: NextRequest) {
         FROM (
           SELECT
             base.mes,
+            base.entidade,
+            base.plano,
             base.cpf,
             base.valor_procedimentos,
             base.valor_faturamento,
-            base.entidade,
-            base.plano,
             CASE
               WHEN b_status.cpf IS NULL THEN 'vazio'
               WHEN LOWER(b_status.status_beneficiario) = 'ativo' THEN 'ativo'
               ELSE 'inativo'
             END AS status_final,
+            CASE
+              WHEN b_status.idade IS NULL OR CAST(b_status.idade AS UNSIGNED) <= 18 THEN '00 a 18'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 19 AND 23 THEN '19 a 23'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 24 AND 28 THEN '24 a 28'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 29 AND 33 THEN '29 a 33'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 34 AND 38 THEN '34 a 38'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 39 AND 43 THEN '39 a 43'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 44 AND 48 THEN '44 a 48'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 49 AND 53 THEN '49 a 53'
+              WHEN CAST(b_status.idade AS UNSIGNED) BETWEEN 54 AND 58 THEN '54 a 58'
+              ELSE '59+'
+            END AS faixa_etaria,
             b.mes_reajuste,
             b.tipo
           FROM (
@@ -805,17 +852,21 @@ export async function GET(request: NextRequest) {
               ON fv.cpf = pr.cpf
           ) AS base
           LEFT JOIN (
-            -- STATUS mais recente por CPF
+            -- STATUS e IDADE mais recente por CPF (🔵 QUERY OFICIAL)
             SELECT
               b.cpf,
               SUBSTRING_INDEX(
                 GROUP_CONCAT(
-                  b.status_beneficiario
-                  ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                  b.status_beneficiario ORDER BY b.data_inicio_vigencia_beneficiario DESC
                 ),
-                ',',
-                1
-              ) AS status_beneficiario
+                ',', 1
+              ) AS status_beneficiario,
+              SUBSTRING_INDEX(
+                GROUP_CONCAT(
+                  b.idade ORDER BY b.data_inicio_vigencia_beneficiario DESC
+                ),
+                ',', 1
+              ) AS idade
             FROM reg_beneficiarios b
             ${beneficiarioWhereClauseGeral}
             GROUP BY
@@ -1149,6 +1200,64 @@ export async function GET(request: NextRequest) {
       }),
     }
 
+    // 🔵 VALIDAÇÕES DE CONSISTÊNCIA (conforme solicitado)
+    // Validar que os cálculos estão corretos conforme a query oficial
+    const validacoes: string[] = []
+    
+    // Validação 1: Soma de vidas por mês
+    porMesGeral.forEach((mes: any) => {
+      const somaVidas = mes.ativo + mes.inativo + mes.nao_localizado
+      const diff = Math.abs(somaVidas - mes.total_vidas)
+      if (diff > 0.01) { // Permitir pequenas diferenças de arredondamento
+        validacoes.push(`⚠️ Mês ${mes.mes}: Soma de vidas (${somaVidas}) != total_vidas (${mes.total_vidas}). Diferença: ${diff}`)
+      }
+    })
+    
+    // Validação 2: Soma de valores de procedimentos por mês
+    porMesGeral.forEach((mes: any) => {
+      const somaValores = mes.valor_ativo + mes.valor_inativo + mes.valor_nao_localizado
+      const diff = Math.abs(somaValores - mes.valor_total_geral)
+      if (diff > 0.01) {
+        validacoes.push(`⚠️ Mês ${mes.mes}: Soma de valores de procedimentos (${somaValores}) != valor_total_geral (${mes.valor_total_geral}). Diferença: ${diff}`)
+      }
+    })
+    
+    // Validação 3: Soma de valores de faturamento por mês
+    porMesGeral.forEach((mes: any) => {
+      const somaFaturamento = mes.valor_net_ativo + mes.valor_net_inativo + mes.valor_net_nao_localizado
+      const diff = Math.abs(somaFaturamento - mes.valor_net_total_geral)
+      if (diff > 0.01) {
+        validacoes.push(`⚠️ Mês ${mes.mes}: Soma de valores de faturamento (${somaFaturamento}) != valor_net_total_geral (${mes.valor_net_total_geral}). Diferença: ${diff}`)
+      }
+    })
+    
+    // Validação 4: Consolidado geral
+    const somaConsolidadoVidas = consolidado.ativo + consolidado.inativo + consolidado.nao_localizado
+    const diffConsolidadoVidas = Math.abs(somaConsolidadoVidas - consolidado.total_vidas)
+    if (diffConsolidadoVidas > 0.01) {
+      validacoes.push(`⚠️ Consolidado: Soma de vidas (${somaConsolidadoVidas}) != total_vidas (${consolidado.total_vidas}). Diferença: ${diffConsolidadoVidas}`)
+    }
+    
+    const somaConsolidadoValores = consolidado.valor_ativo + consolidado.valor_inativo + consolidado.valor_nao_localizado
+    const diffConsolidadoValores = Math.abs(somaConsolidadoValores - consolidado.valor_total_geral)
+    if (diffConsolidadoValores > 0.01) {
+      validacoes.push(`⚠️ Consolidado: Soma de valores de procedimentos (${somaConsolidadoValores}) != valor_total_geral (${consolidado.valor_total_geral}). Diferença: ${diffConsolidadoValores}`)
+    }
+    
+    const somaConsolidadoFaturamento = consolidado.valor_net_ativo + consolidado.valor_net_inativo + consolidado.valor_net_nao_localizado
+    const diffConsolidadoFaturamento = Math.abs(somaConsolidadoFaturamento - consolidado.valor_net_total_geral)
+    if (diffConsolidadoFaturamento > 0.01) {
+      validacoes.push(`⚠️ Consolidado: Soma de valores de faturamento (${somaConsolidadoFaturamento}) != valor_net_total_geral (${consolidado.valor_net_total_geral}). Diferença: ${diffConsolidadoFaturamento}`)
+    }
+    
+    // Log das validações (apenas se houver problemas)
+    if (validacoes.length > 0) {
+      console.warn("🔵 VALIDAÇÕES DE CONSISTÊNCIA - Problemas encontrados:")
+      validacoes.forEach(v => console.warn(v))
+    } else {
+      console.log("✅ VALIDAÇÕES DE CONSISTÊNCIA: Todas as validações passaram!")
+    }
+
     return NextResponse.json({
       por_mes: porMesGeral,
       consolidado: {
@@ -1161,6 +1270,8 @@ export async function GET(request: NextRequest) {
         },
       },
       por_entidade: entidadesComPlano,
+      // Incluir validações no retorno (apenas em desenvolvimento)
+      ...(process.env.NODE_ENV === 'development' && validacoes.length > 0 ? { _validacoes: validacoes } : {}),
     })
   } catch (error: any) {
     console.error("Erro ao buscar cards de status de vidas:", error)
