@@ -194,10 +194,6 @@ export default function SinistralidadeDashboardPage() {
   } | null>(null)
   const [loadingCardsStatus, setLoadingCardsStatus] = useState(false)
   const [loadingOverlay, setLoadingOverlay] = useState(false)
-  const [resumoRows, setResumoRows] = useState<SinistralidadeResumoRow[]>([])
-  const [resumoGrupos, setResumoGrupos] = useState<SinistralidadeGrupo[]>([])
-  const [loadingResumo, setLoadingResumo] = useState(false)
-  const [erroResumo, setErroResumo] = useState<string | null>(null)
   
   // Estados para controlar expansão dos drilldowns de planos
   const [planosExpandidos, setPlanosExpandidos] = useState<Set<string>>(new Set())
@@ -369,43 +365,6 @@ export default function SinistralidadeDashboardPage() {
     return tiposDisponiveis.includes(tipo) ? tipo : "Todos"
   }, [tipo, tiposDisponiveis])
 
-  const resumoCardsMae = useMemo<{
-    ativo: ResumoCardMae
-    inativo: ResumoCardMae
-    nao_localizado: ResumoCardMae
-    total: ResumoCardMae
-  } | null>(() => {
-    if (!resumoRows || resumoRows.length === 0) return null
-
-    const acumulado = {
-      ativo: { vidas: 0, valorProc: 0, valorFat: 0 },
-      inativo: { vidas: 0, valorProc: 0, valorFat: 0 },
-      nao_localizado: { vidas: 0, valorProc: 0, valorFat: 0 },
-      total: { vidas: 0, valorProc: 0, valorFat: 0 },
-    }
-
-    const somar = (dest: { vidas: number; valorProc: number; valorFat: number }, vidas: number, proc: number, fat: number) => {
-      dest.vidas += vidas
-      dest.valorProc += proc
-      dest.valorFat += fat
-    }
-
-    resumoRows.forEach((linha) => {
-      somar(acumulado.ativo, linha.vidas_ativas, linha.valor_proc_ativo, linha.valor_fat_ativo)
-      somar(acumulado.inativo, linha.vidas_inativas, linha.valor_proc_inativo, linha.valor_fat_inativo)
-      somar(acumulado.nao_localizado, linha.vidas_nao_localizadas, linha.valor_proc_nao_localizado, linha.valor_fat_nao_localizado)
-      somar(acumulado.total, linha.total_vidas, linha.valor_procedimentos_total, linha.valor_faturamento_total)
-    })
-
-    const calcularIs = (fat: number, proc: number) => fat !== 0 ? proc / fat : null
-
-    return {
-      ativo: { ...acumulado.ativo, is_total: calcularIs(acumulado.ativo.valorFat, acumulado.ativo.valorProc) },
-      inativo: { ...acumulado.inativo, is_total: calcularIs(acumulado.inativo.valorFat, acumulado.inativo.valorProc) },
-      nao_localizado: { ...acumulado.nao_localizado, is_total: calcularIs(acumulado.nao_localizado.valorFat, acumulado.nao_localizado.valorProc) },
-      total: { ...acumulado.total, is_total: calcularIs(acumulado.total.valorFat, acumulado.total.valorProc) },
-    }
-  }, [resumoRows])
 
   // Mostrar erros se houver
   useEffect(() => {
@@ -618,9 +577,6 @@ export default function SinistralidadeDashboardPage() {
     return { dataInicio, dataFim }
   }, [])
 
-  const intervaloResumoDatas = useMemo(() => {
-    return getDateRangeFromMeses(filtrosAplicados?.mesesReferencia || [])
-  }, [filtrosAplicados?.mesesReferencia, getDateRangeFromMeses])
 
   // Função auxiliar para formatar nome do mês
   const getNomeMes = useCallback((mesNum: string | null | undefined) => {
@@ -947,121 +903,6 @@ export default function SinistralidadeDashboardPage() {
     }
   }, [filtrosAplicados, toast])
 
-  // Carregar resumo de sinistralidade (procedimentos x faturamento) para alimentar cards mãe e drilldowns
-  useEffect(() => {
-    if (!filtrosAplicados || filtrosAplicados.mesesReferencia.length === 0) {
-      setResumoRows([])
-      setResumoGrupos([])
-      setErroResumo(null)
-      return
-    }
-
-    let cancelled = false
-    const carregarResumo = async () => {
-      const { dataInicio, dataFim } = intervaloResumoDatas
-      const entidadeFiltro = filtrosAplicados.entidades.length === 1 ? filtrosAplicados.entidades[0] : null
-      const params = new URLSearchParams({
-        data_inicio: dataInicio,
-        data_fim: dataFim,
-      })
-
-      if (entidadeFiltro) {
-        params.append("entidade", entidadeFiltro)
-      }
-
-      setLoadingResumo(true)
-      setErroResumo(null)
-
-      try {
-        const res = await fetchNoStore(`/api/sinistralidade/resumo?${params.toString()}`)
-        if (!res.ok) {
-          const errorData = await res.json().catch(() => null)
-          throw new Error(errorData?.error || "Erro ao carregar resumo de sinistralidade")
-        }
-
-        const data: SinistralidadeResumoRow[] = await res.json()
-        const normalizeNumber = (value: any) => {
-          const num = Number(value)
-          return Number.isNaN(num) ? 0 : num
-        }
-
-        const linhasNormalizadas = (data || []).map((row) => {
-          const valorFaturamento = normalizeNumber(row.valor_faturamento_total)
-          const valorProcedimentos = normalizeNumber(row.valor_procedimentos_total)
-          const isTotal = row.is_total !== undefined && row.is_total !== null
-            ? Number(row.is_total)
-            : valorFaturamento !== 0
-              ? valorProcedimentos / valorFaturamento
-              : null
-
-          return {
-            ...row,
-            vidas_ativas: normalizeNumber(row.vidas_ativas),
-            vidas_inativas: normalizeNumber(row.vidas_inativas),
-            vidas_nao_localizadas: normalizeNumber(row.vidas_nao_localizadas),
-            total_vidas: normalizeNumber(row.total_vidas),
-            valor_fat_ativo: normalizeNumber(row.valor_fat_ativo),
-            valor_fat_inativo: normalizeNumber(row.valor_fat_inativo),
-            valor_fat_nao_localizado: normalizeNumber(row.valor_fat_nao_localizado),
-            valor_faturamento_total: valorFaturamento,
-            valor_proc_ativo: normalizeNumber(row.valor_proc_ativo),
-            valor_proc_inativo: normalizeNumber(row.valor_proc_inativo),
-            valor_proc_nao_localizado: normalizeNumber(row.valor_proc_nao_localizado),
-            valor_procedimentos_total: valorProcedimentos,
-            is_total: isTotal,
-          } as SinistralidadeResumoRow
-        })
-
-        const gruposMap = new Map<GroupKey, SinistralidadeGrupo>()
-        linhasNormalizadas.forEach((linha) => {
-          const key: GroupKey = `${linha.mes}__${linha.entidade ?? "NULL"}__${linha.plano ?? "NULL"}`
-          if (!gruposMap.has(key)) {
-            gruposMap.set(key, {
-              mes: linha.mes,
-              entidade: linha.entidade,
-              plano: linha.plano,
-              total_vidas: 0,
-              valor_faturamento_total: 0,
-              valor_procedimentos_total: 0,
-              is_total: null,
-              faixas: [],
-            })
-          }
-
-          const grupo = gruposMap.get(key)!
-          grupo.total_vidas += linha.total_vidas
-          grupo.valor_faturamento_total += linha.valor_faturamento_total
-          grupo.valor_procedimentos_total += linha.valor_procedimentos_total
-          grupo.faixas.push(linha)
-        })
-
-        const grupos = Array.from(gruposMap.values()).map((grupo) => ({
-          ...grupo,
-          is_total: grupo.valor_faturamento_total !== 0
-            ? grupo.valor_procedimentos_total / grupo.valor_faturamento_total
-            : null
-        }))
-
-        if (cancelled) return
-        setResumoRows(linhasNormalizadas)
-        setResumoGrupos(grupos)
-      } catch (error: any) {
-        if (cancelled) return
-        console.error("Erro ao carregar resumo de sinistralidade:", error)
-        setErroResumo(error?.message || "Erro ao carregar resumo de sinistralidade")
-      } finally {
-        if (!cancelled) {
-          setLoadingResumo(false)
-        }
-      }
-    }
-
-    carregarResumo()
-
-    return () => {
-      cancelled = true
-    }
-  }, [filtrosAplicados, intervaloResumoDatas])
 
   // Carregar filtros aplicados ao montar a página (se existirem no localStorage)
   // Isso garante que ao voltar para a página, os cards sejam carregados automaticamente
@@ -1481,66 +1322,6 @@ export default function SinistralidadeDashboardPage() {
         </CardContent>
       </Card>
 
-      {/* Resumo de faturamento x procedimentos por status (cards mãe) */}
-      {filtrosAplicados && (
-        <Card className="mt-6 bg-white rounded-2xl shadow-sm border-zinc-200/70">
-          <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <div>
-              <CardTitle className="text-sm font-medium">Resumo de sinistralidade (procedimentos x faturamento)</CardTitle>
-              <p className="text-xs text-muted-foreground">
-                Período: {intervaloResumoDatas.dataInicio} até {intervaloResumoDatas.dataFim}
-                {filtrosAplicados.entidades.length === 1 && ` • Entidade: ${filtrosAplicados.entidades[0]}`}
-              </p>
-            </div>
-            {loadingResumo && <Loader2 className="h-4 w-4 animate-spin text-primary" />}
-          </CardHeader>
-          <CardContent>
-            {erroResumo ? (
-              <div className="text-sm text-red-600">
-                {erroResumo}
-              </div>
-            ) : resumoCardsMae ? (
-              <>
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {([
-                    { key: "ativo", label: "Vidas Ativas", accent: "text-emerald-600" },
-                    { key: "inativo", label: "Vidas Inativas", accent: "text-red-600" },
-                    { key: "nao_localizado", label: "Não localizados", accent: "text-orange-600" },
-                    { key: "total", label: "Total", accent: "text-slate-900" },
-                  ] as const).map((item) => {
-                    const dados = resumoCardsMae![item.key]
-                    const formatIS = (valor: number | null) => valor === null ? "-" : valor.toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                    return (
-                      <div key={item.key} className="p-4 rounded-xl border border-slate-200 bg-white shadow-sm">
-                        <p className="text-xs text-muted-foreground mb-1">{item.label}</p>
-                        <div className={`text-2xl font-bold ${item.accent}`}>{fmtNumber(dados?.vidas || 0)}</div>
-                        <div className="text-xs text-muted-foreground mt-1">
-                          Proc.: {fmtBRL(dados?.valorProc || 0)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          Fat.: {fmtBRL(dados?.valorFat || 0)}
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          IS: {formatIS(dados?.is_total ?? null)}
-                        </div>
-                      </div>
-                    )
-                  })}
-                </div>
-                {resumoGrupos.length > 0 && (
-                  <p className="text-[11px] text-muted-foreground mt-3">
-                    Grupos carregados (mês • entidade • plano): {resumoGrupos.length}
-                  </p>
-                )}
-              </>
-            ) : (
-              <div className="text-sm text-muted-foreground">
-                {loadingResumo ? "Carregando resumo..." : "Nenhum dado encontrado para o período selecionado."}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {/* Cards de Status de Vidas com Entidades */}
       {filtrosAplicados && filtrosAplicados.mesesReferencia.length > 0 && (() => {
