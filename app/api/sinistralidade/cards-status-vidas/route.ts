@@ -331,206 +331,207 @@ inativos_linha AS (
     })
 
     // Processar dados para criar Cards Filhos com drilldown hierárquico
-    // Hierarquia: mes > entidade > plano > mes_reajuste > faixa_etaria
-    const cardsFilhosMap = new Map<string, {
-      mes: string
-      entidade: string
-      por_plano: Map<string, { 
-        plano: string
-        por_mes_reajuste: Map<string, {
-          mes_reajuste: string | null
-          por_faixa_etaria: Map<string, {
-            faixa_etaria: string
-            ativos: number
-            ativos_sem_custo: number
-            ativos_com_custo: number
-            receita_ativos_sem_custo: number
-            receita_ativos_com_custo: number
-            custo_ativos_com_custo: number
-            inativos_com_custo: number
-            receita_inativos_com_custo: number
-            custo_inativos_com_custo: number
-          }>
-          // Totais do mes_reajuste (soma das faixas)
-          ativos: number
-          ativos_sem_custo: number
-          ativos_com_custo: number
-          receita_ativos_sem_custo: number
-          receita_ativos_com_custo: number
-          custo_ativos_com_custo: number
-          inativos_com_custo: number
-          receita_inativos_com_custo: number
-          custo_inativos_com_custo: number
-        }>
-        // Totais do plano (soma dos meses de reajuste)
-        ativos: number
-        ativos_sem_custo: number
-        ativos_com_custo: number
-        receita_ativos_sem_custo: number
-        receita_ativos_com_custo: number
-        custo_ativos_com_custo: number
-        inativos_com_custo: number
-        receita_inativos_com_custo: number
-        custo_inativos_com_custo: number
-      }>
-      // Totais da entidade (soma dos planos)
-      ativos: number
+    // Hierarquia CORRETA: mes > entidade > mes_reajuste > plano > faixa_etaria
+    // ⚠️ IMPORTANTE: Usar chaves completas em cada nível para evitar duplicação
+    
+    // Estrutura de dados hierárquica mantendo contexto completo
+    type DadosFaixaEtaria = {
+      faixa_etaria: string
       ativos_sem_custo: number
       ativos_com_custo: number
+      inativos_com_custo: number
       receita_ativos_sem_custo: number
       receita_ativos_com_custo: number
       custo_ativos_com_custo: number
-      inativos_com_custo: number
       receita_inativos_com_custo: number
       custo_inativos_com_custo: number
-    }>()
+    }
 
+    type DadosPlano = {
+      plano: string
+      por_faixa_etaria: Map<string, DadosFaixaEtaria>
+      // Totais do plano (SUM direto da query)
+      ativos_sem_custo: number
+      ativos_com_custo: number
+      inativos_com_custo: number
+      receita_ativos_sem_custo: number
+      receita_ativos_com_custo: number
+      custo_ativos_com_custo: number
+      receita_inativos_com_custo: number
+      custo_inativos_com_custo: number
+    }
+
+    type DadosMesReajuste = {
+      mes_reajuste: string | null
+      por_plano: Map<string, DadosPlano>
+      // Totais do mês de reajuste (SUM direto da query)
+      ativos_sem_custo: number
+      ativos_com_custo: number
+      inativos_com_custo: number
+      receita_ativos_sem_custo: number
+      receita_ativos_com_custo: number
+      custo_ativos_com_custo: number
+      receita_inativos_com_custo: number
+      custo_inativos_com_custo: number
+    }
+
+    type DadosEntidade = {
+      mes: string
+      entidade: string
+      por_mes_reajuste: Map<string, DadosMesReajuste>
+      // Totais da entidade (SUM direto da query)
+      ativos_sem_custo: number
+      ativos_com_custo: number
+      inativos_com_custo: number
+      receita_ativos_sem_custo: number
+      receita_ativos_com_custo: number
+      custo_ativos_com_custo: number
+      receita_inativos_com_custo: number
+      custo_inativos_com_custo: number
+    }
+
+    // Map principal: chave = mes|entidade
+    const cardsFilhosMap = new Map<string, DadosEntidade>()
+
+    // Processar cada linha da query
     dados.forEach((row: any) => {
       const mes = row.mes
       const entidade = row.entidade || ''
-      const plano = row.plano || ''
       const mesReajuste = row.mes_reajuste || null
+      const plano = row.plano || ''
       const faixaEtaria = row.faixa_etaria || ''
       
       if (!entidade) return
 
-      const keyEntidade = `${mes}|${entidade}`
-      let cardEntidade = cardsFilhosMap.get(keyEntidade)
-
-      if (!cardEntidade) {
-        cardEntidade = {
-          mes,
-          entidade,
-          por_plano: new Map(),
-          ativos: 0,
-          ativos_sem_custo: 0,
-          ativos_com_custo: 0,
-          receita_ativos_sem_custo: 0,
-          receita_ativos_com_custo: 0,
-          custo_ativos_com_custo: 0,
-          inativos_com_custo: 0,
-          receita_inativos_com_custo: 0,
-          custo_inativos_com_custo: 0,
-        }
-        cardsFilhosMap.set(keyEntidade, cardEntidade)
-      }
-
-      // Nível: Plano
-      let cardPlano = cardEntidade.por_plano.get(plano)
-      if (!cardPlano) {
-        cardPlano = {
-          plano,
-          por_mes_reajuste: new Map(),
-          ativos: 0,
-          ativos_sem_custo: 0,
-          ativos_com_custo: 0,
-          receita_ativos_sem_custo: 0,
-          receita_ativos_com_custo: 0,
-          custo_ativos_com_custo: 0,
-          inativos_com_custo: 0,
-          receita_inativos_com_custo: 0,
-          custo_inativos_com_custo: 0,
-        }
-        cardEntidade.por_plano.set(plano, cardPlano)
-      }
-
-      // Nível: Mês de Reajuste
-      const keyMesReajuste = mesReajuste || 'null'
-      let cardMesReajuste = cardPlano.por_mes_reajuste.get(keyMesReajuste)
-      if (!cardMesReajuste) {
-        cardMesReajuste = {
-        mes_reajuste: mesReajuste,
-        por_faixa_etaria: new Map(),
-          ativos: 0,
-          ativos_sem_custo: 0,
-          ativos_com_custo: 0,
-          receita_ativos_sem_custo: 0,
-          receita_ativos_com_custo: 0,
-          custo_ativos_com_custo: 0,
-          inativos_com_custo: 0,
-          receita_inativos_com_custo: 0,
-          custo_inativos_com_custo: 0,
-        }
-        cardPlano.por_mes_reajuste.set(keyMesReajuste, cardMesReajuste)
-      }
-
-      // Nível: Faixa Etária
-      let cardFaixaEtaria = cardMesReajuste.por_faixa_etaria.get(faixaEtaria)
-      if (!cardFaixaEtaria) {
-        cardFaixaEtaria = {
-          faixa_etaria: faixaEtaria,
-          ativos: 0,
-          ativos_sem_custo: 0,
-          ativos_com_custo: 0,
-          receita_ativos_sem_custo: 0,
-          receita_ativos_com_custo: 0,
-          custo_ativos_com_custo: 0,
-          inativos_com_custo: 0,
-          receita_inativos_com_custo: 0,
-          custo_inativos_com_custo: 0,
-        }
-        cardMesReajuste.por_faixa_etaria.set(faixaEtaria, cardFaixaEtaria)
-      }
-
-      // Adicionar valores da linha atual (sem recalcular, usar diretamente da query)
-      const valores = {
-        ativos: Number(row.ativos) || 0,
+      // Valores da linha atual (usar diretamente da query, sem recalcular)
+      const valores: DadosFaixaEtaria = {
+        faixa_etaria: faixaEtaria,
         ativos_sem_custo: Number(row.ativos_sem_custo) || 0,
         ativos_com_custo: Number(row.ativos_com_custo) || 0,
+        inativos_com_custo: Number(row.inativos_com_custo) || 0,
         receita_ativos_sem_custo: Number(row.receita_ativos_sem_custo) || 0,
         receita_ativos_com_custo: Number(row.receita_ativos_com_custo) || 0,
         custo_ativos_com_custo: Number(row.custo_ativos_com_custo) || 0,
-        inativos_com_custo: Number(row.inativos_com_custo) || 0,
         receita_inativos_com_custo: Number(row.receita_inativos_com_custo) || 0,
         custo_inativos_com_custo: Number(row.custo_inativos_com_custo) || 0,
       }
 
-      // Adicionar à faixa etária
-      cardFaixaEtaria.ativos += valores.ativos
-      cardFaixaEtaria.ativos_sem_custo += valores.ativos_sem_custo
-      cardFaixaEtaria.ativos_com_custo += valores.ativos_com_custo
-      cardFaixaEtaria.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
-      cardFaixaEtaria.receita_ativos_com_custo += valores.receita_ativos_com_custo
-      cardFaixaEtaria.custo_ativos_com_custo += valores.custo_ativos_com_custo
-      cardFaixaEtaria.inativos_com_custo += valores.inativos_com_custo
-      cardFaixaEtaria.receita_inativos_com_custo += valores.receita_inativos_com_custo
-      cardFaixaEtaria.custo_inativos_com_custo += valores.custo_inativos_com_custo
+      // Nível 1: Entidade (chave: mes|entidade)
+      const keyEntidade = `${mes}|${entidade}`
+      let dadosEntidade = cardsFilhosMap.get(keyEntidade)
+      if (!dadosEntidade) {
+        dadosEntidade = {
+          mes,
+          entidade,
+          por_mes_reajuste: new Map(),
+          ativos_sem_custo: 0,
+          ativos_com_custo: 0,
+          inativos_com_custo: 0,
+          receita_ativos_sem_custo: 0,
+          receita_ativos_com_custo: 0,
+          custo_ativos_com_custo: 0,
+          receita_inativos_com_custo: 0,
+          custo_inativos_com_custo: 0,
+        }
+        cardsFilhosMap.set(keyEntidade, dadosEntidade)
+      }
 
-      // Acumular no mês de reajuste
-      cardMesReajuste.ativos += valores.ativos
-      cardMesReajuste.ativos_sem_custo += valores.ativos_sem_custo
-      cardMesReajuste.ativos_com_custo += valores.ativos_com_custo
-      cardMesReajuste.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
-      cardMesReajuste.receita_ativos_com_custo += valores.receita_ativos_com_custo
-      cardMesReajuste.custo_ativos_com_custo += valores.custo_ativos_com_custo
-      cardMesReajuste.inativos_com_custo += valores.inativos_com_custo
-      cardMesReajuste.receita_inativos_com_custo += valores.receita_inativos_com_custo
-      cardMesReajuste.custo_inativos_com_custo += valores.custo_inativos_com_custo
+      // Nível 2: Mês de Reajuste (chave: mes|entidade|mes_reajuste)
+      const keyMesReajuste = mesReajuste || 'null'
+      let dadosMesReajuste = dadosEntidade.por_mes_reajuste.get(keyMesReajuste)
+      if (!dadosMesReajuste) {
+        dadosMesReajuste = {
+          mes_reajuste: mesReajuste,
+          por_plano: new Map(),
+          ativos_sem_custo: 0,
+          ativos_com_custo: 0,
+          inativos_com_custo: 0,
+          receita_ativos_sem_custo: 0,
+          receita_ativos_com_custo: 0,
+          custo_ativos_com_custo: 0,
+          receita_inativos_com_custo: 0,
+          custo_inativos_com_custo: 0,
+        }
+        dadosEntidade.por_mes_reajuste.set(keyMesReajuste, dadosMesReajuste)
+      }
 
-      // Acumular no plano
-      cardPlano.ativos += valores.ativos
-      cardPlano.ativos_sem_custo += valores.ativos_sem_custo
-      cardPlano.ativos_com_custo += valores.ativos_com_custo
-      cardPlano.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
-      cardPlano.receita_ativos_com_custo += valores.receita_ativos_com_custo
-      cardPlano.custo_ativos_com_custo += valores.custo_ativos_com_custo
-      cardPlano.inativos_com_custo += valores.inativos_com_custo
-      cardPlano.receita_inativos_com_custo += valores.receita_inativos_com_custo
-      cardPlano.custo_inativos_com_custo += valores.custo_inativos_com_custo
+      // Nível 3: Plano (chave: mes|entidade|mes_reajuste|plano)
+      const keyPlano = `${mes}|${entidade}|${keyMesReajuste}|${plano}`
+      let dadosPlano = dadosMesReajuste.por_plano.get(plano)
+      if (!dadosPlano) {
+        dadosPlano = {
+          plano,
+          por_faixa_etaria: new Map(),
+          ativos_sem_custo: 0,
+          ativos_com_custo: 0,
+          inativos_com_custo: 0,
+          receita_ativos_sem_custo: 0,
+          receita_ativos_com_custo: 0,
+          custo_ativos_com_custo: 0,
+          receita_inativos_com_custo: 0,
+          custo_inativos_com_custo: 0,
+        }
+        dadosMesReajuste.por_plano.set(plano, dadosPlano)
+      }
 
-      // Acumular na entidade
-      cardEntidade.ativos += valores.ativos
-      cardEntidade.ativos_sem_custo += valores.ativos_sem_custo
-      cardEntidade.ativos_com_custo += valores.ativos_com_custo
-      cardEntidade.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
-      cardEntidade.receita_ativos_com_custo += valores.receita_ativos_com_custo
-      cardEntidade.custo_ativos_com_custo += valores.custo_ativos_com_custo
-      cardEntidade.inativos_com_custo += valores.inativos_com_custo
-      cardEntidade.receita_inativos_com_custo += valores.receita_inativos_com_custo
-      cardEntidade.custo_inativos_com_custo += valores.custo_inativos_com_custo
+      // Nível 4: Faixa Etária (chave completa: mes|entidade|mes_reajuste|plano|faixa_etaria)
+      let dadosFaixa = dadosPlano.por_faixa_etaria.get(faixaEtaria)
+      if (!dadosFaixa) {
+        dadosFaixa = {
+          faixa_etaria: faixaEtaria,
+          ativos_sem_custo: 0,
+          ativos_com_custo: 0,
+          inativos_com_custo: 0,
+          receita_ativos_sem_custo: 0,
+          receita_ativos_com_custo: 0,
+          custo_ativos_com_custo: 0,
+          receita_inativos_com_custo: 0,
+          custo_inativos_com_custo: 0,
+        }
+        dadosPlano.por_faixa_etaria.set(faixaEtaria, dadosFaixa)
+      }
+
+      // Adicionar valores à faixa etária (SUM direto da query)
+      dadosFaixa.ativos_sem_custo += valores.ativos_sem_custo
+      dadosFaixa.ativos_com_custo += valores.ativos_com_custo
+      dadosFaixa.inativos_com_custo += valores.inativos_com_custo
+      dadosFaixa.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
+      dadosFaixa.receita_ativos_com_custo += valores.receita_ativos_com_custo
+      dadosFaixa.custo_ativos_com_custo += valores.custo_ativos_com_custo
+      dadosFaixa.receita_inativos_com_custo += valores.receita_inativos_com_custo
+      dadosFaixa.custo_inativos_com_custo += valores.custo_inativos_com_custo
+
+      // Acumular no plano (SUM direto da query)
+      dadosPlano.ativos_sem_custo += valores.ativos_sem_custo
+      dadosPlano.ativos_com_custo += valores.ativos_com_custo
+      dadosPlano.inativos_com_custo += valores.inativos_com_custo
+      dadosPlano.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
+      dadosPlano.receita_ativos_com_custo += valores.receita_ativos_com_custo
+      dadosPlano.custo_ativos_com_custo += valores.custo_ativos_com_custo
+      dadosPlano.receita_inativos_com_custo += valores.receita_inativos_com_custo
+      dadosPlano.custo_inativos_com_custo += valores.custo_inativos_com_custo
+
+      // Acumular no mês de reajuste (SUM direto da query)
+      dadosMesReajuste.ativos_sem_custo += valores.ativos_sem_custo
+      dadosMesReajuste.ativos_com_custo += valores.ativos_com_custo
+      dadosMesReajuste.inativos_com_custo += valores.inativos_com_custo
+      dadosMesReajuste.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
+      dadosMesReajuste.receita_ativos_com_custo += valores.receita_ativos_com_custo
+      dadosMesReajuste.custo_ativos_com_custo += valores.custo_ativos_com_custo
+      dadosMesReajuste.receita_inativos_com_custo += valores.receita_inativos_com_custo
+      dadosMesReajuste.custo_inativos_com_custo += valores.custo_inativos_com_custo
+
+      // Acumular na entidade (SUM direto da query)
+      dadosEntidade.ativos_sem_custo += valores.ativos_sem_custo
+      dadosEntidade.ativos_com_custo += valores.ativos_com_custo
+      dadosEntidade.inativos_com_custo += valores.inativos_com_custo
+      dadosEntidade.receita_ativos_sem_custo += valores.receita_ativos_sem_custo
+      dadosEntidade.receita_ativos_com_custo += valores.receita_ativos_com_custo
+      dadosEntidade.custo_ativos_com_custo += valores.custo_ativos_com_custo
+      dadosEntidade.receita_inativos_com_custo += valores.receita_inativos_com_custo
+      dadosEntidade.custo_inativos_com_custo += valores.custo_inativos_com_custo
     })
 
-    // Converter Maps para arrays e estruturar hierarquicamente
     // Função auxiliar para ordenar faixas etárias
     const getOrderFaixa = (faixa: string) => {
       if (faixa === '00 a 18') return 0
@@ -540,8 +541,34 @@ inativos_linha AS (
       return match ? parseInt(match[1]) : 99
     }
 
+    // Função para validar totais usando regras conceituais
+    const validarTotais = (nome: string, dados: any) => {
+      const vidasAtivasCalculadas = dados.ativos_sem_custo + dados.ativos_com_custo
+      const vidasTotaisCalculadas = dados.ativos_sem_custo + dados.ativos_com_custo + dados.inativos_com_custo
+      const receitaAtivosCalculada = dados.receita_ativos_sem_custo + dados.receita_ativos_com_custo
+      const receitaTotalCalculada = dados.receita_ativos_sem_custo + dados.receita_ativos_com_custo + dados.receita_inativos_com_custo
+
+      const erros: string[] = []
+      if (Math.abs(vidasAtivasCalculadas - (dados.ativos || vidasAtivasCalculadas)) > 0.01) {
+        erros.push(`Vidas Ativas: ${vidasAtivasCalculadas} != ${dados.ativos || vidasAtivasCalculadas}`)
+      }
+      if (Math.abs(vidasTotaisCalculadas - (dados.total_vidas || vidasTotaisCalculadas)) > 0.01) {
+        erros.push(`Vidas Totais: ${vidasTotaisCalculadas} != ${dados.total_vidas || vidasTotaisCalculadas}`)
+      }
+      if (Math.abs(receitaAtivosCalculada - (dados.receita_ativos || receitaAtivosCalculada)) > 0.01) {
+        erros.push(`Receita Ativos: ${receitaAtivosCalculada} != ${dados.receita_ativos || receitaAtivosCalculada}`)
+      }
+      if (Math.abs(receitaTotalCalculada - (dados.receita_total || receitaTotalCalculada)) > 0.01) {
+        erros.push(`Receita Total: ${receitaTotalCalculada} != ${dados.receita_total || receitaTotalCalculada}`)
+      }
+
+      if (erros.length > 0 && process.env.NODE_ENV === 'development') {
+        console.warn(`⚠️ VALIDAÇÃO ${nome}:`, erros.join(', '))
+      }
+    }
+
     // Reorganizar dados por status (ativo/inativo) para compatibilidade com frontend
-    // A query retorna dados agrupados, mas precisamos separar por status para criar os arrays esperados
+    // Usando a estrutura hierárquica correta com chaves completas
     const entidadesPorStatus: {
       ativo: Map<string, any>
       inativo: Map<string, any>
@@ -550,153 +577,251 @@ inativos_linha AS (
       inativo: new Map(),
     }
 
-    // Processar cada linha da query para separar por status
-    dados.forEach((row: any) => {
-      const entidade = row.entidade || ''
-      const mesReajuste = row.mes_reajuste || null
-      const plano = row.plano || ''
-      const faixaEtaria = row.faixa_etaria || ''
-
-      if (!entidade) return
-
-      // Processar ativos (se houver)
-      if (Number(row.ativos) > 0 || Number(row.ativos_sem_custo) > 0 || Number(row.ativos_com_custo) > 0) {
-        const keyAtivo = `${entidade}|${mesReajuste || 'null'}`
-        let entidadeAtivo = entidadesPorStatus.ativo.get(keyAtivo)
+    // Processar estrutura hierárquica para criar arrays por status
+    // ⚠️ IMPORTANTE: Agregar usando valores do escopo correto (mes_reajuste, não entidade inteira)
+    cardsFilhosMap.forEach((dadosEntidade) => {
+      const { mes, entidade } = dadosEntidade
+      
+      dadosEntidade.por_mes_reajuste.forEach((dadosMesReajuste) => {
+        const { mes_reajuste } = dadosMesReajuste
         
-        if (!entidadeAtivo) {
-          entidadeAtivo = {
-            entidade,
-            mes_reajuste: mesReajuste,
-            vidas: 0,
-            valor_total: 0,
-            valor_net_total: 0,
-            por_plano: new Map(),
-            por_faixa_etaria: new Map(),
+        // Processar ativos - usar valores do MÊS DE REAJUSTE, não da entidade inteira
+        const vidasAtivasMesReajuste = dadosMesReajuste.ativos_sem_custo + dadosMesReajuste.ativos_com_custo
+        if (vidasAtivasMesReajuste > 0) {
+          const keyAtivo = `${mes}|${entidade}|${mes_reajuste || 'null'}`
+          let entidadeAtivo = entidadesPorStatus.ativo.get(keyAtivo)
+          
+          if (!entidadeAtivo) {
+            entidadeAtivo = {
+              mes,
+              entidade,
+              mes_reajuste: mes_reajuste,
+              vidas: 0,
+              valor_total: 0,
+              valor_net_total: 0,
+              por_plano: new Map(),
+              por_faixa_etaria: new Map(),
+              // Campos originais da query
+              ativos_sem_custo: 0,
+              ativos_com_custo: 0,
+              receita_ativos_sem_custo: 0,
+              receita_ativos_com_custo: 0,
+              custo_ativos_com_custo: 0,
+            }
+            entidadesPorStatus.ativo.set(keyAtivo, entidadeAtivo)
           }
-          entidadesPorStatus.ativo.set(keyAtivo, entidadeAtivo)
+
+          // Agregar valores do MÊS DE REAJUSTE (escopo correto)
+          entidadeAtivo.vidas += vidasAtivasMesReajuste
+          entidadeAtivo.valor_total += dadosMesReajuste.custo_ativos_com_custo
+          entidadeAtivo.valor_net_total += dadosMesReajuste.receita_ativos_sem_custo + dadosMesReajuste.receita_ativos_com_custo
+          entidadeAtivo.ativos_sem_custo += dadosMesReajuste.ativos_sem_custo
+          entidadeAtivo.ativos_com_custo += dadosMesReajuste.ativos_com_custo
+          entidadeAtivo.receita_ativos_sem_custo += dadosMesReajuste.receita_ativos_sem_custo
+          entidadeAtivo.receita_ativos_com_custo += dadosMesReajuste.receita_ativos_com_custo
+          entidadeAtivo.custo_ativos_com_custo += dadosMesReajuste.custo_ativos_com_custo
+
+          // Processar planos dentro deste mês de reajuste
+          dadosMesReajuste.por_plano.forEach((dadosPlano) => {
+            const planoVidasAtivas = dadosPlano.ativos_sem_custo + dadosPlano.ativos_com_custo
+            if (planoVidasAtivas > 0) {
+              let planoAtivo = entidadeAtivo.por_plano.get(dadosPlano.plano)
+              if (!planoAtivo) {
+                planoAtivo = {
+                  plano: dadosPlano.plano,
+                  vidas: 0,
+                  valor: 0,
+                  valor_net: 0,
+                  por_faixa_etaria: [],
+                  // Campos originais
+                  ativos_sem_custo: 0,
+                  ativos_com_custo: 0,
+                  receita_ativos_sem_custo: 0,
+                  receita_ativos_com_custo: 0,
+                  custo_ativos_com_custo: 0,
+                }
+                entidadeAtivo.por_plano.set(dadosPlano.plano, planoAtivo)
+              }
+
+              planoAtivo.vidas += planoVidasAtivas
+              planoAtivo.valor += dadosPlano.custo_ativos_com_custo
+              planoAtivo.valor_net += dadosPlano.receita_ativos_sem_custo + dadosPlano.receita_ativos_com_custo
+              planoAtivo.ativos_sem_custo += dadosPlano.ativos_sem_custo
+              planoAtivo.ativos_com_custo += dadosPlano.ativos_com_custo
+              planoAtivo.receita_ativos_sem_custo += dadosPlano.receita_ativos_sem_custo
+              planoAtivo.receita_ativos_com_custo += dadosPlano.receita_ativos_com_custo
+              planoAtivo.custo_ativos_com_custo += dadosPlano.custo_ativos_com_custo
+
+              // Processar faixas etárias do plano
+              dadosPlano.por_faixa_etaria.forEach((dadosFaixa) => {
+                const faixaVidasAtivas = dadosFaixa.ativos_sem_custo + dadosFaixa.ativos_com_custo
+                if (faixaVidasAtivas > 0) {
+                  planoAtivo.por_faixa_etaria.push({
+                    faixa_etaria: dadosFaixa.faixa_etaria,
+                    vidas: faixaVidasAtivas,
+                    valor: dadosFaixa.custo_ativos_com_custo,
+                    valor_net: dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo,
+                  })
+                }
+              })
+            }
+          })
         }
 
-        entidadeAtivo.vidas += Number(row.ativos) || 0
-        entidadeAtivo.valor_total += Number(row.custo_ativos_com_custo) || 0
-        entidadeAtivo.valor_net_total += Number(row.receita_ativos_com_custo) || 0
-
-        // Adicionar plano
-        let planoAtivo = entidadeAtivo.por_plano.get(plano)
-        if (!planoAtivo) {
-          planoAtivo = {
-            plano,
-            vidas: 0,
-            valor: 0,
-            valor_net: 0,
-            por_faixa_etaria: new Map(),
+        // Processar inativos - usar valores do MÊS DE REAJUSTE, não da entidade inteira
+        if (dadosMesReajuste.inativos_com_custo > 0) {
+          const keyInativo = `${mes}|${entidade}|${mes_reajuste || 'null'}`
+          let entidadeInativo = entidadesPorStatus.inativo.get(keyInativo)
+          
+          if (!entidadeInativo) {
+            entidadeInativo = {
+              mes,
+              entidade,
+              mes_reajuste: mes_reajuste,
+              vidas: 0,
+              valor_total: 0,
+              valor_net_total: 0,
+              por_plano: new Map(),
+              por_faixa_etaria: new Map(),
+              // Campos originais
+              inativos_com_custo: 0,
+              receita_inativos_com_custo: 0,
+              custo_inativos_com_custo: 0,
+            }
+            entidadesPorStatus.inativo.set(keyInativo, entidadeInativo)
           }
-          entidadeAtivo.por_plano.set(plano, planoAtivo)
-        }
-        planoAtivo.vidas += Number(row.ativos) || 0
-        planoAtivo.valor += Number(row.custo_ativos_com_custo) || 0
-        planoAtivo.valor_net += Number(row.receita_ativos_com_custo) || 0
 
-        // Adicionar faixa etária
-        let faixaAtivo = planoAtivo.por_faixa_etaria.get(faixaEtaria)
-        if (!faixaAtivo) {
-          faixaAtivo = {
-            faixa_etaria: faixaEtaria,
-            vidas: 0,
-            valor: 0,
-            valor_net: 0,
-          }
-          planoAtivo.por_faixa_etaria.set(faixaEtaria, faixaAtivo)
-        }
-        faixaAtivo.vidas += Number(row.ativos) || 0
-        faixaAtivo.valor += Number(row.custo_ativos_com_custo) || 0
-        faixaAtivo.valor_net += Number(row.receita_ativos_com_custo) || 0
-      }
+          // Agregar valores do MÊS DE REAJUSTE (escopo correto)
+          entidadeInativo.vidas += dadosMesReajuste.inativos_com_custo
+          entidadeInativo.valor_total += dadosMesReajuste.custo_inativos_com_custo
+          entidadeInativo.valor_net_total += dadosMesReajuste.receita_inativos_com_custo
+          entidadeInativo.inativos_com_custo += dadosMesReajuste.inativos_com_custo
+          entidadeInativo.receita_inativos_com_custo += dadosMesReajuste.receita_inativos_com_custo
+          entidadeInativo.custo_inativos_com_custo += dadosMesReajuste.custo_inativos_com_custo
 
-      // Processar inativos (se houver)
-      if (Number(row.inativos_com_custo) > 0) {
-        const keyInativo = `${entidade}|${mesReajuste || 'null'}`
-        let entidadeInativo = entidadesPorStatus.inativo.get(keyInativo)
-        
-        if (!entidadeInativo) {
-          entidadeInativo = {
-            entidade,
-            mes_reajuste: mesReajuste,
-            vidas: 0,
-            valor_total: 0,
-            valor_net_total: 0,
-            por_plano: new Map(),
-            por_faixa_etaria: new Map(),
-          }
-          entidadesPorStatus.inativo.set(keyInativo, entidadeInativo)
-        }
+          // Processar planos inativos
+          dadosMesReajuste.por_plano.forEach((dadosPlano) => {
+            if (dadosPlano.inativos_com_custo > 0) {
+              let planoInativo = entidadeInativo.por_plano.get(dadosPlano.plano)
+              if (!planoInativo) {
+                planoInativo = {
+                  plano: dadosPlano.plano,
+                  vidas: 0,
+                  valor: 0,
+                  valor_net: 0,
+                  por_faixa_etaria: [],
+                  // Campos originais
+                  inativos_com_custo: 0,
+                  receita_inativos_com_custo: 0,
+                  custo_inativos_com_custo: 0,
+                }
+                entidadeInativo.por_plano.set(dadosPlano.plano, planoInativo)
+              }
 
-        entidadeInativo.vidas += Number(row.inativos_com_custo) || 0
-        entidadeInativo.valor_total += Number(row.custo_inativos_com_custo) || 0
-        entidadeInativo.valor_net_total += Number(row.receita_inativos_com_custo) || 0
+              planoInativo.vidas += dadosPlano.inativos_com_custo
+              planoInativo.valor += dadosPlano.custo_inativos_com_custo
+              planoInativo.valor_net += dadosPlano.receita_inativos_com_custo
+              planoInativo.inativos_com_custo += dadosPlano.inativos_com_custo
+              planoInativo.receita_inativos_com_custo += dadosPlano.receita_inativos_com_custo
+              planoInativo.custo_inativos_com_custo += dadosPlano.custo_inativos_com_custo
 
-        // Adicionar plano
-        let planoInativo = entidadeInativo.por_plano.get(plano)
-        if (!planoInativo) {
-          planoInativo = {
-            plano,
-            vidas: 0,
-            valor: 0,
-            valor_net: 0,
-            por_faixa_etaria: new Map(),
-          }
-          entidadeInativo.por_plano.set(plano, planoInativo)
+              // Processar faixas etárias inativas
+              dadosPlano.por_faixa_etaria.forEach((dadosFaixa) => {
+                if (dadosFaixa.inativos_com_custo > 0) {
+                  planoInativo.por_faixa_etaria.push({
+                    faixa_etaria: dadosFaixa.faixa_etaria,
+                    vidas: dadosFaixa.inativos_com_custo,
+                    valor: dadosFaixa.custo_inativos_com_custo,
+                    valor_net: dadosFaixa.receita_inativos_com_custo,
+                  })
+                }
+              })
+            }
+          })
         }
-        planoInativo.vidas += Number(row.inativos_com_custo) || 0
-        planoInativo.valor += Number(row.custo_inativos_com_custo) || 0
-        planoInativo.valor_net += Number(row.receita_inativos_com_custo) || 0
-
-        // Adicionar faixa etária
-        let faixaInativo = planoInativo.por_faixa_etaria.get(faixaEtaria)
-        if (!faixaInativo) {
-          faixaInativo = {
-            faixa_etaria: faixaEtaria,
-            vidas: 0,
-            valor: 0,
-            valor_net: 0,
-          }
-          planoInativo.por_faixa_etaria.set(faixaEtaria, faixaInativo)
-        }
-        faixaInativo.vidas += Number(row.inativos_com_custo) || 0
-        faixaInativo.valor += Number(row.custo_inativos_com_custo) || 0
-        faixaInativo.valor_net += Number(row.receita_inativos_com_custo) || 0
-      }
+      })
     })
 
-    // Converter Maps para arrays e calcular percentuais
-    const processarEntidades = (entidadesMap: Map<string, any>, totalVidas: number, totalValor: number) => {
+    // Converter Maps para arrays e calcular percentuais usando regras conceituais
+    const processarEntidades = (entidadesMap: Map<string, any>, totalVidas: number, totalValor: number, tipo: 'ativo' | 'inativo') => {
       return Array.from(entidadesMap.values()).map((entidade: any) => {
+        // Calcular totais usando regras conceituais
+        let vidasExibidas: number
+        let receitaExibida: number
+        let custoExibido: number
+
+        if (tipo === 'ativo') {
+          // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
+          vidasExibidas = entidade.ativos_sem_custo + entidade.ativos_com_custo
+          // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+          receitaExibida = entidade.receita_ativos_sem_custo + entidade.receita_ativos_com_custo
+          custoExibido = entidade.custo_ativos_com_custo
+        } else {
+          // Regra: Vidas Inativas = inativos_com_custo
+          vidasExibidas = entidade.inativos_com_custo
+          // Regra: Receita Inativos = receita_inativos_com_custo
+          receitaExibida = entidade.receita_inativos_com_custo
+          custoExibido = entidade.custo_inativos_com_custo
+        }
+
+        // Validar totais
+        validarTotais(`${tipo} - ${entidade.entidade}`, {
+          ...entidade,
+          vidas: vidasExibidas,
+          receita_ativos: receitaExibida,
+        })
+
+        // Processar planos
         const planos = Array.from(entidade.por_plano.values()).map((plano: any) => {
-          const faixas = Array.from(plano.por_faixa_etaria.values())
+          let planoVidasExibidas: number
+          let planoReceitaExibida: number
+          let planoCustoExibido: number
+
+          if (tipo === 'ativo') {
+            planoVidasExibidas = plano.ativos_sem_custo + plano.ativos_com_custo
+            planoReceitaExibida = plano.receita_ativos_sem_custo + plano.receita_ativos_com_custo
+            planoCustoExibido = plano.custo_ativos_com_custo
+          } else {
+            planoVidasExibidas = plano.inativos_com_custo
+            planoReceitaExibida = plano.receita_inativos_com_custo
+            planoCustoExibido = plano.custo_inativos_com_custo
+          }
+
+          // Ordenar faixas etárias
+          const faixas = (plano.por_faixa_etaria || [])
             .sort((a: any, b: any) => getOrderFaixa(a.faixa_etaria) - getOrderFaixa(b.faixa_etaria))
+
+          // Validar totais do plano
+          const somaFaixasVidas = faixas.reduce((sum: number, f: any) => sum + f.vidas, 0)
+          if (Math.abs(planoVidasExibidas - somaFaixasVidas) > 0.01 && process.env.NODE_ENV === 'development') {
+            console.warn(`⚠️ VALIDAÇÃO Plano ${plano.plano}: Vidas (${planoVidasExibidas}) != Soma Faixas (${somaFaixasVidas})`)
+          }
 
           return {
             plano: plano.plano,
-            vidas: plano.vidas,
-            valor: plano.valor,
-            valor_net: plano.valor_net,
+            vidas: planoVidasExibidas,
+            valor: planoCustoExibido,
+            valor_net: planoReceitaExibida,
             por_faixa_etaria: faixas,
           }
         }).sort((a: any, b: any) => b.vidas - a.vidas)
 
-        const faixas = Array.from(entidade.por_faixa_etaria.values())
-          .sort((a: any, b: any) => getOrderFaixa(a.faixa_etaria) - getOrderFaixa(b.faixa_etaria))
+        // Validar que soma dos planos = total da entidade
+        const somaPlanosVidas = planos.reduce((sum: number, p: any) => sum + p.vidas, 0)
+        if (Math.abs(vidasExibidas - somaPlanosVidas) > 0.01 && process.env.NODE_ENV === 'development') {
+          console.warn(`⚠️ VALIDAÇÃO Entidade ${entidade.entidade}: Vidas (${vidasExibidas}) != Soma Planos (${somaPlanosVidas})`)
+        }
 
         return {
           entidade: entidade.entidade,
           mes_reajuste: entidade.mes_reajuste,
-          vidas: entidade.vidas,
-          valor_total: entidade.valor_total,
-          valor_net_total: entidade.valor_net_total,
-          pct_vidas: totalVidas > 0 ? entidade.vidas / totalVidas : 0,
-          pct_valor: totalValor > 0 ? entidade.valor_total / totalValor : 0,
+          vidas: vidasExibidas,
+          valor_total: custoExibido,
+          valor_net_total: receitaExibida,
+          pct_vidas: totalVidas > 0 ? vidasExibidas / totalVidas : 0,
+          pct_valor: totalValor > 0 ? custoExibido / totalValor : 0,
           por_plano: planos,
-          por_faixa_etaria: faixas,
+          por_faixa_etaria: [], // Não usado no frontend atual
         }
       }).sort((a, b) => {
         if (a.entidade !== b.entidade) return a.entidade.localeCompare(b.entidade)
@@ -709,50 +834,82 @@ inativos_linha AS (
       })
     }
 
-    // Calcular totais para percentuais
-    const totalVidasAtivo = consolidado.ativos
+    // Calcular totais para percentuais usando regras conceituais
+    // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
+    const totalVidasAtivo = consolidado.ativos_sem_custo + consolidado.ativos_com_custo
+    // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+    const totalReceitaAtivo = consolidado.receita_ativos_sem_custo + consolidado.receita_ativos_com_custo
     const totalValorAtivo = consolidado.custo_ativos_com_custo
+    
+    // Regra: Vidas Inativas = inativos_com_custo
     const totalVidasInativo = consolidado.inativos_com_custo
+    // Regra: Receita Inativos = receita_inativos_com_custo
+    const totalReceitaInativo = consolidado.receita_inativos_com_custo
     const totalValorInativo = consolidado.custo_inativos_com_custo
 
-    const entidadesAtivo = processarEntidades(entidadesPorStatus.ativo, totalVidasAtivo, totalValorAtivo)
-    const entidadesInativo = processarEntidades(entidadesPorStatus.inativo, totalVidasInativo, totalValorInativo)
+    // Validar consolidado
+    validarTotais('Consolidado', {
+      ...consolidado,
+      vidas: totalVidasAtivo,
+      receita_ativos: totalReceitaAtivo,
+    })
 
-    // Criar array total (soma de ativo + inativo)
+    const entidadesAtivo = processarEntidades(entidadesPorStatus.ativo, totalVidasAtivo, totalValorAtivo, 'ativo')
+    const entidadesInativo = processarEntidades(entidadesPorStatus.inativo, totalVidasInativo, totalValorInativo, 'inativo')
+
+    // Criar array total (soma de ativo + inativo) usando regras conceituais
+    // Regra: Vidas Totais = ativos_sem_custo + ativos_com_custo + inativos_com_custo
+    const totalVidasTotal = totalVidasAtivo + totalVidasInativo
+    // Regra: Receita Total = receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+    const totalReceitaTotal = totalReceitaAtivo + totalReceitaInativo
+    const totalValorTotal = totalValorAtivo + totalValorInativo
+
     const entidadesTotalMap = new Map<string, any>()
     ;[...entidadesAtivo, ...entidadesInativo].forEach(ent => {
+      // Usar chave completa incluindo mes para evitar duplicação
       const key = `${ent.entidade}|${ent.mes_reajuste || 'null'}`
       const existente = entidadesTotalMap.get(key)
       if (existente) {
+        // Regra: Vidas Totais = ativos + inativos
         existente.vidas += ent.vidas
         existente.valor_total += ent.valor_total
         existente.valor_net_total += ent.valor_net_total
-        // Combinar planos
+        // Combinar planos (usar chave completa: plano)
         ent.por_plano.forEach((plano: any) => {
           const planoExistente = existente.por_plano.find((p: any) => p.plano === plano.plano)
           if (planoExistente) {
             planoExistente.vidas += plano.vidas
             planoExistente.valor += plano.valor
             planoExistente.valor_net += plano.valor_net
+            // Combinar faixas etárias
+            plano.por_faixa_etaria.forEach((faixa: any) => {
+              const faixaExistente = planoExistente.por_faixa_etaria.find((f: any) => f.faixa_etaria === faixa.faixa_etaria)
+              if (faixaExistente) {
+                faixaExistente.vidas += faixa.vidas
+                faixaExistente.valor += faixa.valor
+                faixaExistente.valor_net += faixa.valor_net
+              } else {
+                planoExistente.por_faixa_etaria.push({ ...faixa })
+              }
+            })
           } else {
-            existente.por_plano.push(plano)
+            existente.por_plano.push({ ...plano, por_faixa_etaria: [...plano.por_faixa_etaria] })
           }
         })
       } else {
         entidadesTotalMap.set(key, {
           ...ent,
-          por_plano: [...ent.por_plano],
+          por_plano: ent.por_plano.map((p: any) => ({
+            ...p,
+            por_faixa_etaria: [...p.por_faixa_etaria],
+          })),
         })
       }
     })
     const entidadesTotal = Array.from(entidadesTotalMap.values()).map(ent => ({
       ...ent,
-      pct_vidas: (consolidado.ativos + consolidado.inativos_com_custo) > 0 
-        ? ent.vidas / (consolidado.ativos + consolidado.inativos_com_custo) 
-        : 0,
-      pct_valor: (consolidado.custo_ativos_com_custo + consolidado.custo_inativos_com_custo) > 0
-        ? ent.valor_total / (consolidado.custo_ativos_com_custo + consolidado.custo_inativos_com_custo)
-        : 0,
+      pct_vidas: totalVidasTotal > 0 ? ent.vidas / totalVidasTotal : 0,
+      pct_valor: totalValorTotal > 0 ? ent.valor_total / totalValorTotal : 0,
     })).sort((a, b) => {
       if (a.entidade !== b.entidade) return a.entidade.localeCompare(b.entidade)
       if (a.mes_reajuste !== b.mes_reajuste) {
@@ -763,67 +920,104 @@ inativos_linha AS (
       return b.valor_total - a.valor_total
     })
 
-    // Validar que Cards Mãe = soma dos Cards Filhos
+    // Validar que Cards Mãe = soma dos Cards Filhos usando regras conceituais
     const somaFilhosAtivo = entidadesAtivo.reduce((sum, e) => sum + e.vidas, 0)
     const somaFilhosInativo = entidadesInativo.reduce((sum, e) => sum + e.vidas, 0)
-    const diffAtivo = Math.abs(consolidado.ativos - somaFilhosAtivo)
-    const diffInativo = Math.abs(consolidado.inativos_com_custo - somaFilhosInativo)
+    const somaFilhosTotal = entidadesTotal.reduce((sum, e) => sum + e.vidas, 0)
+    
+    const diffAtivo = Math.abs(totalVidasAtivo - somaFilhosAtivo)
+    const diffInativo = Math.abs(totalVidasInativo - somaFilhosInativo)
+    const diffTotal = Math.abs(totalVidasTotal - somaFilhosTotal)
 
     if (diffAtivo > 0.01) {
-      console.warn(`⚠️ VALIDAÇÃO: Card Mãe ativos (${consolidado.ativos}) != Soma Filhos (${somaFilhosAtivo}). Diferença: ${diffAtivo}`)
+      console.warn(`⚠️ VALIDAÇÃO FINAL: Card Mãe ativos (${totalVidasAtivo}) != Soma Filhos (${somaFilhosAtivo}). Diferença: ${diffAtivo}`)
     }
     if (diffInativo > 0.01) {
-      console.warn(`⚠️ VALIDAÇÃO: Card Mãe inativos (${consolidado.inativos_com_custo}) != Soma Filhos (${somaFilhosInativo}). Diferença: ${diffInativo}`)
+      console.warn(`⚠️ VALIDAÇÃO FINAL: Card Mãe inativos (${totalVidasInativo}) != Soma Filhos (${somaFilhosInativo}). Diferença: ${diffInativo}`)
+    }
+    if (diffTotal > 0.01) {
+      console.warn(`⚠️ VALIDAÇÃO FINAL: Card Mãe total (${totalVidasTotal}) != Soma Filhos (${somaFilhosTotal}). Diferença: ${diffTotal}`)
+    }
+
+    if (diffAtivo <= 0.01 && diffInativo <= 0.01 && diffTotal <= 0.01) {
+      console.log(`✅ VALIDAÇÃO FINAL: Todos os totais estão corretos!`)
     }
 
     console.log(`✅ Processamento concluído em ${Date.now() - startTime}ms`)
 
-    // Ajustar estrutura de por_mes para compatibilidade com frontend
-    const porMesFormatado = porMesGeral.map(mes => ({
-      mes: mes.mes,
-      // Campos compatíveis com frontend
-      ativo: mes.ativos,
-      inativo: mes.inativos_com_custo,
+    // Ajustar estrutura de por_mes para compatibilidade com frontend usando regras conceituais
+    const porMesFormatado = porMesGeral.map(mes => {
+      // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
+      const vidasAtivas = mes.ativos_sem_custo + mes.ativos_com_custo
+      // Regra: Vidas Inativas = inativos_com_custo
+      const vidasInativas = mes.inativos_com_custo
+      // Regra: Vidas Totais = ativos_sem_custo + ativos_com_custo + inativos_com_custo
+      const vidasTotais = vidasAtivas + vidasInativas
+      
+      // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+      const receitaAtivos = mes.receita_ativos_sem_custo + mes.receita_ativos_com_custo
+      // Regra: Receita Inativos = receita_inativos_com_custo
+      const receitaInativos = mes.receita_inativos_com_custo
+      // Regra: Receita Total = receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+      const receitaTotal = receitaAtivos + receitaInativos
+
+      // Validar totais do mês
+      validarTotais(`Mês ${mes.mes}`, {
+        ...mes,
+        vidas: vidasAtivas,
+        receita_ativos: receitaAtivos,
+        receita_total: receitaTotal,
+      })
+
+      return {
+        mes: mes.mes,
+        // Campos compatíveis com frontend (usando regras conceituais)
+        ativo: vidasAtivas,
+        inativo: vidasInativas,
+        nao_localizado: 0, // Query não retorna não localizados
+        total_vidas: vidasTotais,
+        valor_ativo: mes.custo_ativos_com_custo,
+        valor_inativo: mes.custo_inativos_com_custo,
+        valor_nao_localizado: 0,
+        valor_total_geral: mes.custo_ativos_com_custo + mes.custo_inativos_com_custo,
+        valor_net_ativo: receitaAtivos,
+        valor_net_inativo: receitaInativos,
+        valor_net_nao_localizado: 0,
+        valor_net_total_geral: receitaTotal,
+        // Campos originais da query (mantidos para referência)
+        ativos: mes.ativos,
+        ativos_sem_custo: mes.ativos_sem_custo,
+        ativos_com_custo: mes.ativos_com_custo,
+        receita_ativos_sem_custo: mes.receita_ativos_sem_custo,
+        receita_ativos_com_custo: mes.receita_ativos_com_custo,
+        custo_ativos_com_custo: mes.custo_ativos_com_custo,
+        inativos_com_custo: mes.inativos_com_custo,
+        receita_inativos_com_custo: mes.receita_inativos_com_custo,
+        custo_inativos_com_custo: mes.custo_inativos_com_custo,
+      }
+    })
+
+    // Calcular consolidado usando regras conceituais
+    const consolidadoFormatado = {
+      ...consolidado,
+      // Campos compatíveis com frontend (usando regras conceituais)
+      ativo: totalVidasAtivo, // ativos_sem_custo + ativos_com_custo
+      inativo: totalVidasInativo, // inativos_com_custo
       nao_localizado: 0, // Query não retorna não localizados
-      total_vidas: mes.ativos + mes.inativos_com_custo,
-      valor_ativo: mes.custo_ativos_com_custo,
-      valor_inativo: mes.custo_inativos_com_custo,
+      total_vidas: totalVidasTotal, // ativos_sem_custo + ativos_com_custo + inativos_com_custo
+      valor_ativo: totalValorAtivo, // custo_ativos_com_custo
+      valor_inativo: totalValorInativo, // custo_inativos_com_custo
       valor_nao_localizado: 0,
-      valor_total_geral: mes.custo_ativos_com_custo + mes.custo_inativos_com_custo,
-      valor_net_ativo: mes.receita_ativos_com_custo,
-      valor_net_inativo: mes.receita_inativos_com_custo,
+      valor_total_geral: totalValorTotal, // custo_ativos_com_custo + custo_inativos_com_custo
+      valor_net_ativo: totalReceitaAtivo, // receita_ativos_sem_custo + receita_ativos_com_custo
+      valor_net_inativo: totalReceitaInativo, // receita_inativos_com_custo
       valor_net_nao_localizado: 0,
-      valor_net_total_geral: mes.receita_ativos_com_custo + mes.receita_inativos_com_custo,
-      // Campos originais da query (mantidos para referência)
-      ativos: mes.ativos,
-      ativos_sem_custo: mes.ativos_sem_custo,
-      ativos_com_custo: mes.ativos_com_custo,
-      receita_ativos_sem_custo: mes.receita_ativos_sem_custo,
-      receita_ativos_com_custo: mes.receita_ativos_com_custo,
-      custo_ativos_com_custo: mes.custo_ativos_com_custo,
-      inativos_com_custo: mes.inativos_com_custo,
-      receita_inativos_com_custo: mes.receita_inativos_com_custo,
-      custo_inativos_com_custo: mes.custo_inativos_com_custo,
-    }))
+      valor_net_total_geral: totalReceitaTotal, // receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+    }
 
     return NextResponse.json({
       por_mes: porMesFormatado,
-      consolidado: {
-        ...consolidado,
-        // Adicionar campos compatíveis com frontend (mapeando para estrutura antiga)
-        ativo: consolidado.ativos,
-        inativo: consolidado.inativos_com_custo,
-        nao_localizado: 0, // Query não retorna não localizados
-        total_vidas: consolidado.ativos + consolidado.inativos_com_custo,
-        valor_ativo: consolidado.custo_ativos_com_custo,
-        valor_inativo: consolidado.custo_inativos_com_custo,
-        valor_nao_localizado: 0,
-        valor_total_geral: consolidado.custo_ativos_com_custo + consolidado.custo_inativos_com_custo,
-        valor_net_ativo: consolidado.receita_ativos_com_custo,
-        valor_net_inativo: consolidado.receita_inativos_com_custo,
-        valor_net_nao_localizado: 0,
-        valor_net_total_geral: consolidado.receita_ativos_com_custo + consolidado.receita_inativos_com_custo,
-      },
+      consolidado: consolidadoFormatado,
       por_entidade: {
         ativo: entidadesAtivo,
         inativo: entidadesInativo,
