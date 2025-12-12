@@ -652,15 +652,39 @@ inativos_linha AS (
               planoAtivo.receita_ativos_com_custo += dadosPlano.receita_ativos_com_custo
               planoAtivo.custo_ativos_com_custo += dadosPlano.custo_ativos_com_custo
 
-              // Processar faixas etárias do plano
+              // Processar faixas etárias do plano - aplicar regras conceituais
+              // ⚠️ IMPORTANTE: Manter todos os campos originais da query para validação
               dadosPlano.por_faixa_etaria.forEach((dadosFaixa) => {
+                // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
                 const faixaVidasAtivas = dadosFaixa.ativos_sem_custo + dadosFaixa.ativos_com_custo
-                if (faixaVidasAtivas > 0) {
+                // Regra: Vidas Totais = ativos_sem_custo + ativos_com_custo + inativos_com_custo
+                const faixaVidasTotais = dadosFaixa.ativos_sem_custo + dadosFaixa.ativos_com_custo + dadosFaixa.inativos_com_custo
+                // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+                const faixaReceitaAtivos = dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo
+                // Regra: Receita Total = receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+                const faixaReceitaTotal = dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo + dadosFaixa.receita_inativos_com_custo
+                
+                if (faixaVidasAtivas > 0 || dadosFaixa.inativos_com_custo > 0) {
                   planoAtivo.por_faixa_etaria.push({
                     faixa_etaria: dadosFaixa.faixa_etaria,
-                    vidas: faixaVidasAtivas,
-                    valor: dadosFaixa.custo_ativos_com_custo,
-                    valor_net: dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo,
+                    // Totais exibidos (usando regras conceituais)
+                    vidas: faixaVidasAtivas, // Vidas Ativas
+                    vidas_inativas: dadosFaixa.inativos_com_custo, // Vidas Inativas
+                    vidas_totais: faixaVidasTotais, // Vidas Totais
+                    valor: dadosFaixa.custo_ativos_com_custo, // Custo Ativos
+                    valor_inativo: dadosFaixa.custo_inativos_com_custo, // Custo Inativos
+                    valor_net: faixaReceitaAtivos, // Receita Ativos
+                    valor_net_inativo: dadosFaixa.receita_inativos_com_custo, // Receita Inativos
+                    valor_net_total: faixaReceitaTotal, // Receita Total
+                    // Campos originais da query (para validação)
+                    ativos_sem_custo: dadosFaixa.ativos_sem_custo,
+                    ativos_com_custo: dadosFaixa.ativos_com_custo,
+                    inativos_com_custo: dadosFaixa.inativos_com_custo,
+                    receita_ativos_sem_custo: dadosFaixa.receita_ativos_sem_custo,
+                    receita_ativos_com_custo: dadosFaixa.receita_ativos_com_custo,
+                    custo_ativos_com_custo: dadosFaixa.custo_ativos_com_custo,
+                    receita_inativos_com_custo: dadosFaixa.receita_inativos_com_custo,
+                    custo_inativos_com_custo: dadosFaixa.custo_inativos_com_custo,
                   })
                 }
               })
@@ -725,14 +749,39 @@ inativos_linha AS (
               planoInativo.receita_inativos_com_custo += dadosPlano.receita_inativos_com_custo
               planoInativo.custo_inativos_com_custo += dadosPlano.custo_inativos_com_custo
 
-              // Processar faixas etárias inativas
+              // Processar faixas etárias inativas - aplicar regras conceituais
+              // ⚠️ IMPORTANTE: Manter todos os campos originais da query para validação
               dadosPlano.por_faixa_etaria.forEach((dadosFaixa) => {
-                if (dadosFaixa.inativos_com_custo > 0) {
+                if (dadosFaixa.inativos_com_custo > 0 || dadosFaixa.ativos_sem_custo > 0 || dadosFaixa.ativos_com_custo > 0) {
+                  // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
+                  const faixaVidasAtivas = dadosFaixa.ativos_sem_custo + dadosFaixa.ativos_com_custo
+                  // Regra: Vidas Totais = ativos_sem_custo + ativos_com_custo + inativos_com_custo
+                  const faixaVidasTotais = dadosFaixa.ativos_sem_custo + dadosFaixa.ativos_com_custo + dadosFaixa.inativos_com_custo
+                  // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+                  const faixaReceitaAtivos = dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo
+                  // Regra: Receita Total = receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+                  const faixaReceitaTotal = dadosFaixa.receita_ativos_sem_custo + dadosFaixa.receita_ativos_com_custo + dadosFaixa.receita_inativos_com_custo
+                  
                   planoInativo.por_faixa_etaria.push({
                     faixa_etaria: dadosFaixa.faixa_etaria,
-                    vidas: dadosFaixa.inativos_com_custo,
-                    valor: dadosFaixa.custo_inativos_com_custo,
-                    valor_net: dadosFaixa.receita_inativos_com_custo,
+                    // Totais exibidos (usando regras conceituais)
+                    vidas: faixaVidasAtivas, // Vidas Ativas
+                    vidas_inativas: dadosFaixa.inativos_com_custo, // Vidas Inativas
+                    vidas_totais: faixaVidasTotais, // Vidas Totais
+                    valor: dadosFaixa.custo_ativos_com_custo, // Custo Ativos
+                    valor_inativo: dadosFaixa.custo_inativos_com_custo, // Custo Inativos
+                    valor_net: faixaReceitaAtivos, // Receita Ativos
+                    valor_net_inativo: dadosFaixa.receita_inativos_com_custo, // Receita Inativos
+                    valor_net_total: faixaReceitaTotal, // Receita Total
+                    // Campos originais da query (para validação)
+                    ativos_sem_custo: dadosFaixa.ativos_sem_custo,
+                    ativos_com_custo: dadosFaixa.ativos_com_custo,
+                    inativos_com_custo: dadosFaixa.inativos_com_custo,
+                    receita_ativos_sem_custo: dadosFaixa.receita_ativos_sem_custo,
+                    receita_ativos_com_custo: dadosFaixa.receita_ativos_com_custo,
+                    custo_ativos_com_custo: dadosFaixa.custo_ativos_com_custo,
+                    receita_inativos_com_custo: dadosFaixa.receita_inativos_com_custo,
+                    custo_inativos_com_custo: dadosFaixa.custo_inativos_com_custo,
                   })
                 }
               })
@@ -787,14 +836,88 @@ inativos_linha AS (
             planoCustoExibido = plano.custo_inativos_com_custo
           }
 
-          // Ordenar faixas etárias
+          // Processar faixas etárias - aplicar regras conceituais e validações
           const faixas = (plano.por_faixa_etaria || [])
+            .map((faixa: any) => {
+              // Calcular totais usando regras conceituais
+              let faixaVidasExibidas: number
+              let faixaReceitaExibida: number
+              let faixaCustoExibido: number
+              let faixaVidasInativas: number
+              let faixaReceitaInativa: number
+              let faixaCustoInativo: number
+
+              if (tipo === 'ativo') {
+                // Regra: Vidas Ativas = ativos_sem_custo + ativos_com_custo
+                faixaVidasExibidas = faixa.ativos_sem_custo + faixa.ativos_com_custo
+                // Regra: Receita Ativos = receita_ativos_sem_custo + receita_ativos_com_custo
+                faixaReceitaExibida = faixa.receita_ativos_sem_custo + faixa.receita_ativos_com_custo
+                faixaCustoExibido = faixa.custo_ativos_com_custo
+                faixaVidasInativas = faixa.inativos_com_custo || 0
+                faixaReceitaInativa = faixa.receita_inativos_com_custo || 0
+                faixaCustoInativo = faixa.custo_inativos_com_custo || 0
+              } else {
+                // Regra: Vidas Inativas = inativos_com_custo
+                faixaVidasExibidas = faixa.inativos_com_custo
+                // Regra: Receita Inativos = receita_inativos_com_custo
+                faixaReceitaExibida = faixa.receita_inativos_com_custo
+                faixaCustoExibido = faixa.custo_inativos_com_custo
+                faixaVidasInativas = 0
+                faixaReceitaInativa = 0
+                faixaCustoInativo = 0
+              }
+
+              // Validar totais da faixa usando regras conceituais
+              const vidasAtivasCalculadas = faixa.ativos_sem_custo + faixa.ativos_com_custo
+              const vidasTotaisCalculadas = faixa.ativos_sem_custo + faixa.ativos_com_custo + faixa.inativos_com_custo
+              const receitaAtivosCalculada = faixa.receita_ativos_sem_custo + faixa.receita_ativos_com_custo
+              const receitaTotalCalculada = faixa.receita_ativos_sem_custo + faixa.receita_ativos_com_custo + faixa.receita_inativos_com_custo
+
+              if (process.env.NODE_ENV === 'development') {
+                if (Math.abs(vidasAtivasCalculadas - faixaVidasExibidas) > 0.01) {
+                  console.warn(`⚠️ VALIDAÇÃO Faixa ${faixa.faixa_etaria}: Vidas Ativas calculadas (${vidasAtivasCalculadas}) != Exibidas (${faixaVidasExibidas})`)
+                }
+                if (Math.abs(vidasTotaisCalculadas - (faixa.vidas_totais || vidasTotaisCalculadas)) > 0.01) {
+                  console.warn(`⚠️ VALIDAÇÃO Faixa ${faixa.faixa_etaria}: Vidas Totais calculadas (${vidasTotaisCalculadas}) != Exibidas (${faixa.vidas_totais || vidasTotaisCalculadas})`)
+                }
+                if (Math.abs(receitaAtivosCalculada - faixaReceitaExibida) > 0.01) {
+                  console.warn(`⚠️ VALIDAÇÃO Faixa ${faixa.faixa_etaria}: Receita Ativos calculada (${receitaAtivosCalculada}) != Exibida (${faixaReceitaExibida})`)
+                }
+                if (Math.abs(receitaTotalCalculada - (faixa.valor_net_total || receitaTotalCalculada)) > 0.01) {
+                  console.warn(`⚠️ VALIDAÇÃO Faixa ${faixa.faixa_etaria}: Receita Total calculada (${receitaTotalCalculada}) != Exibida (${faixa.valor_net_total || receitaTotalCalculada})`)
+                }
+              }
+
+              return {
+                faixa_etaria: faixa.faixa_etaria,
+                // Totais exibidos (usando regras conceituais)
+                vidas: faixaVidasExibidas,
+                vidas_inativas: faixaVidasInativas,
+                vidas_totais: vidasTotaisCalculadas,
+                valor: faixaCustoExibido,
+                valor_inativo: faixaCustoInativo,
+                valor_net: faixaReceitaExibida,
+                valor_net_inativo: faixaReceitaInativa,
+                valor_net_total: receitaTotalCalculada,
+              }
+            })
             .sort((a: any, b: any) => getOrderFaixa(a.faixa_etaria) - getOrderFaixa(b.faixa_etaria))
 
-          // Validar totais do plano
+          // Validar que soma das faixas = total do plano
           const somaFaixasVidas = faixas.reduce((sum: number, f: any) => sum + f.vidas, 0)
-          if (Math.abs(planoVidasExibidas - somaFaixasVidas) > 0.01 && process.env.NODE_ENV === 'development') {
-            console.warn(`⚠️ VALIDAÇÃO Plano ${plano.plano}: Vidas (${planoVidasExibidas}) != Soma Faixas (${somaFaixasVidas})`)
+          const somaFaixasReceita = faixas.reduce((sum: number, f: any) => sum + f.valor_net, 0)
+          const somaFaixasCusto = faixas.reduce((sum: number, f: any) => sum + f.valor, 0)
+          
+          if (process.env.NODE_ENV === 'development') {
+            if (Math.abs(planoVidasExibidas - somaFaixasVidas) > 0.01) {
+              console.warn(`⚠️ VALIDAÇÃO Plano ${plano.plano} (${tipo}): Vidas (${planoVidasExibidas}) != Soma Faixas (${somaFaixasVidas}). Diferença: ${Math.abs(planoVidasExibidas - somaFaixasVidas)}`)
+            }
+            if (Math.abs(planoReceitaExibida - somaFaixasReceita) > 0.01) {
+              console.warn(`⚠️ VALIDAÇÃO Plano ${plano.plano} (${tipo}): Receita (${planoReceitaExibida}) != Soma Faixas (${somaFaixasReceita}). Diferença: ${Math.abs(planoReceitaExibida - somaFaixasReceita)}`)
+            }
+            if (Math.abs(planoCustoExibido - somaFaixasCusto) > 0.01) {
+              console.warn(`⚠️ VALIDAÇÃO Plano ${plano.plano} (${tipo}): Custo (${planoCustoExibido}) != Soma Faixas (${somaFaixasCusto}). Diferença: ${Math.abs(planoCustoExibido - somaFaixasCusto)}`)
+            }
           }
 
           return {
@@ -881,13 +1004,19 @@ inativos_linha AS (
             planoExistente.vidas += plano.vidas
             planoExistente.valor += plano.valor
             planoExistente.valor_net += plano.valor_net
-            // Combinar faixas etárias
+            // Combinar faixas etárias - aplicar regras conceituais
             plano.por_faixa_etaria.forEach((faixa: any) => {
               const faixaExistente = planoExistente.por_faixa_etaria.find((f: any) => f.faixa_etaria === faixa.faixa_etaria)
               if (faixaExistente) {
+                // Somar todos os campos das faixas
                 faixaExistente.vidas += faixa.vidas
+                faixaExistente.vidas_inativas = (faixaExistente.vidas_inativas || 0) + (faixa.vidas_inativas || 0)
+                faixaExistente.vidas_totais = (faixaExistente.vidas_totais || 0) + (faixa.vidas_totais || 0)
                 faixaExistente.valor += faixa.valor
+                faixaExistente.valor_inativo = (faixaExistente.valor_inativo || 0) + (faixa.valor_inativo || 0)
                 faixaExistente.valor_net += faixa.valor_net
+                faixaExistente.valor_net_inativo = (faixaExistente.valor_net_inativo || 0) + (faixa.valor_net_inativo || 0)
+                faixaExistente.valor_net_total = (faixaExistente.valor_net_total || 0) + (faixa.valor_net_total || 0)
               } else {
                 planoExistente.por_faixa_etaria.push({ ...faixa })
               }
