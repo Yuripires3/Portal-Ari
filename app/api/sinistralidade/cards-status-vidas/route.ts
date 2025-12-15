@@ -305,30 +305,212 @@ inativos_linha AS (
       cardsMaeMap.set(mes, atual)
     })
 
-    const porMesGeral = Array.from(cardsMaeMap.values()).sort((a, b) => a.mes.localeCompare(b.mes))
+    const porMesGeral = Array.from(cardsMaeMap.values()).sort((a, b) =>
+      a.mes.localeCompare(b.mes),
+    )
 
     // Calcular consolidado geral (soma de todos os meses)
-    const consolidado = porMesGeral.reduce((acc, mes) => ({
-      ativos: acc.ativos + mes.ativos,
-      ativos_sem_custo: acc.ativos_sem_custo + mes.ativos_sem_custo,
-      ativos_com_custo: acc.ativos_com_custo + mes.ativos_com_custo,
-      receita_ativos_sem_custo: acc.receita_ativos_sem_custo + mes.receita_ativos_sem_custo,
-      receita_ativos_com_custo: acc.receita_ativos_com_custo + mes.receita_ativos_com_custo,
-      custo_ativos_com_custo: acc.custo_ativos_com_custo + mes.custo_ativos_com_custo,
-      inativos_com_custo: acc.inativos_com_custo + mes.inativos_com_custo,
-      receita_inativos_com_custo: acc.receita_inativos_com_custo + mes.receita_inativos_com_custo,
-      custo_inativos_com_custo: acc.custo_inativos_com_custo + mes.custo_inativos_com_custo,
-    }), {
-      ativos: 0,
-      ativos_sem_custo: 0,
-      ativos_com_custo: 0,
-      receita_ativos_sem_custo: 0,
-      receita_ativos_com_custo: 0,
-      custo_ativos_com_custo: 0,
-      inativos_com_custo: 0,
-      receita_inativos_com_custo: 0,
-      custo_inativos_com_custo: 0,
+    const consolidado = porMesGeral.reduce(
+      (acc, mes) => ({
+        ativos: acc.ativos + mes.ativos,
+        ativos_sem_custo: acc.ativos_sem_custo + mes.ativos_sem_custo,
+        ativos_com_custo: acc.ativos_com_custo + mes.ativos_com_custo,
+        receita_ativos_sem_custo:
+          acc.receita_ativos_sem_custo + mes.receita_ativos_sem_custo,
+        receita_ativos_com_custo:
+          acc.receita_ativos_com_custo + mes.receita_ativos_com_custo,
+        custo_ativos_com_custo:
+          acc.custo_ativos_com_custo + mes.custo_ativos_com_custo,
+        inativos_com_custo:
+          acc.inativos_com_custo + mes.inativos_com_custo,
+        receita_inativos_com_custo:
+          acc.receita_inativos_com_custo + mes.receita_inativos_com_custo,
+        custo_inativos_com_custo:
+          acc.custo_inativos_com_custo + mes.custo_inativos_com_custo,
+      }),
+      {
+        ativos: 0,
+        ativos_sem_custo: 0,
+        ativos_com_custo: 0,
+        receita_ativos_sem_custo: 0,
+        receita_ativos_com_custo: 0,
+        custo_ativos_com_custo: 0,
+        inativos_com_custo: 0,
+        receita_inativos_com_custo: 0,
+        custo_inativos_com_custo: 0,
+      },
+    )
+
+    // ---------------------------------------------------------------------
+    // 🔵 AGREGAÇÃO POR PLANO PARA OS CARDS MÃE (FONTE ÚNICA: queryOficial)
+    // ---------------------------------------------------------------------
+    //
+    // Requisito: o drilldown dos cards MÃE (Total, Ativo, Inativo, Não Localizado)
+    // deve vir EXCLUSIVAMENTE do dataset final desta query, sem qualquer join
+    // extra em reg_procedimentos/reg_faturamento.
+    //
+    // Para cada plano, calculamos:
+    // - vidas_total = ativos_sem_custo + ativos_com_custo + inativos_com_custo
+    // - vidas_ativo = ativos_sem_custo + ativos_com_custo
+    // - vidas_inativo = inativos_com_custo
+    // - receita_total = receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+    // - receita_ativo = receita_ativos_sem_custo + receita_ativos_com_custo
+    // - receita_inativo = receita_inativos_com_custo
+    // - custo_total = custo_ativos_com_custo + custo_inativos_com_custo
+    // - custo_ativo = custo_ativos_com_custo
+    // - custo_inativo = custo_inativos_com_custo
+    //
+    // Os arrays gerados aqui alimentam o componente PlanDistributionList nos
+    // cards MÃE, e PRECISAM obedecer às identidades:
+    //   Σ(planos.vidas_total)   = consolidado.total_vidas
+    //   Σ(planos_ativo.vidas)   = consolidado.ativo
+    //   Σ(planos_inativo.vidas) = consolidado.inativo
+    // ---------------------------------------------------------------------
+
+    type PlanoMae = {
+      plano: string
+      vidas: number
+      valor: number
+      valor_net: number
+    }
+
+    const planosMaeTotalMap = new Map<string, PlanoMae>()
+    const planosMaeAtivoMap = new Map<string, PlanoMae>()
+    const planosMaeInativoMap = new Map<string, PlanoMae>()
+
+    dados.forEach((row: any) => {
+      const plano = row.plano || ""
+      if (!plano) return
+
+      const ativos_sem_custo = Number(row.ativos_sem_custo) || 0
+      const ativos_com_custo = Number(row.ativos_com_custo) || 0
+      const inativos_com_custo = Number(row.inativos_com_custo) || 0
+      const receita_ativos_sem_custo =
+        Number(row.receita_ativos_sem_custo) || 0
+      const receita_ativos_com_custo =
+        Number(row.receita_ativos_com_custo) || 0
+      const custo_ativos_com_custo =
+        Number(row.custo_ativos_com_custo) || 0
+      const receita_inativos_com_custo =
+        Number(row.receita_inativos_com_custo) || 0
+      const custo_inativos_com_custo =
+        Number(row.custo_inativos_com_custo) || 0
+
+      // Totais conceituais por status
+      const vidasAtivo = ativos_sem_custo + ativos_com_custo
+      const vidasInativo = inativos_com_custo
+      const vidasTotal = vidasAtivo + vidasInativo
+
+      const receitaAtivo = receita_ativos_sem_custo + receita_ativos_com_custo
+      const receitaInativo = receita_inativos_com_custo
+      const receitaTotal = receitaAtivo + receitaInativo
+
+      const custoAtivo = custo_ativos_com_custo
+      const custoInativo = custo_inativos_com_custo
+      const custoTotal = custoAtivo + custoInativo
+
+      // Plano Total (ativos + inativos)
+      if (vidasTotal > 0 || receitaTotal !== 0 || custoTotal !== 0) {
+        const atualTotal =
+          planosMaeTotalMap.get(plano) || {
+            plano,
+            vidas: 0,
+            valor: 0,
+            valor_net: 0,
+          }
+        atualTotal.vidas += vidasTotal
+        atualTotal.valor += custoTotal
+        atualTotal.valor_net += receitaTotal
+        planosMaeTotalMap.set(plano, atualTotal)
+      }
+
+      // Plano Ativo
+      if (vidasAtivo > 0 || receitaAtivo !== 0 || custoAtivo !== 0) {
+        const atualAtivo =
+          planosMaeAtivoMap.get(plano) || {
+            plano,
+            vidas: 0,
+            valor: 0,
+            valor_net: 0,
+          }
+        atualAtivo.vidas += vidasAtivo
+        atualAtivo.valor += custoAtivo
+        atualAtivo.valor_net += receitaAtivo
+        planosMaeAtivoMap.set(plano, atualAtivo)
+      }
+
+      // Plano Inativo
+      if (vidasInativo > 0 || receitaInativo !== 0 || custoInativo !== 0) {
+        const atualInativo =
+          planosMaeInativoMap.get(plano) || {
+            plano,
+            vidas: 0,
+            valor: 0,
+            valor_net: 0,
+          }
+        atualInativo.vidas += vidasInativo
+        atualInativo.valor += custoInativo
+        atualInativo.valor_net += receitaInativo
+        planosMaeInativoMap.set(plano, atualInativo)
+      }
     })
+
+    const ordenarPlanosMae = (planos: PlanoMae[]) =>
+      planos.sort((a, b) => b.vidas - a.vidas || a.plano.localeCompare(b.plano))
+
+    const planosMaeTotal = ordenarPlanosMae(
+      Array.from(planosMaeTotalMap.values()),
+    )
+    const planosMaeAtivo = ordenarPlanosMae(
+      Array.from(planosMaeAtivoMap.values()),
+    )
+    const planosMaeInativo = ordenarPlanosMae(
+      Array.from(planosMaeInativoMap.values()),
+    )
+
+    // Validações: soma dos planos x consolidado (apenas em desenvolvimento)
+    if (process.env.NODE_ENV === "development") {
+      const somaVidasTotal = planosMaeTotal.reduce(
+        (acc, p) => acc + p.vidas,
+        0,
+      )
+      const somaVidasAtivo = planosMaeAtivo.reduce(
+        (acc, p) => acc + p.vidas,
+        0,
+      )
+      const somaVidasInativo = planosMaeInativo.reduce(
+        (acc, p) => acc + p.vidas,
+        0,
+      )
+
+      const totalVidasConsolidado =
+        consolidado.ativos_sem_custo +
+        consolidado.ativos_com_custo +
+        consolidado.inativos_com_custo
+      const vidasAtivoConsolidado =
+        consolidado.ativos_sem_custo + consolidado.ativos_com_custo
+      const vidasInativoConsolidado = consolidado.inativos_com_custo
+
+      const diffTotal = Math.abs(totalVidasConsolidado - somaVidasTotal)
+      const diffAtivo = Math.abs(vidasAtivoConsolidado - somaVidasAtivo)
+      const diffInativo = Math.abs(vidasInativoConsolidado - somaVidasInativo)
+
+      if (diffTotal > 0.01) {
+        console.warn(
+          `⚠️ VALIDAÇÃO CARDS MÃE (Total): total_vidas (${totalVidasConsolidado}) != Σ(planos) (${somaVidasTotal}). Diferença: ${diffTotal}`,
+        )
+      }
+      if (diffAtivo > 0.01) {
+        console.warn(
+          `⚠️ VALIDAÇÃO CARDS MÃE (Ativo): vidas_ativo (${vidasAtivoConsolidado}) != Σ(planos) (${somaVidasAtivo}). Diferença: ${diffAtivo}`,
+        )
+      }
+      if (diffInativo > 0.01) {
+        console.warn(
+          `⚠️ VALIDAÇÃO CARDS MÃE (Inativo): vidas_inativo (${vidasInativoConsolidado}) != Σ(planos) (${somaVidasInativo}). Diferença: ${diffInativo}`,
+        )
+      }
+    }
 
     // Processar dados para criar Cards Filhos com drilldown hierárquico
     // Hierarquia CORRETA: mes > entidade > mes_reajuste > plano > faixa_etaria
@@ -1142,6 +1324,13 @@ inativos_linha AS (
       valor_net_inativo: totalReceitaInativo, // receita_inativos_com_custo
       valor_net_nao_localizado: 0,
       valor_net_total_geral: totalReceitaTotal, // receita_ativos_sem_custo + receita_ativos_com_custo + receita_inativos_com_custo
+      // Drilldown por plano para cards MÃE (Total / Ativo / Inativo)
+      por_plano: {
+        total: planosMaeTotal,
+        ativo: planosMaeAtivo,
+        inativo: planosMaeInativo,
+        nao_localizado: [], // Atualmente não há "vazio" na query oficial
+      },
     }
 
     return NextResponse.json({
