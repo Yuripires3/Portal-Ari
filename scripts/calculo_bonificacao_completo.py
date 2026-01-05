@@ -84,6 +84,38 @@ def subtrair_dias_uteis(data, dias):
             dias -= 1
     return d
 
+def safe_to_datetime(series, dayfirst=False):
+    """
+    Converte uma série para datetime de forma segura.
+    Retorna a série com timezone removido se for datetime, caso contrário retorna a série original.
+    """
+    if series is None or series.empty:
+        return series
+    
+    # Converter para datetime
+    series = pd.to_datetime(series, errors='coerce', format='mixed', dayfirst=dayfirst)
+    
+    # Verificar se a série resultante é datetime antes de usar .dt
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series.dt.tz_localize(None)
+    
+    return series
+
+def safe_dt_strftime(series, format_str):
+    """
+    Aplica strftime de forma segura em uma série datetime.
+    Retorna a série formatada como string se for datetime, caso contrário retorna a série original como string.
+    """
+    if series is None or series.empty:
+        return series.astype(str) if hasattr(series, 'astype') else series
+    
+    # Verificar se a série é datetime antes de usar .dt
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return series.dt.strftime(format_str)
+    
+    # Se não for datetime, tentar converter para string
+    return series.astype(str)
+
 def calcular_datas(modo, data_inicial_override=None, data_final_override=None):
     """Calcula as datas conforme o modo especificado"""
     hoje = date.today()
@@ -885,7 +917,7 @@ def main():
             df_unificado = unificado.copy()
             
             aux_bonificacao = aux_bonificacao_raw.copy()
-            aux_bonificacao['vigencia'] = pd.to_datetime(aux_bonificacao['vigencia'])
+            aux_bonificacao['vigencia'] = safe_to_datetime(aux_bonificacao['vigencia'])
             aux_bonificacao.rename(columns={'chave_sem_formula': 'chave'}, inplace=True)
             aux_bonificacao = aux_bonificacao.sort_values('vigencia', ascending=False)
             
@@ -897,7 +929,7 @@ def main():
             aux_concessionarias = aux_concessionarias_raw[['codigo', 'nome_fantasia']].drop_duplicates('codigo').reset_index(drop=True)
             
             aux_faixa_idade = aux_faixa_idade_raw.copy()
-            aux_faixa_idade['vigencia'] = pd.to_datetime(aux_faixa_idade['vigencia'])
+            aux_faixa_idade['vigencia'] = safe_to_datetime(aux_faixa_idade['vigencia'])
             
             aux_planos = aux_planos_raw.copy().drop_duplicates('nome_antigo')
             
@@ -911,9 +943,9 @@ def main():
             
             etapa("Aplicando transformacoes e calculos...", 62)
             df1 = df_beneficiarios.copy()
-            df1['dt_nascimento'] = pd.to_datetime(df1['dt_nascimento']).dt.tz_localize(None)
-            df1['data_exclusao'] = pd.to_datetime(df1['data_exclusao']).dt.tz_localize(None)
-            df1['vigencia'] = pd.to_datetime(df1['vigencia']).dt.tz_localize(None)
+            df1['dt_nascimento'] = safe_to_datetime(df1['dt_nascimento'])
+            df1['data_exclusao'] = safe_to_datetime(df1['data_exclusao'])
+            df1['vigencia'] = safe_to_datetime(df1['vigencia'])
             df1['idade'] = df1['dt_nascimento'].apply(
                 lambda x: dt.now().year - x.year - 1 if dt.now().month < x.month else 
                           dt.now().year - x.year if dt.now().month > x.month else 
@@ -924,7 +956,7 @@ def main():
             )
             df1['beneficiario_cancelado'] = df1['beneficiario_cancelado'].fillna(False)
             
-            df_faturamento['data_do_pagamento_da_fatura'] = pd.to_datetime(df_faturamento['data_do_pagamento_da_fatura']).dt.tz_localize(None)
+            df_faturamento['data_do_pagamento_da_fatura'] = safe_to_datetime(df_faturamento['data_do_pagamento_da_fatura'])
             
             df_contratos = df_contratos.drop_duplicates('numero_contrato')
             
@@ -941,9 +973,9 @@ def main():
             df1['mes_competencia'] = df1['mes_competencia'].astype('int64')
             df1['ano_competencia'] = df1['ano_competencia'].fillna(0)
             df1['ano_competencia'] = df1['ano_competencia'].astype('int64')
-            df1['data_do_pagamento_da_fatura'] = pd.to_datetime(df1['data_do_pagamento_da_fatura']).dt.tz_localize(None)
-            df1['vigencia'] = pd.to_datetime(df1['vigencia'], dayfirst=True)
-            df1['data_exclusao'] = pd.to_datetime(df1['data_exclusao'], dayfirst=True)
+            df1['data_do_pagamento_da_fatura'] = safe_to_datetime(df1['data_do_pagamento_da_fatura'])
+            df1['vigencia'] = safe_to_datetime(df1['vigencia'], dayfirst=True)
+            df1['data_exclusao'] = safe_to_datetime(df1['data_exclusao'], dayfirst=True)
             df1['nome_supervisor'] = df1['nome_supervisor'].str.upper()
             df1['nome_vendedor'] = df1['nome_vendedor'].str.upper()
             df1['nome'] = df1['nome'].str.upper()
@@ -960,11 +992,11 @@ def main():
             aux_bonificados = aux_bonificados[['cpf', 'nome', 'email', 'celular']]
             aux_bonificados = aux_bonificados.drop_duplicates('cpf').reset_index(drop=True)
             
-            df_unificado['dt_registro'] = pd.to_datetime(df_unificado['dt_registro'])
-            df_unificado['dt_exclusao'] = pd.to_datetime(df_unificado['dt_exclusao'])
-            df_unificado['dt_analise'] = pd.to_datetime(df_unificado['dt_analise'])
-            df_unificado['dt_pagamento'] = pd.to_datetime(df_unificado['dt_pagamento'])
-            df_unificado['dt_inicio_vigencia'] = pd.to_datetime(df_unificado['dt_inicio_vigencia'])
+            df_unificado['dt_registro'] = safe_to_datetime(df_unificado['dt_registro'])
+            df_unificado['dt_exclusao'] = safe_to_datetime(df_unificado['dt_exclusao'])
+            df_unificado['dt_analise'] = safe_to_datetime(df_unificado['dt_analise'])
+            df_unificado['dt_pagamento'] = safe_to_datetime(df_unificado['dt_pagamento'])
+            df_unificado['dt_inicio_vigencia'] = safe_to_datetime(df_unificado['dt_inicio_vigencia'])
             
             etapa("Mesclando tabelas auxiliares...", 66)
             df2 = df1.drop(columns='data_exclusao').copy()
@@ -1104,7 +1136,7 @@ def main():
             
             chaves_novas = df2[df2['bonificacao_corretor'].isin([1, 2, 3])][['operadora', 'tipo_de_beneficiario', 'faixa_pagamento', 
                                                                               'entidade_nova', 'plano_novo', 'produto', 'vigencia', 'numero_da_parcela']].reset_index(drop=True)
-            chaves_novas['chave'] = chaves_novas['vigencia'].dt.strftime('%b/%y') + ' - ' + chaves_novas['operadora'] + ' - ' + chaves_novas['entidade_nova'] + ' - ' + chaves_novas['numero_da_parcela'] + ' - ' + chaves_novas['plano_novo'] + ' - ' + chaves_novas['faixa_pagamento'] + ' - ' + chaves_novas['tipo_de_beneficiario'] + ' - ' + chaves_novas['produto']
+            chaves_novas['chave'] = safe_dt_strftime(chaves_novas['vigencia'], '%b/%y') + ' - ' + chaves_novas['operadora'] + ' - ' + chaves_novas['entidade_nova'] + ' - ' + chaves_novas['numero_da_parcela'] + ' - ' + chaves_novas['plano_novo'] + ' - ' + chaves_novas['faixa_pagamento'] + ' - ' + chaves_novas['tipo_de_beneficiario'] + ' - ' + chaves_novas['produto']
             chaves_novas = chaves_novas['chave'].sort_values().unique().tolist()
             
             df2['regiao'] = df2['concessionaria_nova'].apply(
@@ -1114,9 +1146,16 @@ def main():
             df2['chave_regra'] = df2[['vigencia', 'chave_regra']].apply(
                 lambda x: x['chave_regra'] + ' - ' + x['vigencia'].strftime('%b/%y'), axis=1
             )
-            df2['bonificacao_supervisor'] = df2[['vigencia', 'bonificacao_supervisor', 'filial_gerencial']].apply(
-                lambda x: 0 if (x['vigencia'] < pd.to_datetime('2024-01-01')) & (x['filial_gerencial'] != 'FILIAL SP') else x['bonificacao_supervisor'], axis=1
-            )
+            # Data de corte para bonificação supervisor (2024-01-01)
+            data_corte_supervisor = pd.Timestamp('2024-01-01')
+            # Verificar se a coluna vigencia é datetime antes de comparar
+            if pd.api.types.is_datetime64_any_dtype(df2['vigencia']):
+                df2['bonificacao_supervisor'] = df2[['vigencia', 'bonificacao_supervisor', 'filial_gerencial']].apply(
+                    lambda x: 0 if (pd.notna(x['vigencia']) and x['vigencia'] < data_corte_supervisor) and (x['filial_gerencial'] != 'FILIAL SP') else x['bonificacao_supervisor'], axis=1
+                )
+            else:
+                # Se vigencia não for datetime, não aplicar a regra de corte
+                pass
             
             etapa("Processando migracoes...", 78)
             # Verificar se arquivo de migracoes existe antes de ler
@@ -1422,9 +1461,9 @@ def main():
             
             # Gráficos apenas se necessário (otimização: não criar se não for usado)
             graf_1 = df5[['Operadora', 'Data do pagamento da fatura']].copy()
-            graf_1['Data do pagamento da fatura'] = pd.to_datetime(graf_1['Data do pagamento da fatura'], errors='coerce')
+            graf_1['Data do pagamento da fatura'] = safe_to_datetime(graf_1['Data do pagamento da fatura'])
             graf_1 = graf_1.groupby('Data do pagamento da fatura', sort=False)['Operadora'].count().reset_index()
-            graf_1['Data'] = graf_1['Data do pagamento da fatura'].dt.strftime('%d/%m/%Y')
+            graf_1['Data'] = safe_dt_strftime(graf_1['Data do pagamento da fatura'], '%d/%m/%Y')
             
             graf = df5[['Operadora']].copy()
             graf['Vlr Total'] = pd.to_numeric(df5['Vlr bruto Corretor'], errors='coerce').fillna(0.0)
@@ -1439,9 +1478,9 @@ def main():
             graf_4 = df5[['Operadora', 'CPF']].groupby('Operadora', sort=False).count().reset_index()
             
             graf_5 = df5[['Operadora', 'Data do início da vigencia do beneficiario']].copy()
-            graf_5['Data do início da vigencia do beneficiario'] = pd.to_datetime(graf_5['Data do início da vigencia do beneficiario'], errors='coerce')
+            graf_5['Data do início da vigencia do beneficiario'] = safe_to_datetime(graf_5['Data do início da vigencia do beneficiario'])
             graf_5 = graf_5.groupby('Data do início da vigencia do beneficiario', sort=False)['Operadora'].count().reset_index()
-            graf_5['Data'] = graf_5['Data do início da vigencia do beneficiario'].dt.strftime('%d/%m/%Y')
+            graf_5['Data'] = safe_dt_strftime(graf_5['Data do início da vigencia do beneficiario'], '%d/%m/%Y')
             
             # Calcular indicadores para o relatório
             vlr_bruto_total_calc = calc_pag['vlr_bruto'].sum()
@@ -1762,7 +1801,8 @@ def main():
                 # Converter datetimes para string somente nessas colunas
                 if datetime_cols:
                     for col in datetime_cols:
-                        df_limited[col] = df_limited[col].dt.strftime('%Y-%m-%d %H:%M:%S')
+                        if col in df_limited.columns and pd.api.types.is_datetime64_any_dtype(df_limited[col]):
+                            df_limited[col] = df_limited[col].dt.strftime('%Y-%m-%d %H:%M:%S')
                 
                 # Converter tipos numpy para Python nativo antes da serialização (apenas onde necessário)
                 if cols_to_convert_int:
@@ -1827,7 +1867,7 @@ def main():
                     # Converter datetimes (se houver)
                     if datetime_cols:
                         for col in datetime_cols:
-                            if col in chunk.columns:
+                            if col in chunk.columns and pd.api.types.is_datetime64_any_dtype(chunk[col]):
                                 chunk[col] = chunk[col].dt.strftime('%Y-%m-%d %H:%M:%S')
                     
                     # Converter tipos numpy para Python nativo (apenas colunas que precisam)

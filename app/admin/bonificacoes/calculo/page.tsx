@@ -843,11 +843,38 @@ export default function CalculoBonificacaoPage() {
     let currentRunId: string | null = null
 
     try {
+      // Calcular datas para modo automático (30 dias: 1 dia útil antes de hoje até 30 dias antes)
+      let dataInicialCalculada = dataInicial
+      let dataFinalCalculada = dataFinal
+      
+      if (modo === "automatico") {
+        const hoje = new Date()
+        hoje.setHours(0, 0, 0, 0)
+        
+        // Calcular data final: 1 dia útil antes de hoje
+        const calcularDiaUtilAnterior = (data: Date): Date => {
+          const d = new Date(data)
+          d.setDate(d.getDate() - 1)
+          // Se for sábado (6) ou domingo (0), voltar para sexta
+          while (d.getDay() === 0 || d.getDay() === 6) {
+            d.setDate(d.getDate() - 1)
+          }
+          return d
+        }
+        
+        const dataFinalDate = calcularDiaUtilAnterior(hoje)
+        const dataInicialDate = new Date(dataFinalDate)
+        dataInicialDate.setDate(dataInicialDate.getDate() - 30) // 30 dias corridos antes
+        
+        dataFinalCalculada = formatDateISO(dataFinalDate)
+        dataInicialCalculada = formatDateISO(dataInicialDate)
+      }
+      
       // Iniciar execução para reservar lock e obter run_id
       const dtReferencia =
         modo === "periodo"
           ? (dataInicial || dataFinal || formatDateISO(new Date()))
-          : formatDateISO(new Date())
+          : dataFinalCalculada || formatDateISO(new Date())
 
       const iniciarResponse = await fetch("/api/bonificacoes/calculo/iniciar", {
         method: "POST",
@@ -876,8 +903,8 @@ export default function CalculoBonificacaoPage() {
         },
         body: JSON.stringify({
           modo,
-          data_inicial: modo === "periodo" ? dataInicial : undefined,
-          data_final: modo === "periodo" ? dataFinal : undefined,
+          data_inicial: modo === "periodo" ? dataInicial : dataInicialCalculada,
+          data_final: modo === "periodo" ? dataFinal : dataFinalCalculada,
           run_id: currentRunId,
           session_id: sessionId,
           usuario_id: usuarioId
