@@ -773,8 +773,8 @@ def main():
                 log_print(dt)
             
 
-            def safe_to_datetime(s: pd.Series) -> pd.Series:
-                dt = pd.to_datetime(s, errors="coerce", utc=True)  # unifica tudo em UTC
+            def safe_to_datetime(s: pd.Series, dayfirst: bool = False) -> pd.Series:
+                dt = pd.to_datetime(s, errors="coerce", utc=True, dayfirst=dayfirst)  # unifica tudo em UTC
                 return dt.dt.tz_localize(None)  # opcional: remove tz e deixa "naive"
 
 
