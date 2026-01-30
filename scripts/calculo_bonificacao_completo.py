@@ -84,22 +84,22 @@ def subtrair_dias_uteis(data, dias):
             dias -= 1
     return d
 
-def safe_to_datetime(series, dayfirst=False):
-    """
-    Converte uma série para datetime de forma segura.
-    Retorna a série com timezone removido se for datetime, caso contrário retorna a série original.
-    """
-    if series is None or series.empty:
-        return series
-    
-    # Converter para datetime
-    series = pd.to_datetime(series, errors='coerce', format='mixed', dayfirst=dayfirst)
-    
-    # Verificar se a série resultante é datetime antes de usar .dt
-    if pd.api.types.is_datetime64_any_dtype(series):
-        return series.dt.tz_localize(None)
-    
-    return series
+#def safe_to_datetime(series, dayfirst=False):
+#    """
+#    Converte uma série para datetime de forma segura.
+#    Retorna a série com timezone removido se for datetime, caso contrário retorna a série original.
+#    """
+#    if series is None or series.empty:
+#        return series
+#    
+#    # Converter para datetime
+#    series = pd.to_datetime(series, errors='coerce', format='mixed', dayfirst=dayfirst)
+#    
+#    # Verificar se a série resultante é datetime antes de usar .dt
+#    if pd.api.types.is_datetime64_any_dtype(series):
+#        return series.dt.tz_localize(None)
+#    
+#    return series
 
 def safe_dt_strftime(series, format_str):
     """
@@ -772,6 +772,12 @@ def main():
                         return df.loc[i, 'dias']
                 log_print(dt)
             
+
+            def safe_to_datetime(s: pd.Series) -> pd.Series:
+                dt = pd.to_datetime(s, errors="coerce", utc=True)  # unifica tudo em UTC
+                return dt.dt.tz_localize(None)  # opcional: remove tz e deixa "naive"
+
+
             def relatorio(df, calc, filtros, dicionario_sem_registros, em_branco, dicionario_merges, ticket_medio, propostas_iniciais, num_apur, dt, return_mode="summary"):
                 # valor produzido
                 vlr_bruto_cor = valor_para_texto(calc[calc['tipo_premiado'].str.contains('CORRETOR')]['vlr_bruto'].sum())
@@ -1149,7 +1155,7 @@ def main():
                 + ' - '
                 + df2['vigencia'].dt.strftime('%b/%y').fillna('')
             )
-            
+
             # Data de corte para bonificação supervisor (2024-01-01)
             data_corte_supervisor = pd.Timestamp('2024-01-01')
             # Verificar se a coluna vigencia é datetime antes de comparar
