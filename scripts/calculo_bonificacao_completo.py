@@ -1143,9 +1143,13 @@ def main():
                 lambda x: 'PE' if '(PE)' in str(x) else 'SP' if '(SP)' in str(x) else 'RJ'
             )
             
-            df2['chave_regra'] = df2[['vigencia', 'chave_regra']].apply(
-                lambda x: x['chave_regra'] + ' - ' + x['vigencia'].strftime('%b/%y'), axis=1
+            df2['vigencia'] = pd.to_datetime(df2['vigencia'], errors='coerce')
+            df2['chave_regra'] = (
+                df2['chave_regra']
+                + ' - '
+                + df2['vigencia'].dt.strftime('%b/%y').fillna('')
             )
+            
             # Data de corte para bonificação supervisor (2024-01-01)
             data_corte_supervisor = pd.Timestamp('2024-01-01')
             # Verificar se a coluna vigencia é datetime antes de comparar
