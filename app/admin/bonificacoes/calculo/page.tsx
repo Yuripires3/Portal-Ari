@@ -105,6 +105,7 @@ export default function CalculoBonificacaoPage() {
   const [exportingPedidoE, setExportingPedidoE] = useState(false)
   const [autoDownloaded, setAutoDownloaded] = useState(false)
   const [idsDescontosInseridos, setIdsDescontosInseridos] = useState<number[]>([])
+  const [liberandoLock, setLiberandoLock] = useState(false)
 
   // Helper: lazy-load SheetJS in browser
   const getXLSX = async (): Promise<any> => {
@@ -890,7 +891,18 @@ export default function CalculoBonificacaoPage() {
 
       const iniciarData = await iniciarResponse.json()
       if (!iniciarResponse.ok || !iniciarData?.run_id) {
-        throw new Error(iniciarData?.error || "Não foi possível iniciar o cálculo")
+        const msgIniciar = iniciarData?.error || "Não foi possível iniciar o cálculo"
+        if (intervaloProgresso) clearInterval(intervaloProgresso)
+        setProgresso(0)
+        setEtapaAtual("Erro na execução")
+        setErroTecnico(msgIniciar)
+        setExecutando(false)
+        toast({
+          title: "Erro",
+          description: msgIniciar,
+          variant: "destructive"
+        })
+        return
       }
 
       currentRunId = iniciarData.run_id
@@ -1155,6 +1167,49 @@ export default function CalculoBonificacaoPage() {
       })
     } finally {
       setRegistrando(false)
+    }
+  }
+
+  /** Libera o lock da data atual (quando o erro é "Cálculo já está em execução") e opcionalmente tenta calcular de novo. */
+  const liberarLockETentar = async (tentarNovamente = false) => {
+    const usuarioId = user?.id ? Number(user.id) : null
+    if (!usuarioId || Number.isNaN(usuarioId)) {
+      toast({ title: "Erro", description: "Usuário não identificado.", variant: "destructive" })
+      return
+    }
+    let dtReferencia: string
+    if (modo === "periodo") {
+      dtReferencia = dataInicial || dataFinal || formatDateISO(new Date())
+    } else {
+      const hoje = new Date()
+      hoje.setHours(0, 0, 0, 0)
+      const anterior = (d: Date) => {
+        const x = new Date(d)
+        x.setDate(x.getDate() - 1)
+        while (x.getDay() === 0 || x.getDay() === 6) x.setDate(x.getDate() - 1)
+        return x
+      }
+      dtReferencia = formatDateISO(anterior(hoje))
+    }
+    setLiberandoLock(true)
+    try {
+      const res = await fetch("/api/bonificacoes/calculo/liberar-lock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dt_referencia: dtReferencia, usuario_id: usuarioId })
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast({ title: "Erro", description: data?.error || "Falha ao liberar lock", variant: "destructive" })
+        return
+      }
+      setErroTecnico(null)
+      toast({ title: "Sucesso", description: data?.message || "Lock liberado." })
+      if (tentarNovamente) executarCalculo()
+    } catch (e: any) {
+      toast({ title: "Erro", description: e?.message || "Falha ao liberar lock", variant: "destructive" })
+    } finally {
+      setLiberandoLock(false)
     }
   }
 
@@ -1769,6 +1824,18 @@ export default function CalculoBonificacaoPage() {
           <AlertTitle>Erro na execução</AlertTitle>
           <AlertDescription>
             {erroTecnico}
+            {erroTecnico.includes("Cálculo já está em execução para esta data de referência") && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  disabled={liberandoLock}
+                  onClick={() => liberarLockETentar(true)}
+                >
+                  {liberandoLock ? "Liberando…" : "Liberar e tentar novamente"}
+                </Button>
+              </div>
+            )}
             <Button
               variant="link"
               className="p-0 h-auto mt-2"

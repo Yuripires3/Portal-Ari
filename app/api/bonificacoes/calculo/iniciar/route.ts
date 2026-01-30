@@ -78,6 +78,12 @@ export async function POST(request: NextRequest) {
     await connection.beginTransaction()
 
     try {
+      // Remover lock expirado para esta data (permite retentar sem depender do cron)
+      await connection.execute(
+        `DELETE FROM locks_calculo WHERE dt_referencia = ? AND expires_at <= NOW()`,
+        [dt_referencia]
+      )
+
       // Lock por escopo (dt_referencia) usando SELECT ... FOR UPDATE
       // MySQL não tem pg_advisory_lock, então usamos tabela de locks
       const [lockResult]: any = await connection.execute(
@@ -88,10 +94,16 @@ export async function POST(request: NextRequest) {
         [dt_referencia]
       )
 
+      let needInsertLock = lockResult.length === 0
+
       if (lockResult.length > 0) {
         const lock = lockResult[0]
+        // Comparar como string para evitar diferença número vs string (MySQL BIGINT, JSON number)
+        const lockedByStr = String(lock.locked_by ?? "").trim()
+        const usuarioIdStr = String(usuario_id ?? "").trim()
+        const mesmoUsuario = lockedByStr !== "" && usuarioIdStr !== "" && lockedByStr === usuarioIdStr
         // Se há lock ativo de outro usuário, retornar erro
-        if (lock.locked_by !== usuario_id) {
+        if (!mesmoUsuario) {
           await connection.rollback()
           return NextResponse.json(
             { 
@@ -102,15 +114,33 @@ export async function POST(request: NextRequest) {
             { status: 409 } // Conflict
           )
         }
-        // Se é o mesmo usuário, atualizar expiração
-        await connection.execute(
-          `UPDATE locks_calculo 
-           SET expires_at = DATE_ADD(NOW(), INTERVAL 2 HOUR)
-           WHERE dt_referencia = ?`,
-          [dt_referencia]
+        // Mesmo usuário: verificar se há sessão ativa (heartbeat recente)
+        const [activeSessions]: any = await connection.execute(
+          `SELECT 1 FROM calculo_sessions 
+           WHERE dt_referencia = ? AND usuario_id = ? 
+           AND last_heartbeat > DATE_SUB(NOW(), INTERVAL 2 MINUTE) 
+           LIMIT 1`,
+          [dt_referencia, usuario_id]
         )
-      } else {
-        // Criar novo lock
+        if (activeSessions.length === 0) {
+          // Lock órfão (aba fechada/crash): remover e permitir novo cálculo
+          await connection.execute(
+            `DELETE FROM locks_calculo WHERE dt_referencia = ?`,
+            [dt_referencia]
+          )
+          needInsertLock = true
+        } else {
+          // Sessão ativa: apenas renovar expiração do lock
+          await connection.execute(
+            `UPDATE locks_calculo 
+             SET expires_at = DATE_ADD(NOW(), INTERVAL 2 HOUR)
+             WHERE dt_referencia = ?`,
+            [dt_referencia]
+          )
+        }
+      }
+
+      if (needInsertLock) {
         await connection.execute(
           `INSERT INTO locks_calculo (dt_referencia, locked_by, expires_at)
            VALUES (?, ?, DATE_ADD(NOW(), INTERVAL 2 HOUR))

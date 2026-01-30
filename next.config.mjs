@@ -55,6 +55,7 @@ const nextConfig = {
   },
   experimental: {
     turbopackUseSystemTlsCerts: true,
+    instrumentationHook: true,
   },
   // Configuração do Turbopack para silenciar avisos (se usado)
   turbopack: {},

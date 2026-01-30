@@ -37,6 +37,24 @@ HOST=0.0.0.0
 NEXT_TELEMETRY_DISABLED=1
 ```
 
+### Limpeza ao fazer deploy (cálculos em andamento)
+
+Ao subir uma nova versão, a aplicação **já limpa automaticamente** locks e sessões de cálculo (via `instrumentation.ts`). Opcionalmente, o pipeline de deploy pode chamar a API para garantir a limpeza:
+
+```env
+# Token para POST /api/bonificacoes/calculo/cleanup-on-deploy (opcional)
+DEPLOY_CLEANUP_SECRET=seu-token-secreto
+# Ou use o mesmo token do cron de limpeza:
+# CLEANUP_TOKEN=seu-token-secreto
+```
+
+Exemplo de chamada após o deploy (Coolify, script, etc.):
+
+```bash
+curl -X POST "https://seu-dominio/api/bonificacoes/calculo/cleanup-on-deploy" \
+  -H "Authorization: Bearer SEU_DEPLOY_CLEANUP_SECRET"
+```
+
 ## Verificação de Variáveis de Ambiente
 
 ### No Docker Compose
