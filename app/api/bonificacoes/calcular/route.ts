@@ -122,20 +122,34 @@ export async function POST(request: NextRequest) {
       stdout = ''
       stderr = ''
       
-      // Coletar stdout
+      // No terminal: exibir APENAS linhas que começam com [RASTREIO] (evita imprimir o JSON inteiro, cujo campo logs contém "[RASTREIO]")
+      console.log("\n--- Rastreio de propostas (ON0322014, ON0304522) ---")
       pythonProcess.stdout.on('data', (data) => {
-        stdout += data.toString()
+        const chunk = data.toString()
+        stdout += chunk
+        chunk.split('\n').forEach((line) => {
+          const trimmed = line.trim()
+          if (trimmed.startsWith("[RASTREIO]") || trimmed.startsWith("[DEBUG]")) console.log(trimmed)
+        })
       })
-      
-      // Coletar stderr
       pythonProcess.stderr.on('data', (data) => {
-        stderr += data.toString()
+        const chunk = data.toString()
+        stderr += chunk
+        chunk.split('\n').forEach((line) => {
+          const trimmed = line.trim()
+          if (trimmed.startsWith("[RASTREIO]") || trimmed.startsWith("[DEBUG]")) console.log(trimmed)
+        })
       })
       
       // Enviar parâmetros via stdin
       const inputJson = JSON.stringify(params)
       pythonProcess.stdin.write(inputJson)
       pythonProcess.stdin.end()
+      
+      // Ao encerrar o processo, fechar bloco de rastreio no terminal
+      pythonProcess.on('close', () => {
+        console.log("--- Fim rastreio ---\n")
+      })
       
       // Criar promise que resolve quando o processo termina
       const processPromise = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {

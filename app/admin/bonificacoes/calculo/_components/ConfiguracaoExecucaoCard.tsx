@@ -6,10 +6,25 @@ import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 
+/** Converte string de data (DD/MM/YYYY ou YYYY-MM-DD) para Date. Retorna null se inválida. */
+function parseDataBR(s: string): Date | null {
+  const t = s.trim()
+  if (!t) return null
+  if (t.includes("/")) {
+    const [d, m, y] = t.split("/").map(Number)
+    if (!d || !m || !y || m < 1 || m > 12 || d < 1 || d > 31) return null
+    const date = new Date(y, m - 1, d)
+    if (date.getFullYear() !== y || date.getMonth() !== m - 1 || date.getDate() !== d) return null
+    return date
+  }
+  const iso = new Date(t)
+  return isNaN(iso.getTime()) ? null : iso
+}
+
 type Props = {
   modo?: "automatico" | "periodo"
-  defaultInicio?: string // YYYY-MM-DD
-  defaultFim?: string    // YYYY-MM-DD
+  defaultInicio?: string // DD/MM/YYYY ou YYYY-MM-DD
+  defaultFim?: string    // DD/MM/YYYY ou YYYY-MM-DD
   onExecutar?: (params: {modo: "automatico"|"periodo"; inicio?: string; fim?: string}) => void
   onCancelar?: () => void
   isLoading?: boolean
@@ -45,7 +60,7 @@ export function ConfiguracaoExecucaoCard({
     setDataFinal(defaultFim)
   }, [defaultFim])
 
-  // Validação
+  // Validação (aceita DD/MM/YYYY ou YYYY-MM-DD)
   useEffect(() => {
     if (modo === "periodo") {
       if (!dataInicial || !dataFinal) {
@@ -53,8 +68,13 @@ export function ConfiguracaoExecucaoCard({
         return
       }
 
-      const dtInicial = new Date(dataInicial)
-      const dtFinal = new Date(dataFinal)
+      const dtInicial = parseDataBR(dataInicial)
+      const dtFinal = parseDataBR(dataFinal)
+
+      if (!dtInicial || !dtFinal) {
+        setErroValidacao("Use o formato DD/MM/AAAA (ex: 01/09/2025)")
+        return
+      }
 
       if (dtInicial > dtFinal) {
         setErroValidacao("Data inicial não pode ser maior que data final")
@@ -150,13 +170,15 @@ export function ConfiguracaoExecucaoCard({
               </Label>
               <Input
                 id="dataInicial"
-                type="date"
+                type="text"
+                inputMode="numeric"
+                placeholder="DD/MM/AAAA (ex: 01/09/2025)"
                 value={dataInicial}
                 onChange={(e) => setDataInicial(e.target.value)}
                 required
                 aria-required="true"
                 aria-invalid={erroValidacao ? "true" : "false"}
-                className="w-full"
+                className="w-full font-mono"
               />
             </div>
             <div className="space-y-2">
@@ -165,13 +187,15 @@ export function ConfiguracaoExecucaoCard({
               </Label>
               <Input
                 id="dataFinal"
-                type="date"
+                type="text"
+                inputMode="numeric"
+                placeholder="DD/MM/AAAA (ex: 02/02/2026)"
                 value={dataFinal}
                 onChange={(e) => setDataFinal(e.target.value)}
                 required
                 aria-required="true"
                 aria-invalid={erroValidacao ? "true" : "false"}
-                className="w-full"
+                className="w-full font-mono"
               />
             </div>
           </div>

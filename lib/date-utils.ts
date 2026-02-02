@@ -53,6 +53,26 @@ export function formatDateBR(value: string | Date | null | undefined): string {
   return `${day}/${month}/${year}`
 }
 
+/**
+ * Converte data em DD/MM/YYYY (input do usuário BR) para YYYY-MM-DD (API).
+ * Se já estiver em YYYY-MM-DD, devolve como está.
+ */
+export function dataBRParaISO(value: string | null | undefined): string {
+  const s = String(value ?? "").trim()
+  if (!s) return ""
+  if (s.includes("/")) {
+    const partes = s.split("/")
+    if (partes.length === 3) {
+      const [d, m, y] = partes.map(Number)
+      if (d >= 1 && d <= 31 && m >= 1 && m <= 12 && y >= 1900 && y <= 2100) {
+        return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`
+      }
+    }
+    return s
+  }
+  return s
+}
+
 function sanitizeDateInput(value: string | Date | null | undefined): string {
   if (!value) return ""
   if (value instanceof Date) {

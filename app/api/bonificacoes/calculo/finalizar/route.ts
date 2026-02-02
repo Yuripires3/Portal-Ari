@@ -49,19 +49,35 @@ export async function POST(request: NextRequest) {
         [run_id]
       )
 
-      if (stagingDescontos.length === 0) {
-        await connection.rollback()
-        return NextResponse.json(
-          { error: "Nenhum desconto em staging encontrado para este run_id" },
-          { status: 404 }
-        )
-      }
-
       const stats = {
         total_promovidos: 0,
         total_compensados: 0,
         total_ignorados: 0,
         difs: [] as any[]
+      }
+
+      // Se não há descontos em staging, só encerrar sessão e liberar lock
+      if (stagingDescontos.length === 0) {
+        const [sessionInfo]: any = await connection.execute(
+          `SELECT dt_referencia FROM calculo_sessions WHERE run_id = ?`,
+          [run_id]
+        )
+        if (sessionInfo.length > 0) {
+          await connection.execute(
+            `DELETE FROM locks_calculo WHERE dt_referencia = ?`,
+            [sessionInfo[0].dt_referencia]
+          )
+        }
+        await connection.execute(
+          `DELETE FROM calculo_sessions WHERE run_id = ?`,
+          [run_id]
+        )
+        await connection.commit()
+        return NextResponse.json({
+          success: true,
+          message: "Nenhum desconto a registrar. Sessão encerrada.",
+          stats
+        })
       }
 
       // Processar cada desconto em staging

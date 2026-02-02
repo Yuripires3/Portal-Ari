@@ -21,7 +21,7 @@ import { signalPageLoaded } from "@/components/ui/page-loading"
 import { Progress } from "@/components/ui/progress"
 import { ConfiguracaoExecucaoCard } from "./_components/ConfiguracaoExecucaoCard"
 import { useAuth } from "@/components/auth/auth-provider"
-import { formatDateBR, formatDateISO } from "@/lib/date-utils"
+import { formatDateBR, formatDateISO, dataBRParaISO } from "@/lib/date-utils"
 import { downloadXlsxFromObjects } from "@/utils/downloadXlsx"
 
 interface Indicadores {
@@ -501,9 +501,12 @@ export default function CalculoBonificacaoPage() {
     )
   }
 
-  const validarDatas = (): boolean => {
-    if (modo === "periodo") {
-      if (!dataInicial || !dataFinal) {
+  const validarDatas = (params?: { modo: "automatico" | "periodo"; inicio?: string; fim?: string }): boolean => {
+    const modoValidar = params?.modo ?? modo
+    const inicioValidar = params?.inicio ?? dataInicial
+    const fimValidar = params?.fim ?? dataFinal
+    if (modoValidar === "periodo") {
+      if (!inicioValidar || !fimValidar) {
         toast({
           title: "Erro de validação",
           description: "Data inicial e data final são obrigatórias no modo período",
@@ -512,8 +515,20 @@ export default function CalculoBonificacaoPage() {
         return false
       }
 
-      const dtInicial = new Date(dataInicial)
-      const dtFinal = new Date(dataFinal)
+      // Aceitar DD/MM/YYYY ou YYYY-MM-DD
+      const isoInicio = dataBRParaISO(inicioValidar) || inicioValidar
+      const isoFim = dataBRParaISO(fimValidar) || fimValidar
+      const dtInicial = new Date(isoInicio)
+      const dtFinal = new Date(isoFim)
+
+      if (Number.isNaN(dtInicial.getTime()) || Number.isNaN(dtFinal.getTime())) {
+        toast({
+          title: "Erro de validação",
+          description: "Use o formato DD/MM/AAAA (ex: 01/09/2025)",
+          variant: "destructive"
+        })
+        return false
+      }
 
       if (dtInicial > dtFinal) {
         toast({
@@ -765,10 +780,13 @@ export default function CalculoBonificacaoPage() {
     return etapasComStatus
   }
 
-  const executarCalculo = async () => {
-    if (!validarDatas()) {
+  const executarCalculo = async (paramsExec?: { modo: "automatico" | "periodo"; inicio?: string; fim?: string }) => {
+    if (!validarDatas(paramsExec)) {
       return
     }
+    const modoUsar = paramsExec?.modo ?? modo
+    const dataInicialUsar = paramsExec?.inicio ?? dataInicial
+    const dataFinalUsar = paramsExec?.fim ?? dataFinal
 
     const usuarioId = user?.id ? Number(user.id) : null
     if (!usuarioId || Number.isNaN(usuarioId)) {
@@ -844,19 +862,18 @@ export default function CalculoBonificacaoPage() {
     let currentRunId: string | null = null
 
     try {
-      // Calcular datas para modo automático (30 dias: 1 dia útil antes de hoje até 30 dias antes)
-      let dataInicialCalculada = dataInicial
-      let dataFinalCalculada = dataFinal
-      
-      if (modo === "automatico") {
+      // Modo período: usar exatamente as datas que o usuário selecionou.
+      // Modo automático: calcular 30 dias (1 dia útil antes de hoje até 30 dias antes).
+      let dataInicialEnviar = dataInicialUsar
+      let dataFinalEnviar = dataFinalUsar
+
+      if (modoUsar === "automatico") {
         const hoje = new Date()
         hoje.setHours(0, 0, 0, 0)
         
-        // Calcular data final: 1 dia útil antes de hoje
         const calcularDiaUtilAnterior = (data: Date): Date => {
           const d = new Date(data)
           d.setDate(d.getDate() - 1)
-          // Se for sábado (6) ou domingo (0), voltar para sexta
           while (d.getDay() === 0 || d.getDay() === 6) {
             d.setDate(d.getDate() - 1)
           }
@@ -865,17 +882,17 @@ export default function CalculoBonificacaoPage() {
         
         const dataFinalDate = calcularDiaUtilAnterior(hoje)
         const dataInicialDate = new Date(dataFinalDate)
-        dataInicialDate.setDate(dataInicialDate.getDate() - 30) // 30 dias corridos antes
+        dataInicialDate.setDate(dataInicialDate.getDate() - 30)
         
-        dataFinalCalculada = formatDateISO(dataFinalDate)
-        dataInicialCalculada = formatDateISO(dataInicialDate)
+        dataFinalEnviar = formatDateISO(dataFinalDate)
+        dataInicialEnviar = formatDateISO(dataInicialDate)
       }
       
-      // Iniciar execução para reservar lock e obter run_id
+      // dt_referencia deve estar sempre em YYYY-MM-DD (API exige)
       const dtReferencia =
-        modo === "periodo"
-          ? (dataInicial || dataFinal || formatDateISO(new Date()))
-          : dataFinalCalculada || formatDateISO(new Date())
+        modoUsar === "periodo"
+          ? (dataBRParaISO(dataInicialUsar) || dataBRParaISO(dataFinalUsar) || formatDateISO(new Date()))
+          : dataFinalEnviar || formatDateISO(new Date())
 
       const iniciarResponse = await fetch("/api/bonificacoes/calculo/iniciar", {
         method: "POST",
@@ -908,15 +925,19 @@ export default function CalculoBonificacaoPage() {
       currentRunId = iniciarData.run_id
       setRunId(iniciarData.run_id)
 
+      // Período: converte DD/MM/YYYY (input BR) para YYYY-MM-DD para a API; backend também aceita DD/MM/YYYY
+      const dataInicialEnviarPeriodo = modoUsar === "periodo" ? (dataBRParaISO(dataInicialUsar) || dataInicialUsar) : dataInicialEnviar
+      const dataFinalEnviarPeriodo = modoUsar === "periodo" ? (dataBRParaISO(dataFinalUsar) || dataFinalUsar) : dataFinalEnviar
+
       const response = await fetch("/api/bonificacoes/calcular", {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          modo,
-          data_inicial: modo === "periodo" ? dataInicial : dataInicialCalculada,
-          data_final: modo === "periodo" ? dataFinal : dataFinalCalculada,
+          modo: modoUsar,
+          data_inicial: dataInicialEnviarPeriodo,
+          data_final: dataFinalEnviarPeriodo,
           run_id: currentRunId,
           session_id: sessionId,
           usuario_id: usuarioId
@@ -1131,7 +1152,7 @@ export default function CalculoBonificacaoPage() {
           run_id: runId,
           session_id: sessionId,
           usuario_id: usuarioId,
-          dt_referencia: dataApuracaoAtual
+          dt_referencia: dataBRParaISO(dataApuracaoAtual) || dataApuracaoAtual
         })
       })
 
@@ -1179,7 +1200,7 @@ export default function CalculoBonificacaoPage() {
     }
     let dtReferencia: string
     if (modo === "periodo") {
-      dtReferencia = dataInicial || dataFinal || formatDateISO(new Date())
+      dtReferencia = dataBRParaISO(dataInicial) || dataBRParaISO(dataFinal) || formatDateISO(new Date())
     } else {
       const hoje = new Date()
       hoje.setHours(0, 0, 0, 0)
@@ -1217,6 +1238,9 @@ export default function CalculoBonificacaoPage() {
     if (!runId) return false
     const temUnifBonif = unifBonifData.length > 0
     const temUnifCom = unifComData.length > 0
+
+    // Se não há tabelas para registrar (unif bonif/com), mostrar Finalizar para encerrar a sessão
+    if (!temUnifBonif && !temUnifCom) return true
 
     if (temUnifBonif && temUnifCom) {
       return registradoUnifBonif && registradoUnifCom
@@ -1799,7 +1823,6 @@ export default function CalculoBonificacaoPage() {
         defaultInicio={dataInicial}
         defaultFim={dataFinal}
         onExecutar={(params) => {
-          // Atualizar estados locais antes de executar
           setModo(params.modo)
           if (params.modo === "periodo" && params.inicio && params.fim) {
             setDataInicial(params.inicio)
@@ -1808,8 +1831,7 @@ export default function CalculoBonificacaoPage() {
             setDataInicial("")
             setDataFinal("")
           }
-          // Executar cálculo - validarDatas() usará os estados atualizados
-          setTimeout(() => executarCalculo(), 0)
+          executarCalculo({ modo: params.modo, inicio: params.inicio, fim: params.fim })
         }}
         onCancelar={cancelar}
         isLoading={executando}
@@ -2476,10 +2498,15 @@ export default function CalculoBonificacaoPage() {
             </Alert>
           )}
 
-          {/* Botão Fechar Resumo - aparece quando todas as tabelas disponíveis foram registradas */}
+          {/* Botão Finalizar - aparece quando todas as tabelas foram registradas ou quando não há descontos a registrar */}
           {podeMostrarFinalizar && (
             <Card className="border shadow-sm bg-white">
               <CardContent className="py-6">
+                {unifBonifData.length === 0 && unifComData.length === 0 && (
+                  <p className="text-sm text-muted-foreground text-center mb-3">
+                    Nenhum desconto a registrar. Finalize para encerrar a sessão.
+                  </p>
+                )}
                 <div className="flex justify-center">
                   <Button
                     onClick={finalizarCalculo}

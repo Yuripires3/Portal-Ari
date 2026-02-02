@@ -116,6 +116,18 @@ def safe_dt_strftime(series, format_str):
     # Se não for datetime, tentar converter para string
     return series.astype(str)
 
+def _parse_data_usuario(s):
+    """Aceita data em YYYY-MM-DD (ano-mês-dia) ou DD/MM/YYYY (dia/mês/ano, input do usuário)."""
+    s = str(s).strip()
+    if not s:
+        return None
+    if "/" in s:
+        partes = s.split("/")
+        if len(partes) == 3:
+            dia, mes, ano = int(partes[0]), int(partes[1]), int(partes[2])
+            return date(ano, mes, dia)
+    return date.fromisoformat(s)
+
 def calcular_datas(modo, data_inicial_override=None, data_final_override=None):
     """Calcula as datas conforme o modo especificado"""
     hoje = date.today()
@@ -147,8 +159,18 @@ def calcular_datas(modo, data_inicial_override=None, data_final_override=None):
                 "n_apur": None
             }
         data_pagamento = hoje
-        data_inicial = date.fromisoformat(data_inicial_override)
-        data_final = date.fromisoformat(data_final_override)
+        # Aceita YYYY-MM-DD (ano-mês-dia) ou DD/MM/YYYY (dia/mês/ano, ex: 01/09/2025 = 1º set 2025)
+        data_inicial = _parse_data_usuario(data_inicial_override)
+        data_final = _parse_data_usuario(data_final_override)
+        if data_inicial is None or data_final is None:
+            return {
+                "erro": True,
+                "mensagem": "No modo período, data_inicial e data_final devem ser válidas (YYYY-MM-DD ou DD/MM/YYYY)",
+                "data_pagamento": None,
+                "data_final": None,
+                "data_inicial": None,
+                "n_apur": None
+            }
         n_apur = hoje.day
     else:
         return {
@@ -378,6 +400,31 @@ def main():
             log_print("Data pagamento  :", data_pagamento)
             log_print("Numero da apuracao:", n_apur)
             log_print("Caminho migracoes:", migracoes_path)
+            sys.stdout.write(f"[DEBUG] Extracao: data inicio = {data_inicial!s} | data fim = {data_final!s}\n")
+            sys.stdout.flush()
+            
+            # Rastreio de propostas: identificar em qual etapa saem do cálculo (Browser vs local)
+            # Usar sys.stdout para bypass do log_print (que grava no buffer); assim o Node recebe no pipe.
+            PROPOSTAS_RASTREIO = ["ON0302014", "ON0304522"]
+            def _rastrear_propostas(df, etapa_nome, col_proposta=None):
+                def _msg(txt):
+                    sys.stdout.write(txt + "\n")
+                    sys.stdout.flush()
+                if df is None or (hasattr(df, 'empty') and df.empty):
+                    _msg(f"[RASTREIO] {etapa_nome}: (df vazio ou None)")
+                    return
+                if col_proposta is None:
+                    col_proposta = "_source.contratonumeroproposta" if "_source.contratonumeroproposta" in df.columns else "numero_da_proposta"
+                if col_proposta not in df.columns:
+                    _msg(f"[RASTREIO] {etapa_nome}: coluna '{col_proposta}' nao encontrada")
+                    return
+                try:
+                    serie = df[col_proposta].astype(str).str.strip()
+                    linhas = sum(serie.isin(PROPOSTAS_RASTREIO))
+                    encontradas = [p for p in PROPOSTAS_RASTREIO if (serie == p).any()]
+                    _msg(f"[RASTREIO] {etapa_nome}: linhas com propostas rastreadas={linhas} | presentes: {encontradas}")
+                except Exception as e:
+                    _msg(f"[RASTREIO] {etapa_nome}: erro={e}")
             
             etapa("Conectando ao banco de dados MySQL...", 1)
             
@@ -516,8 +563,6 @@ def main():
                 return pd.DataFrame(results, columns=cols)
             
             def baixar_relatorio_listagem_cobrancas(client, dt_inicial, dt_final, processo, proposta=False, conf_tempo=False):
-                MAX_ES_SIZE = 20000  # Proteção contra cargas muito grandes
-                
                 if processo == "normal":
                     query = {
                         "range": {
@@ -549,16 +594,12 @@ def main():
                     }
                 
                 tempo = time()
-                n_max_raw = client.count(index='qv-relatorio-listagem-cobranca', query=query)['count']
-                n_max = min(n_max_raw, MAX_ES_SIZE)  # Limitar tamanho máximo
+                n_max = client.count(index='qv-relatorio-listagem-cobranca', query=query)['count']
                 if conf_tempo:
                     log_print(f'Buscando número máximo: {time()-tempo}s', end='   ')
                 
-                if n_max_raw > MAX_ES_SIZE:
-                    log_print(f'[AVISO] Limite de {MAX_ES_SIZE} documentos aplicado (total: {n_max_raw})')
-                
                 tempo = time()
-                results = client.search(index='qv-relatorio-listagem-cobranca', query=query, size=n_max, request_timeout=90)
+                results = client.search(index='qv-relatorio-listagem-cobranca', query=query, size=n_max)
                 df = pd.json_normalize(results['hits']['hits'])
                 if conf_tempo:
                     log_print(f'Baixando relatorio: {time()-tempo}s', end='   ')
@@ -876,6 +917,7 @@ def main():
             log_print('| - Faturamento', end='   ')
             faturamento_raw = baixar_relatorio_listagem_cobrancas(es, data_inicial, data_final, "normal")
             log_print('                            (finalizado)')
+            _rastrear_propostas(faturamento_raw, "1_faturamento_raw (ES listagem cobrancas)", "_source.contratonumeroproposta")
             
             etapa("Baixando relatorio de contratos...", 40)
             log_print('| - Contratos', end='   ')
@@ -916,6 +958,13 @@ def main():
                                              '_source.cobrancacompetenciaano', '_source.contratostatusdescricao', '_source.cobrancadatapagamento']]
             df_faturamento.columns = ['numero_do_contrato', 'numero_da_parcela', 'mes_competencia', 'ano_competencia', 
                                      'status_da_fatura', 'data_do_pagamento_da_fatura']
+
+            _df_debug = len(df_faturamento[df_faturamento['numero_do_contrato'] == '0249424'])
+
+            sys.stdout.write("[DEBUG] df_faturamento numero_do_contrato=='0249424':\n")
+            for _line in str(_df_debug).splitlines():
+                sys.stdout.write("[DEBUG] " + _line + "\n")
+            sys.stdout.flush()
             
             aux_bonificados = padronizar_corretores(bonificados)
             aux_bonificados.columns = snake_case(aux_bonificados.columns)
@@ -972,6 +1021,7 @@ def main():
             merge_contratos = 'Certo' if df1.shape[0] == n_row else 'Erro'
             
             df1 = df1.merge(df_faturamento, 'left', left_on='numero_contrato', right_on='numero_do_contrato').drop(columns='numero_do_contrato')
+            _rastrear_propostas(df1, "2_df1 apos merge faturamento")
             
             df1['numero_da_parcela'] = df1['numero_da_parcela'].fillna(0)
             df1['numero_da_parcela'] = df1['numero_da_parcela'].astype('int64')
@@ -1023,12 +1073,17 @@ def main():
             n_row = df2.shape[0]
             df2 = df2.merge(aux_planos, 'left', left_on='plano', right_on='nome_antigo').drop(columns=['nome_antigo']).rename(columns={'nome_novo': 'plano_novo'})
             merge_plano = 'Certo' if df2.shape[0] == n_row else 'Erro'
+
+            _rastrear_propostas(df2, "3_df2 apos merge auxiliares")
             
             etapa("Aplicando filtros de exclusao...", 68)
+            # Etapa 1: operadora + beneficiario_cancelado + parcela == 1
             df2 = df2[(df2['operadora'] != 'INTEGRAL SAÚDE POP RIO') &
                      (df2['beneficiario_cancelado'] != True) &
-                     (df2['numero_da_parcela'] == 1) &
-                     (df2['concessionaria_nova'] != 'A2 CORRETORA') &
+                     (df2['numero_da_parcela'] == 1)].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "3a_df2 apos filtro operadora+beneficiario+parcela=1")
+            # Etapa 2: concessionarias excluidas
+            df2 = df2[(df2['concessionaria_nova'] != 'A2 CORRETORA') &
                      (df2['concessionaria_nova'] != 'BRISE CORRETORA') &
                      (df2['concessionaria_nova'] != 'MB2 CORRETORA') &
                      (df2['concessionaria_nova'] != 'FAST CORRETORA') &
@@ -1038,19 +1093,24 @@ def main():
                      (df2['concessionaria_nova'] != 'MIGRACAO CORRETORA') &
                      (df2['concessionaria_nova'] != 'MIGRACAO - CORRETORA') &
                      (df2['concessionaria_nova'] != 'A2 CORRETORA-TLV CORRETORA') &
-                     (df2['concessionaria_nova'] != 'FAST CORRETORA-TLV CORRETORA') &
-                     (df2['plano'] != 'DENTAL') &
+                     (df2['concessionaria_nova'] != 'FAST CORRETORA-TLV CORRETORA')].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "3b_df2 apos filtro concessionarias excluidas")
+            # Etapa 3: planos (DENTAL, DENTSIM, DENT)
+            df2 = df2[(df2['plano'] != 'DENTAL') &
                      (df2['plano'] != 'UNIMED DENTAL') &
                      (df2['plano'] != 'DENTSIM 10') &
                      (df2['plano'] != 'DENTSIM 20') &
-                     (df2['plano'].str.contains('DENT') == False) &
-                     (df2['entidade'] != 'AERO') &
+                     (df2['plano'].str.contains('DENT') == False)].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "3c_df2 apos filtro planos (DENTAL/DENTSIM/DENT)")
+            # Etapa 4: entidades excluidas
+            df2 = df2[(df2['entidade'] != 'AERO') &
                      (df2['entidade'] != 'AFAMA') &
                      (df2['entidade'] != 'AGERIO') &
                      (df2['entidade'] != 'UNASPLAERJ') &
                      (df2['entidade'] != 'UNEICEF') &
                      (df2['entidade'] != 'NUCLEP') &
                      (df2['entidade'] != 'ASMED')].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "3d_df2 apos filtro entidades excluidas (AERO, AFAMA, etc)")
             
             entidades_novas = df2[pd.isna(df2['entidade_nova'])]['entidade'].to_list()
             planos_novos = df2[pd.isna(df2['plano_novo'])]['plano'].to_list()
@@ -1059,8 +1119,9 @@ def main():
             
             df2 = df2[(pd.isna(df2['entidade_nova']) == False) & 
                      (pd.isna(df2['operadora_nova']) == False) & 
-                     (pd.isna(df2['concessionaria_nova']) == False) & 
+                     (pd.isna(df2['concessionaria_nova']) == False) &
                      (pd.isna(df2['plano_novo']) == False)].reset_index(drop=True)
+            _rastrear_propostas(df2, "5_df2 apos mapeamentos (entidade/operadora/concessionaria/plano novo)")
             
             etapa("Aplicando transformacoes de dados...", 70)
             df2['mes_reajuste'] = df2['mes_reajuste'].apply(
@@ -1108,6 +1169,7 @@ def main():
             df2['faixa_pagamento'] = np.where(mask2, 'Faixa 01', df2['faixa_pagamento'])
             
             df2 = df2[~(df2['faixa_pagamento'] == 'fora da faixa')].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "6_df2 apos remocao faixa 'fora da faixa'")
             
             etapa("Calculando bonificacoes...", 74)
             df2[['bonificacao_corretor', 'bonificacao_supervisor', 'chave_regra']] = df2[['operadora', 'tipo_de_beneficiario', 'faixa_pagamento', 
@@ -1182,7 +1244,9 @@ def main():
             n_row = len(df2)
             df2 = df2.merge(df0migr, 'left', 'numero_da_proposta')
             conf_merge = 0 if n_row == len(df2) else 1
+            _rastrear_propostas(df2[df2['parcela'].notna()], "7_ANTES migracoes: propostas que SERAO removidas (estao no Excel)")
             df2 = df2[df2['parcela'].isna()].copy().reset_index(drop=True)
+            _rastrear_propostas(df2, "8_df2 apos migracoes (removidas propostas do faturas_migracao.xlsx)")
             
             etapa("Preparando estrutura final...", 80)
             df3 = df2[['numero_contrato', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia', 'cpf_beneficiario', 
@@ -1200,6 +1264,7 @@ def main():
             df3 = df3[df3['chave_regra'].str.find('Erro') == -1].reset_index(drop=True)
             df3 = df3[df3['chave_regra'].str.find('Não Elegível') == -1].reset_index(drop=True)
             df3 = df3[df3['chave_regra'].str.find('fora da faixa') == -1].reset_index(drop=True)
+            _rastrear_propostas(df3, "9_df3 apos filtros chave_regra (Nao Elegivel, erro, nao achou, fora faixa, bonif 0/1/2/3)")
             
             etapa("Processando unificado para evitar duplicatas...", 82)
             CUT = date(2025, 9, 25)
@@ -1228,6 +1293,7 @@ def main():
             df_corretor['_contrato_prop_norm'] = df_corretor['numero_da_proposta'] + df_corretor['cpf_vendedor'] + df_corretor['cpf_beneficiario']
             
             df_corretor = df_corretor[~df_corretor['_contrato_prop_norm'].isin(ids_unificado)].drop(columns=['_contrato_prop_norm'])
+            _rastrear_propostas(df_corretor, "10_df_corretor apos unificado (removidas ja pagas)")
             
             df_supervisor = df3[['numero_contrato', 'operadora_nova', 'entidade_nova', 'numero_da_proposta', 'vigencia',
                                 'cpf_beneficiario', 'nome', 'tipo_de_beneficiario', 'idade', 'numero_da_parcela',
@@ -1244,6 +1310,7 @@ def main():
                 })
             df_supervisor['_contrato_prop_norm'] = df_supervisor['numero_da_proposta'] + df_supervisor['cpf_vendedor'] + df_supervisor['cpf_beneficiario']
             df_supervisor = df_supervisor[~df_supervisor['_contrato_prop_norm'].isin(ids_unificado)].drop(columns=['_contrato_prop_norm'])
+            _rastrear_propostas(df_supervisor, "11_df_supervisor apos unificado (removidas ja pagas)")
             
             etapa("Unificando corretores e supervisores...", 85)
             df4 = pd.concat([df_corretor.assign(tipo_vendedor='corretor'), df_supervisor.assign(tipo_vendedor='supervisor')], ignore_index=True)
@@ -1285,6 +1352,7 @@ def main():
             empty_names = df4_sem_pix["NOME_RAZAO_SOCIAL"].isna() | (df4_sem_pix["NOME_RAZAO_SOCIAL"] == "")
             print("[DBG] empty names:", int(empty_names.sum()))
             df4_com_pix = df4[~df4['chave_pix'].isna()].copy().reset_index(drop=True)
+            _rastrear_propostas(df4_com_pix, "12_df4_com_pix (com chave PIX; sem PIX nao entra no calc_pag)")
             
             etapa("Calculando descontos e valores finais...", 86)
             descontos = aux_descontos[['cpf', 'valor']].groupby('cpf', sort=False).sum().reset_index().sort_values('valor')
