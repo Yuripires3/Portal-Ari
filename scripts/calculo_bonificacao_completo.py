@@ -948,7 +948,7 @@ def main():
             df_beneficiarios.columns = ['numero_contrato', 'numero_da_proposta', 'filial_gerencial', 'operadora', 'mes_reajuste', 
                                        'entidade', 'plano', 'vigencia',
                                        'id_beneficiario', 'beneficiario_cancelado', 'cpf', 'nome', 'dt_nascimento', 'sexo', 'tipo',
-                                       'data_exclusao', 'descricao_da_reducao_de_carencia']
+                                       'data_exclusao', 'descricao_da_reducao_de_carencia', 'contrato_comercial']
             
             df_contratos = contratos[['_source.contratonumero', '_source.corretoracodigo', '_source.supervisorcpf', 
                                      '_source.supervisornome', '_source.corretorcpf', '_source.corretornome']].copy()
