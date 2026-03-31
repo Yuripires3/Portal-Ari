@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getDBConnection } from "@/lib/db"
+import { getRequestAuthUser } from "@/lib/api-auth"
 
 /**
  * POST /api/bonificacoes/calculo/liberar-lock
@@ -15,8 +16,14 @@ export async function POST(request: NextRequest) {
   let connection: any = null
 
   try {
+    const auth = await getRequestAuthUser(request)
+    if (!auth.ok) {
+      return NextResponse.json({ error: auth.error }, { status: 401 })
+    }
+
     const body = await request.json()
-    const { dt_referencia, usuario_id } = body
+    const { dt_referencia, usuario_id, force } = body
+    const forceByAdmin = Boolean(force) && Boolean(auth.isAdmin)
 
     if (!dt_referencia || usuario_id == null || usuario_id === "") {
       return NextResponse.json(
@@ -50,10 +57,13 @@ export async function POST(request: NextRequest) {
 
     const lockedByStr = String(rows[0].locked_by ?? "").trim()
     const usuarioIdStr = String(usuario_id ?? "").trim()
-    if (lockedByStr !== usuarioIdStr) {
+    const authUserIdStr = String(auth.userId ?? "").trim()
+    const userOwnsLock = lockedByStr === usuarioIdStr && usuarioIdStr === authUserIdStr
+
+    if (!userOwnsLock && !forceByAdmin) {
       return NextResponse.json(
         {
-          error: "O lock pertence a outro usuário. Só o dono pode liberar.",
+          error: "O lock pertence a outro usuário. Somente o dono ou admin pode liberar.",
           locked_by: rows[0].locked_by
         },
         { status: 403 }
@@ -65,15 +75,25 @@ export async function POST(request: NextRequest) {
       [dt_referencia]
     )
 
-    // Remover sessões órfãs desta data/usuário para não bloquear o próximo iniciar
-    await connection.execute(
-      `DELETE FROM calculo_sessions WHERE dt_referencia = ? AND usuario_id = ?`,
-      [dt_referencia, usuario_id]
-    )
+    if (forceByAdmin) {
+      // Admin pode derrubar todas as sessões da data para destravar o cálculo
+      await connection.execute(
+        `DELETE FROM calculo_sessions WHERE dt_referencia = ?`,
+        [dt_referencia]
+      )
+    } else {
+      // Fluxo padrão: remove apenas sessão do próprio usuário
+      await connection.execute(
+        `DELETE FROM calculo_sessions WHERE dt_referencia = ? AND usuario_id = ?`,
+        [dt_referencia, usuario_id]
+      )
+    }
 
     return NextResponse.json({
       success: true,
-      message: "Lock liberado. Você pode iniciar o cálculo novamente.",
+      message: forceByAdmin
+        ? "Lock liberado pelo admin e sessões da data foram derrubadas."
+        : "Lock liberado. Você pode iniciar o cálculo novamente.",
       liberado: true
     })
   } catch (error: any) {

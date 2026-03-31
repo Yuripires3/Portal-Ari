@@ -60,6 +60,7 @@ export default function CalculoBonificacaoPage() {
   const { toast } = useToast()
   const router = useRouter()
   const { user } = useAuth() as any
+  const isAdmin = String(user?.role || "").toLowerCase() === "admin"
   const [runId, setRunId] = useState<string | null>(null)
   const [sessionId] = useState<string>(() => {
     if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -1192,7 +1193,7 @@ export default function CalculoBonificacaoPage() {
   }
 
   /** Libera o lock da data atual (quando o erro é "Cálculo já está em execução") e opcionalmente tenta calcular de novo. */
-  const liberarLockETentar = async (tentarNovamente = false) => {
+  const liberarLockETentar = async (tentarNovamente = false, forceAdmin = false) => {
     const usuarioId = user?.id ? Number(user.id) : null
     if (!usuarioId || Number.isNaN(usuarioId)) {
       toast({ title: "Erro", description: "Usuário não identificado.", variant: "destructive" })
@@ -1217,7 +1218,7 @@ export default function CalculoBonificacaoPage() {
       const res = await fetch("/api/bonificacoes/calculo/liberar-lock", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dt_referencia: dtReferencia, usuario_id: usuarioId })
+        body: JSON.stringify({ dt_referencia: dtReferencia, usuario_id: usuarioId, force: forceAdmin })
       })
       const data = await res.json()
       if (!res.ok) {
@@ -1856,6 +1857,16 @@ export default function CalculoBonificacaoPage() {
                 >
                   {liberandoLock ? "Liberando…" : "Liberar e tentar novamente"}
                 </Button>
+                {isAdmin && (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    disabled={liberandoLock}
+                    onClick={() => liberarLockETentar(true, true)}
+                  >
+                    {liberandoLock ? "Derrubando…" : "Derrubar usuário e assumir cálculo"}
+                  </Button>
+                )}
               </div>
             )}
             <Button

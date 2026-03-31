@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { getDBConnection } from "@/lib/db"
+import { getRequestAuthUser } from "@/lib/api-auth"
 
 /**
  * POST /api/bonificacoes/calculo/cancelar
@@ -14,8 +15,13 @@ export async function POST(request: NextRequest) {
   let connection: any = null
 
   try {
+    const auth = await getRequestAuthUser(request)
+    if (!auth.ok) {
+      return NextResponse.json({ error: auth.error }, { status: 401 })
+    }
+
     const body = await request.json()
-    const { run_id } = body
+    const { run_id, force } = body
 
     if (!run_id) {
       return NextResponse.json(
@@ -30,6 +36,33 @@ export async function POST(request: NextRequest) {
     await connection.beginTransaction()
 
     try {
+      const [runSessionRows]: any = await connection.execute(
+        `SELECT usuario_id FROM calculo_sessions WHERE run_id = ? LIMIT 1`,
+        [run_id]
+      )
+
+      let ownerId = runSessionRows[0]?.usuario_id
+      if (ownerId == null) {
+        const [runStagingRows]: any = await connection.execute(
+          `SELECT usuario_id FROM registro_bonificacao_descontos
+           WHERE run_id = ? AND status = 'staging' AND usuario_id IS NOT NULL
+           LIMIT 1`,
+          [run_id]
+        )
+        ownerId = runStagingRows[0]?.usuario_id
+      }
+      const authUserId = String(auth.userId ?? "")
+      const isOwner = ownerId != null && String(ownerId) === authUserId
+      const forceByAdmin = Boolean(force) && Boolean(auth.isAdmin)
+
+      if (!isOwner && !forceByAdmin) {
+        await connection.rollback()
+        return NextResponse.json(
+          { error: "Sem permissão para cancelar esta execução. Apenas o dono ou admin." },
+          { status: 403 }
+        )
+      }
+
       // Guardar data de referência Antes de remover (usado para liberar lock se sessão não existir)
       const [dtReferenciaInfo]: any = await connection.execute(
         `SELECT DISTINCT dt_referencia 
@@ -77,7 +110,9 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `${totalRemovidos} registro(s) de desconto removido(s)`,
+        message: forceByAdmin
+          ? `${totalRemovidos} registro(s) removido(s). Execução cancelada pelo admin.`
+          : `${totalRemovidos} registro(s) de desconto removido(s)`,
         total_removidos: totalRemovidos
       })
 
