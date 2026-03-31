@@ -11,7 +11,7 @@ import { OPERADORAS, TIPOS_FAIXA, PRODUTOS, PAGAMENTO_POR, TIPO_BENEFICIARIO, PA
 import { Download, Search, ChevronLeft, ChevronRight, X, Pencil, Check, XCircle, Trash2, Loader2, Circle } from "lucide-react"
 import { useToast } from "@/hooks/use-toast"
 import { signalPageLoaded } from "@/components/ui/page-loading"
-import { formatDateISO } from "@/lib/date-utils"
+import { formatDateBR, formatDateISO } from "@/lib/date-utils"
 
 // Interface dinâmica para suportar todas as colunas do banco
 interface RegraData {
@@ -945,9 +945,7 @@ export function RegrasIdadeTable({ readOnly = false, title = "Gerenciamento de R
         columns.map(col => {
           const value = row[col]
           // Formatar valores especiais
-          if (col === 'vigencia' && value) {
-            return new Date(value).toLocaleDateString("pt-BR")
-          }
+          if (col === 'vigencia' && value) return formatDateBR(value as any)
           if (typeof value === 'number' && (col.includes('idade') || col.includes('idade_min') || col.includes('idade_max'))) {
             return String(value)
           }
@@ -1271,31 +1269,10 @@ export function RegrasIdadeTable({ readOnly = false, title = "Gerenciamento de R
                           key === 'vigencia' ? (
                             <Input
                                   type="date"
-                                  value={editedData[key] ? (() => {
-                                    try {
-                                      const date = new Date(editedData[key])
-                                      if (!isNaN(date.getTime())) {
-                                        return formatDateISO(date)
-                                      }
-                                      return ''
-                                    } catch {
-                                      return ''
-                                    }
-                                  })() : ''}
+                                  value={editedData[key] ? formatDateISO(editedData[key]) : ''}
                                   onChange={(e) => {
                                     const value = e.target.value
-                                    if (value) {
-                                      try {
-                                        const date = new Date(value)
-                                        if (!isNaN(date.getTime())) {
-                                          handleCellChange(key, formatDateISO(date))
-                                        }
-                                      } catch {
-                                        handleCellChange(key, value)
-                                      }
-                                    } else {
-                                      handleCellChange(key, '')
-                                    }
+                                    handleCellChange(key, value || '')
                                   }}
                                   className="w-32"
                                 />
@@ -1398,17 +1375,8 @@ export function RegrasIdadeTable({ readOnly = false, title = "Gerenciamento de R
                               )
                             ) : (
                               <>
-                                {(key === 'vigencia' || key === 'registro') && value ? (() => {
-                                  try {
-                                    const date = new Date(value as string)
-                                    if (!isNaN(date.getTime())) {
-                                      return date.toLocaleDateString("pt-BR")
-                                    }
-                                    return String(value || '')
-                                  } catch {
-                                    return String(value || '')
-                                  }
-                                })() : 
+                                {(key === 'vigencia' || key === 'registro') && value ?
+                                  formatDateBR(value as any) : 
                                   (key === 'idade_min' || key === 'idadeMin' || key === 'idade_max' || key === 'idadeMax') ? 
                                     (value !== null && value !== undefined ? String(value) : '') : 
                                     String(value || '')

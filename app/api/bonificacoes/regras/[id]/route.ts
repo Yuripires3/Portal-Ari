@@ -3,6 +3,19 @@ import { buildChaveKey } from "@/utils/bonificacao"
 import { getDBConnection } from "@/lib/db"
 import { formatDateISO } from "@/lib/date-utils"
 
+async function resolveRulesTable(connection: any): Promise<string> {
+  const candidates = ["registro_bonificacao_valores_v2", "registro_bonificacao_valores"]
+  for (const table of candidates) {
+    try {
+      await connection.execute(`SELECT 1 FROM \`${table}\` LIMIT 1`)
+      return table
+    } catch {
+      // tenta próxima candidata
+    }
+  }
+  return "registro_bonificacao_valores_v2"
+}
+
 // Converte para YYYY-MM-DD (sem hora) - garante formato correto para MySQL DATE
 function toSQLDate(date: any): string | null {
   if (!date) return null
@@ -57,9 +70,11 @@ export async function PUT(
     await connection.execute("SET CHARACTER SET utf8mb4")
     await connection.execute("SET character_set_connection=utf8mb4")
 
+    const tableName = await resolveRulesTable(connection)
+
     // Buscar registro atual do banco para obter todos os campos (não apenas os editados)
     const [currentRows] = await connection.execute(
-      "SELECT * FROM registro_bonificacao_valores_v2 WHERE id = ?",
+      `SELECT * FROM \`${tableName}\` WHERE id = ?`,
       [id]
     )
     const currentData = (currentRows as any[])[0]
@@ -128,7 +143,7 @@ export async function PUT(
     const values = entries.map(([, v]) => v) // aqui não haverá undefined
     values.push(id)
 
-    const sql = `UPDATE registro_bonificacao_valores_v2 SET ${setSql} WHERE id = ?`
+    const sql = `UPDATE \`${tableName}\` SET ${setSql} WHERE id = ?`
     
     const [result] = await connection.execute(sql, values)
 
@@ -166,8 +181,9 @@ export async function DELETE(
     await connection.execute("SET CHARACTER SET utf8mb4")
     await connection.execute("SET character_set_connection=utf8mb4")
 
+    const tableName = await resolveRulesTable(connection)
     const [result] = await connection.execute(
-      "DELETE FROM registro_bonificacao_valores_v2 WHERE id = ?",
+      `DELETE FROM \`${tableName}\` WHERE id = ?`,
       [id]
     )
 

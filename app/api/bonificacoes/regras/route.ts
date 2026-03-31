@@ -3,6 +3,26 @@ import { getDBConnection } from "@/lib/db"
 import { buildChaveKey } from "@/utils/bonificacao"
 import { formatDateISO } from "@/lib/date-utils"
 
+async function resolveRulesTable(connection: any): Promise<string> {
+  const candidates = ["registro_bonificacao_valores_v2", "registro_bonificacao_valores"]
+  for (const table of candidates) {
+    try {
+      await connection.execute(`SELECT 1 FROM \`${table}\` LIMIT 1`)
+      return table
+    } catch {
+      // tenta próxima candidata
+    }
+  }
+  return "registro_bonificacao_valores_v2"
+}
+
+function getOperadoraAliases(value: string): string[] {
+  const v = String(value || "").trim()
+  // Operadoras distintas: não agrupar aliases.
+  // Mantemos apenas normalização para trim/case na comparação SQL.
+  return [v]
+}
+
 export async function GET(request: NextRequest) {
   let connection: any = null
   
@@ -44,7 +64,16 @@ export async function GET(request: NextRequest) {
     const whereConditions: string[] = []
     const whereValues: any[] = []
 
-    if (operadora && operadora.trim()) { whereConditions.push("operadora = ?"); whereValues.push(operadora.trim()) }
+    if (operadora && operadora.trim()) {
+      const aliases = getOperadoraAliases(operadora).map((x) => String(x).trim().toUpperCase())
+      if (aliases.length > 1) {
+        whereConditions.push(`UPPER(TRIM(operadora)) IN (${aliases.map(() => "?").join(", ")})`)
+        whereValues.push(...aliases)
+      } else {
+        whereConditions.push("UPPER(TRIM(operadora)) = ?")
+        whereValues.push(aliases[0])
+      }
+    }
     if (tipo_faixa && tipo_faixa.trim()) { whereConditions.push("tipo_faixa = ?"); whereValues.push(tipo_faixa.trim()) }
     if (produto && produto.trim()) { whereConditions.push("produto = ?"); whereValues.push(produto.trim()) }
     if (pagamento_por && pagamento_por.trim()) { whereConditions.push("pagamento_por = ?"); whereValues.push(pagamento_por.trim()) }
@@ -57,9 +86,11 @@ export async function GET(request: NextRequest) {
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(" AND ")}` : ""
 
+    const tableName = await resolveRulesTable(connection)
+
     // Contar total
     const [countResult] = await connection.execute(
-      `SELECT COUNT(*) as total FROM registro_bonificacao_valores_v2 ${whereClause}`,
+      `SELECT COUNT(*) as total FROM \`${tableName}\` ${whereClause}`,
       whereValues
     )
     const total = (countResult as any[])[0]?.total || 0
@@ -69,7 +100,7 @@ export async function GET(request: NextRequest) {
 
     // Ordenação fixa: 1) vigencia DESC, 2) registro DESC, 3) tipo_faixa ASC, 4) plano ASC (A-Z), 5) tipo_beneficiario DESC (Z-A - Titular antes de Dependente)
     // Buscar dados com ordenação fixa múltipla - planos iguais agrupados com Titular antes de Dependente
-    let query = `SELECT * FROM registro_bonificacao_valores_v2 ${whereClause} ORDER BY \`vigencia\` DESC, \`registro\` DESC, \`tipo_faixa\` ASC, \`plano\` ASC, \`tipo_beneficiario\` DESC LIMIT ${pageSize} OFFSET ${offset}`
+    let query = `SELECT * FROM \`${tableName}\` ${whereClause} ORDER BY \`vigencia\` DESC, \`registro\` DESC, \`tipo_faixa\` ASC, \`plano\` ASC, \`tipo_beneficiario\` DESC LIMIT ${pageSize} OFFSET ${offset}`
     
     const [rows] = await connection.execute(query, whereValues)
     
@@ -155,6 +186,8 @@ export async function POST(request: NextRequest) {
     await connection.execute("SET CHARACTER SET utf8mb4")
     await connection.execute("SET character_set_connection=utf8mb4")
 
+    const tableName = await resolveRulesTable(connection)
+
     // Normalizar dados
     const normalizedData = {
       vigencia: toSQLDate(body.vigencia),
@@ -198,7 +231,7 @@ export async function POST(request: NextRequest) {
     const placeholders = columns.map(() => "?").join(", ")
     const values = Object.values(insertData)
 
-    const sql = `INSERT INTO registro_bonificacao_valores_v2 (${columns.map(col => `\`${col}\``).join(", ")}) VALUES (${placeholders})`
+    const sql = `INSERT INTO \`${tableName}\` (${columns.map(col => `\`${col}\``).join(", ")}) VALUES (${placeholders})`
     
     const [result] = await connection.execute(sql, values)
 
