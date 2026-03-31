@@ -287,26 +287,34 @@ export function RegrasIdadeTable({ readOnly = false, title = "Gerenciamento de R
         grupos[key].push(regra)
       })
 
-      // Para cada grupo, identificar a regra ativa (vigência mais recente)
+      // Para cada grupo, identificar a regra ativa conforme vigência praticada:
+      // 1) prioriza vigências <= hoje; 2) se não houver, usa a mais recente futura.
       const activeIds = new Set<string>()
+      const todayRank = Number(formatDateISO(new Date()).replace(/-/g, "")) || 0
+
+      const dateRank = (value: any) => {
+        const iso = formatDateISO(value)
+        return iso ? Number(iso.replace(/-/g, "")) || 0 : 0
+      }
+
       Object.values(grupos).forEach(grupo => {
         if (grupo.length === 0) return
-        
-        // Ordenar por vigência (mais recente primeiro), depois por registro
-        grupo.sort((a, b) => {
-          const vigA = a.vigencia ? new Date(a.vigencia).getTime() : 0
-          const vigB = b.vigencia ? new Date(b.vigencia).getTime() : 0
-          if (vigB !== vigA) return vigB - vigA // Mais recente primeiro
-          
-          // Se vigências iguais, usar registro
-          const regA = a.registro ? new Date(a.registro).getTime() : 0
-          const regB = b.registro ? new Date(b.registro).getTime() : 0
+
+        const elegiveisAteHoje = grupo.filter((r) => dateRank(r.vigencia) <= todayRank)
+        const base = elegiveisAteHoje.length > 0 ? elegiveisAteHoje : grupo
+
+        const sorted = [...base].sort((a, b) => {
+          const vigA = dateRank(a.vigencia)
+          const vigB = dateRank(b.vigencia)
+          if (vigB !== vigA) return vigB - vigA
+
+          const regA = dateRank(a.registro)
+          const regB = dateRank(b.registro)
           return regB - regA
         })
-        
-        // A primeira (mais recente) é a ativa
-        const ativa = grupo[0]
-        if (ativa.id) activeIds.add(String(ativa.id))
+
+        const ativa = sorted[0]
+        if (ativa?.id) activeIds.add(String(ativa.id))
       })
 
       // Primeiro atualiza os KPIs
