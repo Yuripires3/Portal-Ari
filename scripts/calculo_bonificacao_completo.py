@@ -944,7 +944,7 @@ def main():
                                               '_id', '_source.beneficiarioinddesligado', '_source.beneficiariocpf',
                                               '_source.beneficiarionome', '_source.beneficiariodatadenascimento', '_source.beneficiariosexo', 
                                               '_source.beneficiariotipodescricao',
-                                              '_source.beneficiariodatadesligamento', '_source.beneficiariodescricaoreducaocarencia']].copy()
+                                              '_source.beneficiariodatadesligamento', '_source.beneficiariodescricaoreducaocarencia','_source.contratocomercialnome']].copy()
             df_beneficiarios.columns = ['numero_contrato', 'numero_da_proposta', 'filial_gerencial', 'operadora', 'mes_reajuste', 
                                        'entidade', 'plano', 'vigencia',
                                        'id_beneficiario', 'beneficiario_cancelado', 'cpf', 'nome', 'dt_nascimento', 'sexo', 'tipo',
@@ -997,7 +997,10 @@ def main():
                 columns={'cpf': 'cpf_supervisor', 'chave_pix': 'chave_pix_supervisor', 'tipo_chave': 'tipo_chave_supervisor'})
             
             etapa("Aplicando transformacoes e calculos...", 62)
-            df1 = df_beneficiarios.copy()
+            df1=df_beneficiarios.copy()
+            df1['operadora'] = np.where(df1['contrato_comercial']=='HAPVIDA - PORTIFOLIO 2026/2027 - RJ','HAPVIDA NOTREDAME SP_RJ_P2026',df1['operadora'])
+            df1=df1[['numero_contrato','numero_da_proposta','filial_gerencial','operadora','mes_reajuste','entidade','plano','vigencia','id_beneficiario','beneficiario_cancelado','cpf','nome','dt_nascimento','sexo','tipo','data_exclusao','descricao_da_reducao_de_carencia']]
+            
             df1['dt_nascimento'] = safe_to_datetime(df1['dt_nascimento'])
             df1['data_exclusao'] = safe_to_datetime(df1['data_exclusao'])
             df1['vigencia'] = safe_to_datetime(df1['vigencia'])
@@ -1172,12 +1175,19 @@ def main():
             _rastrear_propostas(df2, "6_df2 apos remocao faixa 'fora da faixa'")
             
             etapa("Calculando bonificacoes...", 74)
-            df2[['bonificacao_corretor', 'bonificacao_supervisor', 'chave_regra']] = df2[['operadora', 'tipo_de_beneficiario', 'faixa_pagamento', 
-                                                                                         'entidade', 'plano_novo', 'produto', 'vigencia']].apply(
-                lambda x: achar_chave_bonificacao(aux_bonificacao, x['operadora'], x['tipo_de_beneficiario'], x['faixa_pagamento'],
-                                                 x['entidade'], x['plano_novo'], x['produto'], x['vigencia']), axis=1
-            ).apply(pd.Series)
-            
+            #df2[['bonificacao_corretor', 'bonificacao_supervisor', 'chave_regra']] = df2[['operadora', 'tipo_de_beneficiario', 'faixa_pagamento', 
+            #                                                                             'entidade', 'plano_novo', 'produto', 'vigencia']].apply(
+            #    lambda x: achar_chave_bonificacao(aux_bonificacao, x['operadora'], x['tipo_de_beneficiario'], x['faixa_pagamento'],
+            #                                     x['entidade'], x['plano_novo'], x['produto'], x['vigencia']), axis=1
+            #).apply(pd.Series)
+            if not df2.empty:
+                resultado = df2.apply(lambda x: achar_chave_bonificacao(aux_bonificacao,x['operadora'],x['tipo_de_beneficiario'],x['faixa_pagamento'],x['entidade'],x['plano_novo'],x['produto'],x['vigencia']),axis=1)
+                df2[['bonificacao_corretor', 'bonificacao_supervisor', 'chave_regra']] = pd.DataFrame(resultado.tolist(),index=df2.index)
+            else:
+                df2['bonificacao_corretor'] = pd.Series(dtype='object')
+                df2['bonificacao_supervisor'] = pd.Series(dtype='object')
+                df2['chave_regra'] = pd.Series(dtype='object')
+
             etapa("Mesclando dados de bonificados...", 76)
             n_row = df2.shape[0]
             df2 = df2.merge(aux_bonificados[['cpf', 'email', 'celular']], 'left', left_on='cpf_vendedor', right_on='cpf', suffixes=('', '_1')).drop(columns='cpf')
@@ -1207,27 +1217,41 @@ def main():
             chaves_novas['chave'] = safe_dt_strftime(chaves_novas['vigencia'], '%b/%y') + ' - ' + chaves_novas['operadora'] + ' - ' + chaves_novas['entidade_nova'] + ' - ' + chaves_novas['numero_da_parcela'] + ' - ' + chaves_novas['plano_novo'] + ' - ' + chaves_novas['faixa_pagamento'] + ' - ' + chaves_novas['tipo_de_beneficiario'] + ' - ' + chaves_novas['produto']
             chaves_novas = chaves_novas['chave'].sort_values().unique().tolist()
             
-            df2['regiao'] = df2['concessionaria_nova'].apply(
-                lambda x: 'PE' if '(PE)' in str(x) else 'SP' if '(SP)' in str(x) else 'RJ'
-            )
+            df2['regiao'] = df2['concessionaria_nova'].apply(lambda x: 'PE' if '(PE)' in str(x) else 'SP' if '(SP)' in str(x) else 'RJ')
             
             df2['vigencia'] = pd.to_datetime(df2['vigencia'], errors='coerce')
-            df2['chave_regra'] = (
-                df2['chave_regra']
-                + ' - '
-                + df2['vigencia'].dt.strftime('%b/%y').fillna('')
-            )
+
+            #df2['chave_regra'] = (df2['chave_regra'] + ' - ' + df2['vigencia'].dt.strftime('%b/%y').fillna(''))
+            if not df2.empty:
+                df2['chave_regra'] = df2['chave_regra'].astype(str) + ' - ' + df2['vigencia'].dt.strftime('%b/%y')
+            else:
+                df2['chave_regra'] = pd.Series(dtype='object')
 
             # Data de corte para bonificação supervisor (2024-01-01)
             data_corte_supervisor = pd.Timestamp('2024-01-01')
             # Verificar se a coluna vigencia é datetime antes de comparar
-            if pd.api.types.is_datetime64_any_dtype(df2['vigencia']):
-                df2['bonificacao_supervisor'] = df2[['vigencia', 'bonificacao_supervisor', 'filial_gerencial']].apply(
-                    lambda x: 0 if (pd.notna(x['vigencia']) and x['vigencia'] < data_corte_supervisor) and (x['filial_gerencial'] != 'FILIAL SP') else x['bonificacao_supervisor'], axis=1
-                )
+            #if pd.api.types.is_datetime64_any_dtype(df2['vigencia']):
+            #    df2['bonificacao_supervisor'] = df2[['vigencia', 'bonificacao_supervisor', 'filial_gerencial']].apply(
+            #        lambda x: 0 if (pd.notna(x['vigencia']) and x['vigencia'] < data_corte_supervisor) and (x['filial_gerencial'] != 'FILIAL SP') else x['bonificacao_supervisor'], axis=1
+            #    )
+            #else:
+            #    # Se vigencia não for datetime, não aplicar a regra de corte
+            #    pass
+
+            # Garantir que o dataframe não está vazio
+            if not df2.empty:
+                # Garantir que vigencia é datetime antes de comparar
+                if pd.api.types.is_datetime64_any_dtype(df2['vigencia']):
+                    mask = (
+                        df2['vigencia'].notna() &
+                        (df2['vigencia'] < data_corte_supervisor) &
+                        (df2['filial_gerencial'] != 'FILIAL SP')
+                    )
+                    df2.loc[mask, 'bonificacao_supervisor'] = 0
+                else:
+                    pass
             else:
-                # Se vigencia não for datetime, não aplicar a regra de corte
-                pass
+                df2['bonificacao_supervisor'] = pd.Series(dtype='object')
             
             etapa("Processando migracoes...", 78)
             # Verificar se arquivo de migracoes existe antes de ler
