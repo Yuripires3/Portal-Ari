@@ -30,6 +30,12 @@ interface CompetenciaDbRow {
   fechado_em: string | null
 }
 
+interface BaseAnteriorDbRow {
+  operadora: string
+  indicador_key: "base_vidas" | "base_saude" | "base_dental"
+  valor: string | number | null
+}
+
 function registrarFallback(error: unknown, operacao: string) {
   console.warn(
     `[Indicadores] Falha ao ${operacao} no MySQL; usando dados estaticos:`,
@@ -73,6 +79,37 @@ function aplicarControleCompetencias(
   }
 }
 
+function montarBasesDezembroAnterior(rows: BaseAnteriorDbRow[]): Map<string, number | null> {
+  const acumulado = new Map<
+    string,
+    { baseVidas: number | null; componentes: number; temComponente: boolean }
+  >()
+
+  for (const row of rows) {
+    const atual = acumulado.get(row.operadora) ?? {
+      baseVidas: null,
+      componentes: 0,
+      temComponente: false,
+    }
+    const valor = row.valor === null ? null : Number(row.valor)
+
+    if (row.indicador_key === "base_vidas") {
+      atual.baseVidas = valor
+    } else if (valor !== null && Number.isFinite(valor)) {
+      atual.componentes += valor
+      atual.temComponente = true
+    }
+    acumulado.set(row.operadora, atual)
+  }
+
+  return new Map(
+    [...acumulado].map(([operadora, valores]) => [
+      operadora,
+      valores.baseVidas ?? (valores.temComponente ? valores.componentes : null),
+    ])
+  )
+}
+
 export async function buscarAnosDisponiveis(): Promise<number[]> {
   let connection: Awaited<ReturnType<typeof getDBConnection>> | null = null
 
@@ -114,6 +151,14 @@ export async function buscarConsolidado(ano: number): Promise<ConsolidadoRespons
        ORDER BY mes`,
       [ano]
     )
+    const [baseAnteriorRows] = await connection.execute(
+      `SELECT operadora, indicador_key, valor
+       FROM indicadores_consolidado_valores
+       WHERE ano = ?
+         AND mes = 12
+         AND indicador_key IN ('base_vidas', 'base_saude', 'base_dental')`,
+      [ano - 1]
+    )
 
     const valores = rows as IndicadorDbRow[]
     if (valores.length === 0) return buscarConsolidadoEstatico(ano)
@@ -136,7 +181,11 @@ export async function buscarConsolidado(ano: number): Promise<ConsolidadoRespons
       bloco.indicadores[row.indicador_key] = meses
     }
 
-    const dados = montarConsolidadoDeOperadoras(ano, [...porOperadora.values()])
+    const dados = montarConsolidadoDeOperadoras(
+      ano,
+      [...porOperadora.values()],
+      montarBasesDezembroAnterior(baseAnteriorRows as BaseAnteriorDbRow[])
+    )
     return aplicarControleCompetencias(
       dados,
       montarCompetencias(competenciaRows as CompetenciaDbRow[])

@@ -1,5 +1,9 @@
 import { INDICADORES_CONSOLIDADO, MESES_NUMEROS } from "./constants"
-import { aplicarCalculosIndicadores, criarMapaVazioMeses } from "./calculations"
+import {
+  aplicarCalculosIndicadores,
+  calcularBaseVidas,
+  criarMapaVazioMeses,
+} from "./calculations"
 import type { ConsolidadoLinha, ConsolidadoOperadora, IndicadorKey, MesNumero } from "./types"
 
 /** Indicadores somáveis no bloco CONSOLIDADO QV (equivalente à última seção do Excel). */
@@ -42,7 +46,9 @@ function montarLinhasAgregadas(
     const valores = {} as Record<MesNumero, number | null>
     for (const mes of MESES_NUMEROS) {
       const brutos = porMes[mes]
-      const calculados = aplicarCalculosIndicadores(brutos)
+      const baseVidasMesAnterior =
+        mes === 1 ? null : calcularBaseVidas(porMes[(mes - 1) as MesNumero])
+      const calculados = aplicarCalculosIndicadores(brutos, baseVidasMesAnterior)
       const valor =
         brutos[def.key] !== undefined && brutos[def.key] !== null
           ? brutos[def.key]!

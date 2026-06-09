@@ -1,6 +1,6 @@
 import indicadoresJson from "@/data/indicadores-consolidado.json"
 import { definicoesParaBloco, MESES_NUMEROS } from "./constants"
-import { aplicarCalculosIndicadores } from "./calculations"
+import { aplicarCalculosIndicadores, calcularBaseVidas } from "./calculations"
 import { gerarConsolidadoGeral } from "./consolidado-aggregate"
 import { normalizarPercentualArmazenado } from "@/utils/format"
 import type {
@@ -30,6 +30,7 @@ interface IndicadoresJsonRoot {
 const data = indicadoresJson as IndicadoresJsonRoot
 
 const CHAVES_PERCENTUAL_EXCEL: IndicadorKey[] = ["pct_cancelamento", "inadimplencia"]
+const CHAVES_PERCENTUAL_RECALCULADAS: IndicadorKey[] = ["pct_cancelamento", "inadimplencia"]
 
 /** Anos fixos do Excel (2021–2026). */
 export const ANOS_INDICADORES_FIXOS = [2026, 2025, 2024, 2023, 2022, 2021] as const
@@ -102,14 +103,21 @@ function resolverValorMes(
 
 function montarLinhas(
   porMes: Record<MesNumero, Partial<Record<IndicadorKey, number | null>>>,
-  definicoes: ReturnType<typeof definicoesParaBloco>
+  definicoes: ReturnType<typeof definicoesParaBloco>,
+  baseVidasDezembroAnterior: number | null
 ): ConsolidadoLinha[] {
   return definicoes.map((def) => {
     const valores = {} as Record<MesNumero, number | null>
 
     for (const mes of MESES_NUMEROS) {
       const brutos = porMes[mes]
-      const calculados = aplicarCalculosIndicadores(brutos)
+      const baseVidasMesAnterior =
+        mes === 1 ? baseVidasDezembroAnterior : calcularBaseVidas(porMes[(mes - 1) as MesNumero])
+      const calculados = aplicarCalculosIndicadores(brutos, baseVidasMesAnterior)
+      if (CHAVES_PERCENTUAL_RECALCULADAS.includes(def.key)) {
+        valores[mes] = calculados[def.key] ?? 0
+        continue
+      }
       valores[mes] = resolverValorMes(brutos, calculados, def.key, def.calculado)
     }
 
@@ -123,7 +131,11 @@ function montarLinhas(
   })
 }
 
-function converterOperadora(item: IndicadoresRawOperadora, ano: number): ConsolidadoOperadora {
+function converterOperadora(
+  item: IndicadoresRawOperadora,
+  ano: number,
+  baseVidasDezembroAnterior: number | null
+): ConsolidadoOperadora {
   const tipo =
     item.tipo ?? (item.operadora.toUpperCase() === "CONSOLIDADO" ? "consolidado" : "operadora")
   const porMes = indicadoresParaPorMes(item.indicadores)
@@ -131,8 +143,31 @@ function converterOperadora(item: IndicadoresRawOperadora, ano: number): Consoli
   return {
     operadora: item.operadora,
     tipo,
-    linhas: montarLinhas(porMes, definicoes),
+    linhas: montarLinhas(porMes, definicoes, baseVidasDezembroAnterior),
   }
+}
+
+function baseVidasMes(item: IndicadoresRawOperadora | undefined, mes: MesNumero): number | null {
+  if (!item) return null
+
+  const indicadoresMes: Partial<Record<IndicadorKey, number | null>> = {}
+  for (const [key, meses] of Object.entries(item.indicadores) as [
+    IndicadorKey,
+    Record<string, number | null>,
+  ][]) {
+    indicadoresMes[key] = meses[String(mes)] ?? null
+  }
+  return calcularBaseVidas(indicadoresMes)
+}
+
+function basesDezembroPorOperadora(ano: number): Map<string, number | null> {
+  const anoAnterior = data.anos[String(ano - 1)]
+  return new Map(
+    (anoAnterior?.operadoras ?? []).map((item) => [
+      item.operadora,
+      baseVidasMes(item, 12),
+    ])
+  )
 }
 
 export function buscarAnosDisponiveisEstaticos(): number[] {
@@ -158,14 +193,21 @@ export function buscarConsolidadoEstatico(ano: number): ConsolidadoResponse {
     }
   }
 
-  return montarConsolidadoDeOperadoras(ano, anoData.operadoras)
+  return montarConsolidadoDeOperadoras(
+    ano,
+    anoData.operadoras,
+    basesDezembroPorOperadora(ano)
+  )
 }
 
 export function montarConsolidadoDeOperadoras(
   ano: number,
-  operadorasRaw: IndicadoresRawOperadora[]
+  operadorasRaw: IndicadoresRawOperadora[],
+  basesDezembroAnterior = new Map<string, number | null>()
 ): ConsolidadoResponse {
-  const todos = operadorasRaw.map((item) => converterOperadora(item, ano))
+  const todos = operadorasRaw.map((item) =>
+    converterOperadora(item, ano, basesDezembroAnterior.get(item.operadora) ?? null)
+  )
 
   const ordemNoArquivo = new Map(
     operadorasRaw.map((item, index) => [item.operadora, index])
