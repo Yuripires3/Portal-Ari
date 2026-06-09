@@ -8,13 +8,21 @@ export type IndicadorKey =
   | "base_dental"
   | "base_saude"
   | "vidas_canceladas"
+  | "migracao_assim_assim"
+  | "migracao_assim_outras"
+  | "migracao_caberj_assim"
+  | "migracao_caberj_outras"
+  | "total_migracao"
+  | "cancelamento_liquido"
   | "retencao"
   | "pct_cancelamento"
   | "cancel_inadimplencia"
   | "cancel_solicitacao_cliente"
   | "cancel_solicitado_ops"
-  | "obito"
+  | "exclusao_dependente"
+  | "falecimento"
   | "outros"
+  | "faturamento_orcado"
   | "faturamento_emitido"
   | "faturamento_recebido"
   | "inadimplencia"
@@ -52,16 +60,14 @@ export interface ConsolidadoResponse {
   ano: number
   operadoras: ConsolidadoOperadora[]
   consolidadoGeral: ConsolidadoOperadora | null
+  /** Ex.: Infinity em 2023 — exibida após o bloco CONSOLIDADO. */
+  operadorasAposConsolidado?: ConsolidadoOperadora[]
   mesesDisponiveis: MesNumero[]
 }
 
 export interface ConsolidadoFiltrosState {
   ano: number
-  modoPersonalizado: boolean
-  operadorasSelecionadas: string[]
-  buscaOperadora: string
   mesAte: MesNumero
-  exibirConsolidadoGeral: boolean
 }
 
 export interface ConsolidadoRawRow {

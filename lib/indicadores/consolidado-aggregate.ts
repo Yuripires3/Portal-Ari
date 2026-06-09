@@ -1,4 +1,4 @@
-import { INDICADORES_DEFINICOES, MESES_NUMEROS } from "./constants"
+import { INDICADORES_CONSOLIDADO, MESES_NUMEROS } from "./constants"
 import { aplicarCalculosIndicadores, criarMapaVazioMeses } from "./calculations"
 import type { ConsolidadoLinha, ConsolidadoOperadora, IndicadorKey, MesNumero } from "./types"
 
@@ -8,12 +8,20 @@ const CHAVES_SOMA: IndicadorKey[] = [
   "base_dental",
   "base_saude",
   "vidas_canceladas",
+  "migracao_assim_assim",
+  "migracao_assim_outras",
+  "migracao_caberj_assim",
+  "migracao_caberj_outras",
+  "total_migracao",
+  "cancelamento_liquido",
   "retencao",
   "cancel_inadimplencia",
   "cancel_solicitacao_cliente",
   "cancel_solicitado_ops",
-  "obito",
+  "exclusao_dependente",
+  "falecimento",
   "outros",
+  "faturamento_orcado",
   "faturamento_emitido",
   "faturamento_recebido",
   "vendas",
@@ -30,12 +38,16 @@ function somarValor(atual: number | null | undefined, novo: number | null): numb
 function montarLinhasAgregadas(
   porMes: Record<MesNumero, Partial<Record<IndicadorKey, number | null>>>
 ): ConsolidadoLinha[] {
-  return INDICADORES_DEFINICOES.map((def) => {
+  return INDICADORES_CONSOLIDADO.map((def) => {
     const valores = {} as Record<MesNumero, number | null>
     for (const mes of MESES_NUMEROS) {
-      const calculados = aplicarCalculosIndicadores(porMes[mes])
-      const valor = calculados[def.key]
-      valores[mes] = valor === undefined ? null : valor
+      const brutos = porMes[mes]
+      const calculados = aplicarCalculosIndicadores(brutos)
+      const valor =
+        brutos[def.key] !== undefined && brutos[def.key] !== null
+          ? brutos[def.key]!
+          : (calculados[def.key] ?? null)
+      valores[mes] = valor
     }
     return {
       key: def.key,

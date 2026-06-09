@@ -13,16 +13,15 @@ import { ConsolidadoOperadoraBlock } from "@/components/indicadores/ConsolidadoO
 import { signalPageLoaded } from "@/components/ui/page-loading"
 import {
   criarFiltrosPadrao,
-  filtrarOperadoras,
-  listarNomesOperadoras,
   mesesVisiveisPorFiltro,
   STORAGE_KEY_FILTROS,
 } from "@/lib/indicadores/consolidado-filtros-utils"
+import { ANOS_INDICADORES_FIXOS } from "@/lib/indicadores/static-data-service"
 import type { ConsolidadoFiltrosState, ConsolidadoResponse } from "@/lib/indicadores/types"
 
 const fetchNoStore = (url: string) => fetch(url, { cache: "no-store" })
 
-const ANOS_FALLBACK = [2026, 2025, 2024, 2023, 2022, 2021]
+const ANOS_FALLBACK: number[] = [...ANOS_INDICADORES_FIXOS]
 
 function carregarFiltrosPersistidos(): ConsolidadoFiltrosState {
   if (typeof window === "undefined") return criarFiltrosPadrao()
@@ -62,13 +61,19 @@ export default function IndicadoresConsolidadoPage() {
   }, [user, router])
 
   const carregarAnos = useCallback(async () => {
-    const res = await fetchNoStore("/api/indicadores/anos")
-    if (!res.ok) throw new Error("Não foi possível carregar os anos disponíveis")
-    const json = await res.json()
-    const lista: number[] = json.anos?.length ? json.anos : ANOS_FALLBACK
-    setAnos(lista)
-    if (lista.length > 0 && !lista.includes(filtros.ano)) {
-      setFiltros((f) => ({ ...f, ano: lista[0] }))
+    // Abas fixas 2021–2026 (dados estáticos do Excel)
+    setAnos(ANOS_FALLBACK)
+    try {
+      const res = await fetchNoStore("/api/indicadores/anos")
+      if (res.ok) {
+        const json = await res.json()
+        if (json.anos?.length) setAnos(json.anos)
+      }
+    } catch {
+      // mantém ANOS_FALLBACK
+    }
+    if (!ANOS_FALLBACK.includes(filtros.ano)) {
+      setFiltros((f) => ({ ...f, ano: ANOS_FALLBACK[0] }))
     }
   }, [filtros.ano])
 
@@ -107,24 +112,14 @@ export default function IndicadoresConsolidadoPage() {
     carregarConsolidado(filtros.ano)
   }, [user, filtros.ano, carregarConsolidado])
 
-  const operadorasFiltradas = useMemo(
-    () => (dados ? filtrarOperadoras(dados, filtros) : []),
-    [dados, filtros]
+  const mesesVisiveis = useMemo(
+    () => mesesVisiveisPorFiltro(filtros.ano, filtros.mesAte),
+    [filtros.ano, filtros.mesAte]
   )
 
-  const mesesVisiveis = useMemo(() => mesesVisiveisPorFiltro(filtros.mesAte), [filtros.mesAte])
-
-  const nomesOperadoras = useMemo(
-    () => (dados ? listarNomesOperadoras(dados) : []),
-    [dados]
-  )
-
-  const exibirConsolidado =
-    filtros.exibirConsolidadoGeral &&
-    dados?.consolidadoGeral &&
-    operadorasFiltradas.length === dados.operadoras.length &&
-    !filtros.buscaOperadora.trim() &&
-    !filtros.modoPersonalizado
+  const operadoras = dados?.operadoras ?? []
+  const consolidadoGeral = dados?.consolidadoGeral ?? null
+  const operadorasAposConsolidado = dados?.operadorasAposConsolidado ?? []
 
   if (user?.role !== "admin") {
     return null
@@ -140,12 +135,7 @@ export default function IndicadoresConsolidadoPage() {
         <ConsolidadoFiltros
           filtros={filtros}
           anosDisponiveis={anos}
-          nomesOperadoras={nomesOperadoras}
-          totalOperadoras={dados?.operadoras.length ?? 0}
-          exibindoOperadoras={operadorasFiltradas.length}
-          loading={loading}
           onChange={setFiltros}
-          onAtualizar={() => carregarConsolidado(filtros.ano)}
         />
       </div>
 
@@ -180,34 +170,34 @@ export default function IndicadoresConsolidadoPage() {
         </Card>
       )}
 
-      {!loading && !erro && dados && operadorasFiltradas.length > 0 && (
+      {!loading && !erro && dados && operadoras.length > 0 && (
         <div className="space-y-4">
-          {operadorasFiltradas.map((op) => (
+          {operadoras.map((op) => (
             <ConsolidadoOperadoraBlock
               key={op.operadora}
               operadora={op}
               mesesVisiveis={mesesVisiveis}
+              ano={filtros.ano}
             />
           ))}
 
-          {exibirConsolidado && dados.consolidadoGeral && (
+          {consolidadoGeral && (
             <ConsolidadoOperadoraBlock
-              operadora={dados.consolidadoGeral}
+              operadora={consolidadoGeral}
               mesesVisiveis={mesesVisiveis}
+              ano={filtros.ano}
             />
           )}
-        </div>
-      )}
 
-      {!loading && !erro && dados && dados.operadoras.length > 0 && operadorasFiltradas.length === 0 && (
-        <Card className="bg-white">
-          <CardHeader>
-            <CardTitle>Nenhuma operadora no filtro</CardTitle>
-            <CardDescription>
-              Ajuste a busca ou selecione outras operadoras para exibir os indicadores.
-            </CardDescription>
-          </CardHeader>
-        </Card>
+          {operadorasAposConsolidado.map((op) => (
+            <ConsolidadoOperadoraBlock
+              key={op.operadora}
+              operadora={op}
+              mesesVisiveis={mesesVisiveis}
+              ano={filtros.ano}
+            />
+          ))}
+        </div>
       )}
     </div>
   )

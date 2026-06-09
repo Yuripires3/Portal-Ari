@@ -1,6 +1,6 @@
 import type React from "react"
 import { AdminSidebar } from "@/components/admin/admin-sidebar"
-import { SidebarProvider } from "@/components/ui/sidebar"
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading } from "@/components/ui/page-loading"
 
 export default function AdminLayout({
@@ -11,10 +11,10 @@ export default function AdminLayout({
   return (
     <SidebarProvider>
       <PageLoading />
-      <div className="flex min-h-screen w-full">
-        <AdminSidebar />
-        <main className="flex-1 overflow-y-auto">{children}</main>
-      </div>
+      <AdminSidebar />
+      <SidebarInset>
+        <div className="flex-1 overflow-y-auto">{children}</div>
+      </SidebarInset>
     </SidebarProvider>
   )
 }
