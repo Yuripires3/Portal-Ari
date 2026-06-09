@@ -47,6 +47,10 @@ const envAwareDevOrigins = normalizeOrigins(
 const nextConfig = {
   // Essencial para o Docker standalone funcionar
   output: 'standalone',
+  outputFileTracingIncludes: {
+    '/api/indicadores/consolidado': ['./data/indicadores-consolidado.json'],
+    '/api/indicadores/anos': ['./data/indicadores-consolidado.json'],
+  },
   typescript: {
     ignoreBuildErrors: true,
   },

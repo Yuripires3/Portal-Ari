@@ -3,16 +3,12 @@ export const revalidate = 0
 export const fetchCache = "force-no-store"
 
 import { NextResponse } from "next/server"
-import { getDBConnection } from "@/lib/db"
 import { buscarAnosDisponiveis } from "@/lib/indicadores/consolidado-service"
 
-/** GET /api/indicadores/anos — anos com dados nas tabelas de indicadores. */
+/** GET /api/indicadores/anos — anos disponíveis no arquivo estático. */
 export async function GET() {
-  let connection = null
-
   try {
-    connection = await getDBConnection()
-    const anos = await buscarAnosDisponiveis(connection)
+    const anos = buscarAnosDisponiveis()
     return NextResponse.json({ anos })
   } catch (error) {
     console.error("[Indicadores/Anos] Erro:", error)
@@ -23,7 +19,5 @@ export async function GET() {
       },
       { status: 500 }
     )
-  } finally {
-    if (connection) await connection.end()
   }
 }

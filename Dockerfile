@@ -30,8 +30,9 @@ RUN if [ -s requirements.txt ]; then pip install --no-cache-dir -r requirements.
 ENV NODE_ENV=production
 RUN npm run build
 
-# Disponibiliza scripts também dentro de .next/standalone para acesso em produção
+# Disponibiliza scripts e dados estáticos dentro de .next/standalone
 RUN if [ -d scripts ]; then mkdir -p .next/standalone/scripts && cp -r scripts/. .next/standalone/scripts/; fi
+RUN if [ -d data ]; then mkdir -p .next/standalone/data && cp -r data/. .next/standalone/data/; fi
 
 # Define porta/host padrão e expõe a porta 3005
 ENV PORT=3005

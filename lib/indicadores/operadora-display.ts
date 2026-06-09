@@ -20,7 +20,10 @@ const OPERADORAS_CONHECIDAS: Array<{ match: RegExp; display: OperadoraDisplay }>
   { match: /amil/i, display: { nomeExibicao: "Amil", iniciais: "AM", corMarca: "#00AEEF", corFundo: "#eef9fd" } },
   { match: /integral/i, display: { nomeExibicao: "Integral Saúde", iniciais: "IS", corMarca: "#1565C0", corFundo: "#eef4fb" } },
   { match: /aesp/i, display: { nomeExibicao: "AESP Odonto", iniciais: "AE", corMarca: "#F57C00", corFundo: "#fff8ee" } },
-  { match: /consolidado/i, display: { nomeExibicao: "CONSOLIDADO", iniciais: "QV", corMarca: "#184286", corFundo: "#e8edf5" } },
+  { match: /consolidado|^qv total$/i, display: { nomeExibicao: "CONSOLIDADO", iniciais: "QV", corMarca: "#184286", corFundo: "#e8edf5" } },
+  { match: /klini/i, display: { nomeExibicao: "Klini Saúde", iniciais: "KL", corMarca: "#00838F", corFundo: "#eef8f9" } },
+  { match: /select/i, display: { nomeExibicao: "Select Saúde", iniciais: "SL", corMarca: "#5C6BC0", corFundo: "#f0f1fa" } },
+  { match: /samp/i, display: { nomeExibicao: "Samp", iniciais: "SA", corMarca: "#C62828", corFundo: "#fdf2f2" } },
 ]
 
 /** Ordem visual do Excel (de cima para baixo nos prints). */

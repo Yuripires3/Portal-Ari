@@ -22,7 +22,7 @@ import type { ConsolidadoFiltrosState, ConsolidadoResponse } from "@/lib/indicad
 
 const fetchNoStore = (url: string) => fetch(url, { cache: "no-store" })
 
-const ANOS_FALLBACK = [2026, 2025, 2024]
+const ANOS_FALLBACK = [2026, 2025, 2024, 2023, 2022, 2021]
 
 function carregarFiltrosPersistidos(): ConsolidadoFiltrosState {
   if (typeof window === "undefined") return criarFiltrosPadrao()
@@ -174,8 +174,7 @@ export default function IndicadoresConsolidadoPage() {
           <CardHeader>
             <CardTitle>Nenhum dado encontrado</CardTitle>
             <CardDescription>
-              Não há registros para {filtros.ano}. Verifique se o processo Python já alimentou as tabelas de
-              indicadores.
+              Não há dados para o ano {filtros.ano} no arquivo de indicadores.
             </CardDescription>
           </CardHeader>
         </Card>

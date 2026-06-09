@@ -3,16 +3,13 @@ export const revalidate = 0
 export const fetchCache = "force-no-store"
 
 import { NextRequest, NextResponse } from "next/server"
-import { getDBConnection } from "@/lib/db"
 import { buscarConsolidado } from "@/lib/indicadores/consolidado-service"
 
 /**
  * GET /api/indicadores/consolidado?ano=2025
- * Retorna indicadores consolidados por operadora, espelhando o Excel "Relatório Indicadores".
+ * Dados estáticos importados de data/indicadores.xlsx (abas 2021–2026).
  */
 export async function GET(request: NextRequest) {
-  let connection = null
-
   try {
     const anoParam = request.nextUrl.searchParams.get("ano")
     const ano = anoParam ? Number(anoParam) : new Date().getFullYear()
@@ -21,11 +18,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Parâmetro 'ano' inválido" }, { status: 400 })
     }
 
-    connection = await getDBConnection()
-    await connection.execute("SET NAMES 'utf8mb4' COLLATE 'utf8mb4_unicode_ci'")
-
-    const dados = await buscarConsolidado(connection, ano)
-
+    const dados = buscarConsolidado(ano)
     return NextResponse.json(dados)
   } catch (error) {
     console.error("[Indicadores/Consolidado] Erro:", error)
@@ -36,7 +29,5 @@ export async function GET(request: NextRequest) {
       },
       { status: 500 }
     )
-  } finally {
-    if (connection) await connection.end()
   }
 }
