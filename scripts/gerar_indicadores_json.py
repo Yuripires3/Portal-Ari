@@ -419,7 +419,7 @@ def processar_ano(ws, ano: int, headers: list[int]) -> list[dict]:
         tipo = (
             "consolidado"
             if nome.upper() in ("CONSOLIDADO", "QV TOTAL")
-            else "operadora" 
+            else "operadora"
         )
         operadoras.append({"operadora": nome, "tipo": tipo, "indicadores": indicadores})
 
