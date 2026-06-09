@@ -295,11 +295,38 @@ function montarConsolidado(valores: Map<string, ValoresOperadora>): ValoresOpera
   return consolidado
 }
 
+async function aplicarAjustesManuais(
+  connection: Connection,
+  competencia: CompetenciaAtualizacao,
+  valores: Map<string, ValoresOperadora>
+) {
+  const [rows] = await connection.execute(
+    `SELECT operadora, indicador_key, valor
+     FROM indicadores_consolidado_valores
+     WHERE ano = ?
+       AND mes = ?
+       AND tipo = 'operadora'
+       AND fonte = 'ajuste_manual'`,
+    [competencia.ano, competencia.mes]
+  )
+
+  for (const row of rows as Array<{
+    operadora: string
+    indicador_key: IndicadorKey
+    valor: string | number | null
+  }>) {
+    const indicadores = valores.get(row.operadora) ?? {}
+    indicadores[row.indicador_key] = Number(row.valor ?? 0)
+    valores.set(row.operadora, indicadores)
+  }
+}
+
 async function persistirCompetencia(
   connection: Connection,
   competencia: CompetenciaAtualizacao,
   valores: Map<string, ValoresOperadora>
 ) {
+  await aplicarAjustesManuais(connection, competencia, valores)
   valores.set("CONSOLIDADO", montarConsolidado(valores))
 
   const operadoras = [...valores.keys()]
@@ -347,10 +374,14 @@ async function persistirCompetencia(
         (ano, operadora, tipo, ordem_operadora, indicador_key, mes, valor, fonte)
        VALUES ${placeholders.join(", ")}
        ON DUPLICATE KEY UPDATE
-         tipo = VALUES(tipo),
-         ordem_operadora = VALUES(ordem_operadora),
-         valor = VALUES(valor),
-         fonte = VALUES(fonte),
+         tipo = IF(fonte = 'ajuste_manual', tipo, VALUES(tipo)),
+         ordem_operadora = IF(
+           fonte = 'ajuste_manual',
+           ordem_operadora,
+           VALUES(ordem_operadora)
+         ),
+         valor = IF(fonte = 'ajuste_manual', valor, VALUES(valor)),
+         fonte = IF(fonte = 'ajuste_manual', fonte, VALUES(fonte)),
          updated_at = CURRENT_TIMESTAMP`,
       registros
     )
@@ -386,7 +417,7 @@ async function sincronizarAgora() {
         [competencia.ano, competencia.mes]
       )
       const statusAtual = (statusRows as Array<{ status: StatusCompetencia }>)[0]?.status
-      if (statusAtual === "fechado" && competencia.status !== "fechado") continue
+      if (statusAtual === "fechado") continue
 
       const valores = await agregarCompetencia(connection, competencia.ano, competencia.mes)
       if (valores.size === 0) continue

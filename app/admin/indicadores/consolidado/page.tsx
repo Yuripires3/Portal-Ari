@@ -18,7 +18,12 @@ import {
   STORAGE_KEY_FILTROS,
 } from "@/lib/indicadores/consolidado-filtros-utils"
 import { ANOS_INDICADORES_FIXOS } from "@/lib/indicadores/static-data-service"
-import type { ConsolidadoFiltrosState, ConsolidadoResponse } from "@/lib/indicadores/types"
+import type {
+  ConsolidadoFiltrosState,
+  ConsolidadoResponse,
+  IndicadorKey,
+  MesNumero,
+} from "@/lib/indicadores/types"
 
 const fetchNoStore = (url: string) => fetch(url, { cache: "no-store" })
 
@@ -138,6 +143,41 @@ export default function IndicadoresConsolidadoPage() {
       ),
     [dados?.mesesDisponiveis, filtros.ano, filtros.mesAte]
   )
+  const mesesEditaveis = useMemo(
+    () => dados?.mesesDisponiveis ?? [],
+    [dados?.mesesDisponiveis]
+  )
+
+  const salvarValor = useCallback(
+    async (
+      operadora: string,
+      indicadorKey: IndicadorKey,
+      mes: MesNumero,
+      valor: number
+    ) => {
+      const res = await fetch("/api/indicadores/valores", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ano: filtros.ano,
+          mes,
+          operadora,
+          indicadorKey,
+          valor,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const mensagem = body.error || "Erro ao salvar indicador"
+        toast({ title: "Erro", description: mensagem, variant: "destructive" })
+        throw new Error(mensagem)
+      }
+
+      toast({ title: "Indicador atualizado", description: "Valor salvo no banco." })
+      await carregarConsolidado(filtros.ano)
+    },
+    [carregarConsolidado, filtros.ano, toast]
+  )
 
   const operadoras = dados?.operadoras ?? []
   const consolidadoGeral = dados?.consolidadoGeral ?? null
@@ -195,12 +235,22 @@ export default function IndicadoresConsolidadoPage() {
 
       {!loading && !erro && dados && operadoras.length > 0 && (
         <div className="space-y-4">
+          {mesesEditaveis.length > 0 && (
+            <div className="rounded-md border border-[#b8c8dc] bg-[#eef4fb] px-3 py-2 text-xs text-[#38516f]">
+              Clique em uma célula para editar. Pressione Enter ou saia do campo para salvar.
+              O admin pode ajustar competências abertas ou fechadas; campos calculados
+              permanecem somente leitura.
+            </div>
+          )}
+
           {operadoras.map((op) => (
             <ConsolidadoOperadoraBlock
               key={op.operadora}
               operadora={op}
               mesesVisiveis={mesesVisiveis}
+              mesesEditaveis={mesesEditaveis}
               ano={filtros.ano}
+              onSalvarValor={salvarValor}
             />
           ))}
 
@@ -208,7 +258,9 @@ export default function IndicadoresConsolidadoPage() {
             <ConsolidadoOperadoraBlock
               operadora={consolidadoGeral}
               mesesVisiveis={mesesVisiveis}
+              mesesEditaveis={mesesEditaveis}
               ano={filtros.ano}
+              onSalvarValor={salvarValor}
             />
           )}
 
@@ -217,7 +269,9 @@ export default function IndicadoresConsolidadoPage() {
               key={op.operadora}
               operadora={op}
               mesesVisiveis={mesesVisiveis}
+              mesesEditaveis={mesesEditaveis}
               ano={filtros.ano}
+              onSalvarValor={salvarValor}
             />
           ))}
         </div>

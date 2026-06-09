@@ -18,14 +18,13 @@ function getValor(
 export function calcularBaseVidas(
   brutos: Partial<Record<IndicadorKey, number | null>>
 ): number | null {
-  const baseVidas = getValor(brutos, "base_vidas")
-  if (baseVidas !== null) return baseVidas
-
   const temBaseSaude = brutos.base_saude !== undefined && brutos.base_saude !== null
   const temBaseDental = brutos.base_dental !== undefined && brutos.base_dental !== null
-  if (!temBaseSaude && !temBaseDental) return null
+  if (temBaseSaude || temBaseDental) {
+    return (getValor(brutos, "base_saude") ?? 0) + (getValor(brutos, "base_dental") ?? 0)
+  }
 
-  return (getValor(brutos, "base_saude") ?? 0) + (getValor(brutos, "base_dental") ?? 0)
+  return getValor(brutos, "base_vidas")
 }
 
 /**

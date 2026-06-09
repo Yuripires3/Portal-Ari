@@ -49,8 +49,9 @@ function montarLinhasAgregadas(
       const baseVidasMesAnterior =
         mes === 1 ? null : calcularBaseVidas(porMes[(mes - 1) as MesNumero])
       const calculados = aplicarCalculosIndicadores(brutos, baseVidasMesAnterior)
-      const valor =
-        brutos[def.key] !== undefined && brutos[def.key] !== null
+      const valor = def.calculado
+        ? (calculados[def.key] ?? null)
+        : brutos[def.key] !== undefined && brutos[def.key] !== null
           ? brutos[def.key]!
           : (calculados[def.key] ?? null)
       valores[mes] = valor

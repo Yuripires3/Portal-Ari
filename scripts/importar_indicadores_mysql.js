@@ -116,33 +116,52 @@ async function main() {
     for (const migration of migrations) {
       await connection.query(migration)
     }
+    const [competenciasFechadasRows] = await connection.query(
+      `SELECT ano, mes
+       FROM indicadores_competencias
+       WHERE status = 'fechado'`
+    )
+    const competenciasFechadas = new Set(
+      competenciasFechadasRows.map((row) => `${Number(row.ano)}-${Number(row.mes)}`)
+    )
+    const registrosImportar = registros.filter(
+      (row) => !competenciasFechadas.has(`${row[0]}-${row[5]}`)
+    )
+
     await connection.beginTransaction()
 
     const placeholdersAnos = anos.map(() => "?").join(", ")
     await connection.execute(
       `DELETE FROM indicadores_consolidado_valores
        WHERE ano IN (${placeholdersAnos})
-         AND fonte <> 'banco_operacional'`,
+         AND fonte NOT IN ('banco_operacional', 'ajuste_manual')
+         AND NOT EXISTS (
+           SELECT 1
+           FROM indicadores_competencias competencia
+           WHERE competencia.ano = indicadores_consolidado_valores.ano
+             AND competencia.mes = indicadores_consolidado_valores.mes
+             AND competencia.status = 'fechado'
+         )`,
       anos
     )
 
     const chunkSize = 500
-    for (let offset = 0; offset < registros.length; offset += chunkSize) {
-      const chunk = registros.slice(offset, offset + chunkSize)
+    for (let offset = 0; offset < registrosImportar.length; offset += chunkSize) {
+      const chunk = registrosImportar.slice(offset, offset + chunkSize)
       const placeholders = chunk.map(() => "(?, ?, ?, ?, ?, ?, ?, ?)").join(", ")
       await connection.query(
         `INSERT INTO indicadores_consolidado_valores
           (ano, operadora, tipo, ordem_operadora, indicador_key, mes, valor, fonte)
          VALUES ${placeholders}
          ON DUPLICATE KEY UPDATE
-           tipo = IF(fonte = 'banco_operacional', tipo, VALUES(tipo)),
+           tipo = IF(fonte IN ('banco_operacional', 'ajuste_manual'), tipo, VALUES(tipo)),
            ordem_operadora = IF(
-             fonte = 'banco_operacional',
+             fonte IN ('banco_operacional', 'ajuste_manual'),
              ordem_operadora,
              VALUES(ordem_operadora)
            ),
-           valor = IF(fonte = 'banco_operacional', valor, VALUES(valor)),
-           fonte = IF(fonte = 'banco_operacional', fonte, VALUES(fonte)),
+           valor = IF(fonte IN ('banco_operacional', 'ajuste_manual'), valor, VALUES(valor)),
+           fonte = IF(fonte IN ('banco_operacional', 'ajuste_manual'), fonte, VALUES(fonte)),
            updated_at = CURRENT_TIMESTAMP`,
         chunk.flat()
       )
@@ -158,7 +177,8 @@ async function main() {
       anos
     )
     console.log(
-      `Importacao concluida: ${registros.length} valores, anos ${anos.join(", ")}.`
+      `Importacao concluida: ${registrosImportar.length} valores atualizados; ` +
+        `${registros.length - registrosImportar.length} valores de competencias fechadas preservados.`
     )
     console.table(totais)
   } catch (error) {
