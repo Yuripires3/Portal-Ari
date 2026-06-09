@@ -11,14 +11,14 @@ import type {
   MesNumero,
 } from "./types"
 
-interface IndicadoresJsonOperadora {
+export interface IndicadoresRawOperadora {
   operadora: string
   tipo?: "operadora" | "consolidado"
   indicadores: Record<string, Record<string, number | null>>
 }
 
 interface IndicadoresJsonAno {
-  operadoras: IndicadoresJsonOperadora[]
+  operadoras: IndicadoresRawOperadora[]
 }
 
 interface IndicadoresJsonRoot {
@@ -123,7 +123,7 @@ function montarLinhas(
   })
 }
 
-function converterOperadora(item: IndicadoresJsonOperadora, ano: number): ConsolidadoOperadora {
+function converterOperadora(item: IndicadoresRawOperadora, ano: number): ConsolidadoOperadora {
   const tipo =
     item.tipo ?? (item.operadora.toUpperCase() === "CONSOLIDADO" ? "consolidado" : "operadora")
   const porMes = indicadoresParaPorMes(item.indicadores)
@@ -158,10 +158,17 @@ export function buscarConsolidadoEstatico(ano: number): ConsolidadoResponse {
     }
   }
 
-  const todos = anoData.operadoras.map((item) => converterOperadora(item, ano))
+  return montarConsolidadoDeOperadoras(ano, anoData.operadoras)
+}
+
+export function montarConsolidadoDeOperadoras(
+  ano: number,
+  operadorasRaw: IndicadoresRawOperadora[]
+): ConsolidadoResponse {
+  const todos = operadorasRaw.map((item) => converterOperadora(item, ano))
 
   const ordemNoArquivo = new Map(
-    anoData.operadoras.map((item, index) => [item.operadora, index])
+    operadorasRaw.map((item, index) => [item.operadora, index])
   )
   const ordenarComoExcel = (a: ConsolidadoOperadora, b: ConsolidadoOperadora) =>
     (ordemNoArquivo.get(a.operadora) ?? 9999) - (ordemNoArquivo.get(b.operadora) ?? 9999)
@@ -172,7 +179,7 @@ export function buscarConsolidadoEstatico(ano: number): ConsolidadoResponse {
 
   const consolidadoDoArquivo = todos.find(isBlocoConsolidado)
 
-  const consolidadoIdx = anoData.operadoras.findIndex(
+  const consolidadoIdx = operadorasRaw.findIndex(
     (item) =>
       item.tipo === "consolidado" ||
       ["CONSOLIDADO", "QV TOTAL"].includes(item.operadora.toUpperCase())

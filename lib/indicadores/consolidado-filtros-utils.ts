@@ -29,7 +29,11 @@ export function permiteFiltroMesAte(ano: number): boolean {
   return ano === getAnoAtual()
 }
 
-export function mesesVisiveisPorFiltro(ano: number, mesAte: MesNumero): MesNumero[] {
-  if (isAnoFechado(ano)) return [...MESES_NUMEROS]
-  return MESES_NUMEROS.filter((m) => m <= mesAte)
+export function mesesVisiveisPorFiltro(
+  ano: number,
+  mesAte: MesNumero,
+  mesesDisponiveis: MesNumero[] = [...MESES_NUMEROS]
+): MesNumero[] {
+  if (isAnoFechado(ano)) return MESES_NUMEROS.filter((mes) => mesesDisponiveis.includes(mes))
+  return MESES_NUMEROS.filter((mes) => mes <= mesAte && mesesDisponiveis.includes(mes))
 }

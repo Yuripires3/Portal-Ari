@@ -2,6 +2,15 @@ export type MesNumero = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12
 
 export type IndicadorFormato = "moeda" | "percentual" | "numero"
 
+export type StatusCompetencia = "aberto" | "projecao" | "fechado"
+
+export interface IndicadoresCompetencia {
+  mes: MesNumero
+  status: StatusCompetencia
+  atualizadoEm: string | null
+  fechadoEm: string | null
+}
+
 export type IndicadorKey =
   | "meta_orcada"
   | "base_vidas"
@@ -63,6 +72,7 @@ export interface ConsolidadoResponse {
   /** Ex.: Infinity em 2023 — exibida após o bloco CONSOLIDADO. */
   operadorasAposConsolidado?: ConsolidadoOperadora[]
   mesesDisponiveis: MesNumero[]
+  competencias?: IndicadoresCompetencia[]
 }
 
 export interface ConsolidadoFiltrosState {

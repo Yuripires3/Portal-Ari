@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
   if (!guard.ok) return guard.response
 
   try {
-    const anos = buscarAnosDisponiveis()
+    const anos = await buscarAnosDisponiveis()
     return NextResponse.json({ anos })
   } catch (error) {
     console.error("[Indicadores/Anos] Erro:", error)

@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Parâmetro 'ano' inválido" }, { status: 400 })
     }
 
-    const dados = buscarConsolidado(ano)
+    const dados = await buscarConsolidado(ano)
     return NextResponse.json(dados)
   } catch (error) {
     console.error("[Indicadores/Consolidado] Erro:", error)

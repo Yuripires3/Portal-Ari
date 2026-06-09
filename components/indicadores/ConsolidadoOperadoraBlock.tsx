@@ -83,6 +83,7 @@ export function ConsolidadoOperadoraBlock({
 }: ConsolidadoOperadoraBlockProps) {
   const larguraIndicador = larguraColunaIndicadorPorAno(ano)
   const larguraTabela = larguraTabelaConsolidado(ano, mesesVisiveis.length)
+  const larguraMes = `calc((100% - ${larguraIndicador}px) / ${Math.max(mesesVisiveis.length, 1)})`
 
   return (
     <section className="flex flex-col overflow-hidden rounded-lg border border-[#c5d0de] bg-white shadow-sm lg:flex-row">
@@ -94,13 +95,13 @@ export function ConsolidadoOperadoraBlock({
 
       <div className="relative z-0 min-w-0 flex-1 overflow-x-auto">
         <table
-          className="table-fixed border-collapse text-[13px]"
-          style={{ width: larguraTabela, minWidth: larguraTabela }}
+          className="w-full table-fixed border-collapse text-[13px]"
+          style={{ minWidth: larguraTabela }}
         >
           <colgroup>
             <col style={{ width: larguraIndicador }} />
             {mesesVisiveis.map((mes) => (
-              <col key={mes} style={{ width: LARGURA_COLUNA_MES }} />
+              <col key={mes} style={{ width: larguraMes, minWidth: LARGURA_COLUNA_MES }} />
             ))}
           </colgroup>
           <thead>

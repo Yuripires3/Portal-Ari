@@ -5,6 +5,10 @@
   "scripts": {
     "build": "next build",
     "dev": "next dev",
+    "indicadores:validar": "node scripts/importar_indicadores_mysql.js --dry-run",
+    "indicadores:importar": "node scripts/importar_indicadores_mysql.js",
+    "indicadores:sincronizar": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --experimental-specifier-resolution=node scripts/sincronizar_indicadores_operacionais.ts",
+    "indicadores:atualizar": "python scripts/gerar_indicadores_json.py && node scripts/importar_indicadores_mysql.js",
     "lint": "eslint .",
     "postbuild": "node scripts/postbuild-fix-standalone.js",
     "start": "node .next/standalone/server.js"

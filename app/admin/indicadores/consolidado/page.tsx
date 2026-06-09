@@ -69,7 +69,13 @@ export default function IndicadoresConsolidadoPage() {
       const res = await fetchNoStore("/api/indicadores/anos")
       if (res.ok) {
         const json = await res.json()
-        if (json.anos?.length) setAnos(json.anos)
+        if (json.anos?.length) {
+          setAnos(json.anos)
+          if (!json.anos.includes(filtros.ano)) {
+            setFiltros((f) => ({ ...f, ano: json.anos[0] }))
+          }
+          return
+        }
       }
     } catch {
       // mantém ANOS_FALLBACK
@@ -91,6 +97,15 @@ export default function IndicadoresConsolidadoPage() {
         }
         const json: ConsolidadoResponse = await res.json()
         setDados(json)
+        const ultimoMesDisponivel = json.mesesDisponiveis.at(-1)
+        if (ultimoMesDisponivel) {
+          setFiltros((atuais) => {
+            if (atuais.ano !== anoSelecionado || json.mesesDisponiveis.includes(atuais.mesAte)) {
+              return atuais
+            }
+            return { ...atuais, mesAte: ultimoMesDisponivel }
+          })
+        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : "Erro desconhecido"
         setErro(msg)
@@ -115,8 +130,13 @@ export default function IndicadoresConsolidadoPage() {
   }, [usuarioAdmin, filtros.ano, carregarConsolidado])
 
   const mesesVisiveis = useMemo(
-    () => mesesVisiveisPorFiltro(filtros.ano, filtros.mesAte),
-    [filtros.ano, filtros.mesAte]
+    () =>
+      mesesVisiveisPorFiltro(
+        filtros.ano,
+        filtros.mesAte,
+        dados?.mesesDisponiveis
+      ),
+    [dados?.mesesDisponiveis, filtros.ano, filtros.mesAte]
   )
 
   const operadoras = dados?.operadoras ?? []
@@ -137,6 +157,7 @@ export default function IndicadoresConsolidadoPage() {
         <ConsolidadoFiltros
           filtros={filtros}
           anosDisponiveis={anos}
+          mesesDisponiveis={dados?.mesesDisponiveis ?? []}
           onChange={setFiltros}
         />
       </div>

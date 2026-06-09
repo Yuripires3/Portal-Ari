@@ -15,10 +15,16 @@ import type { ConsolidadoFiltrosState, MesNumero } from "@/lib/indicadores/types
 interface ConsolidadoFiltrosProps {
   filtros: ConsolidadoFiltrosState
   anosDisponiveis: number[]
+  mesesDisponiveis: MesNumero[]
   onChange: (filtros: ConsolidadoFiltrosState) => void
 }
 
-export function ConsolidadoFiltros({ filtros, anosDisponiveis, onChange }: ConsolidadoFiltrosProps) {
+export function ConsolidadoFiltros({
+  filtros,
+  anosDisponiveis,
+  mesesDisponiveis,
+  onChange,
+}: ConsolidadoFiltrosProps) {
   const set = <K extends keyof ConsolidadoFiltrosState>(key: K, value: ConsolidadoFiltrosState[K]) => {
     onChange({ ...filtros, [key]: value })
   }
@@ -60,7 +66,7 @@ export function ConsolidadoFiltros({ filtros, anosDisponiveis, onChange }: Conso
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {MESES_NUMEROS.map((m) => (
+              {MESES_NUMEROS.filter((mes) => mesesDisponiveis.includes(mes)).map((m) => (
                 <SelectItem key={m} value={String(m)}>
                   {MESES_LABELS[m]}
                 </SelectItem>
