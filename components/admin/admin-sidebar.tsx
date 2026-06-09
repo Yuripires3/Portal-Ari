@@ -20,6 +20,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import { useState } from "react"
 import { useAuth } from "@/components/auth/auth-provider"
+import { isAdmin } from "@/lib/permissions"
 import { cn } from "@/lib/utils"
 
 function getUserDisplay(user: { usuario_login?: string; nome?: string } | null | undefined) {
@@ -76,6 +77,7 @@ export function AdminSidebar() {
 
   const { initials, displayName } = getUserDisplay(user)
   const isCollapsed = state === "collapsed"
+  const usuarioAdmin = isAdmin(user)
 
   return (
     <Sidebar collapsible="icon">
@@ -96,7 +98,7 @@ export function AdminSidebar() {
       <SidebarContent>
         <SidebarMenu>
           {/* Indicadores com Submenu (Admin only) */}
-          {user?.role === "admin" && (
+          {usuarioAdmin && (
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip="Indicadores"
@@ -182,7 +184,7 @@ export function AdminSidebar() {
           </SidebarMenuItem>
 
           {/* Configurações (Admin only) */}
-          {user?.role === "admin" && (
+          {usuarioAdmin && (
             <SidebarMenuItem>
               <SidebarMenuButton
                 tooltip="Configurações"

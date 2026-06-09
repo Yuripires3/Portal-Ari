@@ -1,4 +1,4 @@
-import { type NextRequest } from "next/server"
+import { type NextRequest, NextResponse } from "next/server"
 import { jwtVerify } from "jose"
 import { getRuntimeJwtSecret } from "@/lib/runtime-auth"
 
@@ -33,5 +33,27 @@ export async function getRequestAuthUser(request: NextRequest): Promise<RequestA
   } catch {
     return { ok: false, error: "Token inválido" }
   }
+}
+
+type AdminGuardResult =
+  | { ok: true; auth: RequestAuthUser & { ok: true } }
+  | { ok: false; response: NextResponse }
+
+/** Exige usuário autenticado com role admin (rotas sensíveis). */
+export async function requireAdminApi(request: NextRequest): Promise<AdminGuardResult> {
+  const auth = await getRequestAuthUser(request)
+  if (!auth.ok) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: auth.error || "Não autenticado" }, { status: 401 }),
+    }
+  }
+  if (!auth.isAdmin) {
+    return {
+      ok: false,
+      response: NextResponse.json({ error: "Acesso negado" }, { status: 403 }),
+    }
+  }
+  return { ok: true, auth }
 }
 

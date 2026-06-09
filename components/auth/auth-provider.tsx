@@ -4,6 +4,7 @@ import type React from "react"
 
 import { createContext, useContext, useEffect, useState } from "react"
 import { useRouter, usePathname } from "next/navigation"
+import { isAdmin } from "@/lib/permissions"
 
 interface User {
   id: string
@@ -82,6 +83,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       // Not logged in, trying to access protected route
       logAuth("Redirecionando para login", { pathname })
       router.push("/login")
+    } else if (user && pathname?.startsWith("/admin/indicadores") && !isAdmin(user)) {
+      logAuth("Usuário sem permissão em indicadores, redirecionando para /admin", { pathname })
+      router.push("/admin")
     } else if (user && (isLoginRoute || isRegisterRoute)) {
       // Already logged in, redirect to admin dashboard
       logAuth("Usuário autenticado acessou rota pública, redirecionando para /admin", { pathname })

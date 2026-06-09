@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useAuth } from "@/components/auth/auth-provider"
+import { isAdmin } from "@/lib/permissions"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -35,9 +36,10 @@ function carregarFiltrosPersistidos(): ConsolidadoFiltrosState {
 }
 
 export default function IndicadoresConsolidadoPage() {
-  const { user } = useAuth() as { user?: { role?: string } }
+  const { user } = useAuth()
   const router = useRouter()
   const { toast } = useToast()
+  const usuarioAdmin = isAdmin(user)
 
   const [filtros, setFiltros] = useState<ConsolidadoFiltrosState>(criarFiltrosPadrao)
   const [anos, setAnos] = useState<number[]>(ANOS_FALLBACK)
@@ -55,10 +57,10 @@ export default function IndicadoresConsolidadoPage() {
   }, [filtros])
 
   useEffect(() => {
-    if (user && user.role !== "admin") {
+    if (user && !usuarioAdmin) {
       router.replace("/admin")
     }
-  }, [user, router])
+  }, [user, usuarioAdmin, router])
 
   const carregarAnos = useCallback(async () => {
     // Abas fixas 2021–2026 (dados estáticos do Excel)
@@ -103,14 +105,14 @@ export default function IndicadoresConsolidadoPage() {
   )
 
   useEffect(() => {
-    if (user?.role !== "admin") return
+    if (!usuarioAdmin) return
     carregarAnos().catch(() => setAnos(ANOS_FALLBACK))
-  }, [user, carregarAnos])
+  }, [usuarioAdmin, carregarAnos])
 
   useEffect(() => {
-    if (user?.role !== "admin") return
+    if (!usuarioAdmin) return
     carregarConsolidado(filtros.ano)
-  }, [user, filtros.ano, carregarConsolidado])
+  }, [usuarioAdmin, filtros.ano, carregarConsolidado])
 
   const mesesVisiveis = useMemo(
     () => mesesVisiveisPorFiltro(filtros.ano, filtros.mesAte),
@@ -121,7 +123,7 @@ export default function IndicadoresConsolidadoPage() {
   const consolidadoGeral = dados?.consolidadoGeral ?? null
   const operadorasAposConsolidado = dados?.operadorasAposConsolidado ?? []
 
-  if (user?.role !== "admin") {
+  if (!usuarioAdmin) {
     return null
   }
 

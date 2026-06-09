@@ -40,6 +40,14 @@ export function normalizeClassification(user: User | null | undefined): UserClas
   return normalized as UserClassification || "USUARIO"
 }
 
+/** Acesso total ao portal (classificação ADMIN ou role admin). */
+export function isAdmin(user: User | null | undefined): boolean {
+  if (!user) return false
+  const role = String(user.role || "").toLowerCase()
+  const classificacao = String(user.classificacao || "").toUpperCase()
+  return role === "admin" || classificacao === "ADMIN"
+}
+
 /**
  * Verifica se o usuário pode editar regras (ADMIN ou USUARIO)
  */

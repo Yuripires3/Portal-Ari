@@ -3,6 +3,7 @@ export const revalidate = 0
 export const fetchCache = "force-no-store"
 
 import { NextRequest, NextResponse } from "next/server"
+import { requireAdminApi } from "@/lib/api-auth"
 import { buscarConsolidado } from "@/lib/indicadores/consolidado-service"
 
 /**
@@ -10,6 +11,9 @@ import { buscarConsolidado } from "@/lib/indicadores/consolidado-service"
  * Dados estáticos importados de data/indicadores.xlsx (abas 2021–2026).
  */
 export async function GET(request: NextRequest) {
+  const guard = await requireAdminApi(request)
+  if (!guard.ok) return guard.response
+
   try {
     const anoParam = request.nextUrl.searchParams.get("ano")
     const ano = anoParam ? Number(anoParam) : new Date().getFullYear()

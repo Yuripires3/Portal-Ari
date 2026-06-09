@@ -1,7 +1,26 @@
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+"use client"
+
+import { useEffect } from "react"
+import { useRouter } from "next/navigation"
 import { AlertCircle } from "lucide-react"
+import { useAuth } from "@/components/auth/auth-provider"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { isAdmin } from "@/lib/permissions"
 
 export default function IndicadoresInadimplenciaPage() {
+  const { user } = useAuth()
+  const router = useRouter()
+
+  useEffect(() => {
+    if (user && !isAdmin(user)) {
+      router.replace("/admin")
+    }
+  }, [user, router])
+
+  if (!isAdmin(user)) {
+    return null
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div>

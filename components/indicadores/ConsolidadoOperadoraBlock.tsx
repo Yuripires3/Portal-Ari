@@ -1,12 +1,20 @@
 "use client"
 
 import { MESES_LABELS } from "@/lib/indicadores/constants"
+import {
+  LARGURA_COLUNA_MES,
+  larguraColunaIndicadorPorAno,
+  larguraTabelaConsolidado,
+} from "@/lib/indicadores/consolidado-layout"
 import { resolverDisplayOperadora } from "@/lib/indicadores/operadora-display"
 import type { ConsolidadoOperadora, MesNumero } from "@/lib/indicadores/types"
 import { formatIndicadorValor } from "@/utils/format"
 import { cn } from "@/lib/utils"
 
 const SUB_LINHAS_BASE_VIDAS = new Set(["base_dental", "base_saude"])
+
+const LARGURA_PAINEL_LOGO = "w-full lg:w-[130px]"
+const BORDA_SEPARADOR_RUBRICAS = "border-r border-[#c5d0de]"
 
 interface ConsolidadoOperadoraBlockProps {
   operadora: ConsolidadoOperadora
@@ -29,7 +37,13 @@ function PainelLogoOperadora({
     : "max-h-16 max-w-[88px] lg:max-h-48 lg:max-w-[100px]"
 
   return (
-    <div className="bg-sidebar flex shrink-0 items-center justify-center border-b border-sidebar-border px-3 py-5 lg:w-[110px] lg:border-b-0 lg:border-r xl:w-[130px]">
+    <div
+      className={cn(
+        "bg-sidebar flex shrink-0 items-center justify-center border-b border-sidebar-border px-3 py-5",
+        "lg:border-b-0 lg:border-r lg:border-[#c5d0de]",
+        LARGURA_PAINEL_LOGO,
+      )}
+    >
       {display.logoSrc ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -67,6 +81,9 @@ export function ConsolidadoOperadoraBlock({
   mesesVisiveis,
   ano,
 }: ConsolidadoOperadoraBlockProps) {
+  const larguraIndicador = larguraColunaIndicadorPorAno(ano)
+  const larguraTabela = larguraTabelaConsolidado(ano, mesesVisiveis.length)
+
   return (
     <section className="flex flex-col overflow-hidden rounded-lg border border-[#c5d0de] bg-white shadow-sm lg:flex-row">
       <PainelLogoOperadora
@@ -75,15 +92,29 @@ export function ConsolidadoOperadoraBlock({
         ano={ano}
       />
 
-      <div className="min-w-0 flex-1 overflow-x-auto">
-        <table className="w-full min-w-[720px] border-collapse text-[13px]">
+      <div className="relative z-0 min-w-0 flex-1 overflow-x-auto">
+        <table
+          className="table-fixed border-collapse text-[13px]"
+          style={{ width: larguraTabela, minWidth: larguraTabela }}
+        >
+          <colgroup>
+            <col style={{ width: larguraIndicador }} />
+            {mesesVisiveis.map((mes) => (
+              <col key={mes} style={{ width: LARGURA_COLUNA_MES }} />
+            ))}
+          </colgroup>
           <thead>
             <tr className="bg-[#1a1a2e] text-white">
-              <th className="sticky left-0 z-10 min-w-[200px] bg-[#1a1a2e] px-3 py-2 text-left font-semibold">
+              <th
+                className={cn(
+                  "sticky left-0 z-[1] whitespace-nowrap bg-[#1a1a2e] px-3 py-2 text-left font-semibold",
+                  BORDA_SEPARADOR_RUBRICAS,
+                )}
+              >
                 Indicador
               </th>
               {mesesVisiveis.map((mes) => (
-                <th key={mes} className="min-w-[72px] px-2 py-2 text-center font-semibold whitespace-nowrap">
+                <th key={mes} className="px-2 py-2 text-center font-semibold whitespace-nowrap">
                   {MESES_LABELS[mes]}
                 </th>
               ))}
@@ -97,7 +128,8 @@ export function ConsolidadoOperadoraBlock({
               >
                 <td
                   className={cn(
-                    "sticky left-0 z-10 border-r border-[#e8edf3] bg-inherit py-1.5 text-[#3d4f63]",
+                    "sticky left-0 z-[1] whitespace-nowrap bg-inherit py-1.5 text-[#3d4f63]",
+                    BORDA_SEPARADOR_RUBRICAS,
                     SUB_LINHAS_BASE_VIDAS.has(linha.key)
                       ? "pl-8 pr-3 font-normal"
                       : "px-3 font-medium",
@@ -119,7 +151,7 @@ export function ConsolidadoOperadoraBlock({
                   return (
                     <td
                       key={mes}
-                      className={`border-r border-[#eef2f6] px-2 py-1.5 text-right tabular-nums whitespace-nowrap last:border-r-0 ${
+                      className={`px-2 py-1.5 text-right tabular-nums whitespace-nowrap ${
                         destaque ? "font-semibold text-[#1e3a5f]" : "text-[#2d3748]"
                       }`}
                     >

@@ -27,9 +27,19 @@ export async function proxy(request: NextRequest) {
       const secret = getRuntimeJwtSecret()
       const { payload } = await jwtVerify(token, secret)
 
-      // Admin-only: /admin/configuracoes
-      if (pathname.startsWith("/admin/configuracoes") && payload.role !== "admin") {
+      const role = String(payload.role || "user").toLowerCase()
+
+      // Admin-only: /admin/configuracoes e /admin/indicadores
+      if (
+        (pathname.startsWith("/admin/configuracoes") || pathname.startsWith("/admin/indicadores")) &&
+        role !== "admin"
+      ) {
         return NextResponse.redirect(new URL("/admin", request.url))
+      }
+
+      // Admin-only: APIs de indicadores
+      if (pathname.startsWith("/api/indicadores") && role !== "admin") {
+        return NextResponse.json({ error: "Acesso negado" }, { status: 403 })
       }
 
       return NextResponse.next()
@@ -44,6 +54,6 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/api/indicadores/:path*"],
 }
 
