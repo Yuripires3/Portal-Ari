@@ -44,12 +44,24 @@ export interface ConsolidadoLinha {
 export interface ConsolidadoOperadora {
   operadora: string
   linhas: ConsolidadoLinha[]
+  /** Bloco agregado QV (última seção do Excel). */
+  tipo?: "operadora" | "consolidado"
 }
 
 export interface ConsolidadoResponse {
   ano: number
   operadoras: ConsolidadoOperadora[]
+  consolidadoGeral: ConsolidadoOperadora | null
   mesesDisponiveis: MesNumero[]
+}
+
+export interface ConsolidadoFiltrosState {
+  ano: number
+  modoPersonalizado: boolean
+  operadorasSelecionadas: string[]
+  buscaOperadora: string
+  mesAte: MesNumero
+  exibirConsolidadoGeral: boolean
 }
 
 export interface ConsolidadoRawRow {

@@ -1,33 +1,59 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { useRouter } from "next/navigation"
-import { RefreshCw } from "lucide-react"
 import { useAuth } from "@/components/auth/auth-provider"
 import { useToast } from "@/hooks/use-toast"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Label } from "@/components/ui/label"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ConsolidadoFiltros } from "@/components/indicadores/ConsolidadoFiltros"
 import { ConsolidadoHeader } from "@/components/indicadores/ConsolidadoHeader"
 import { ConsolidadoOperadoraBlock } from "@/components/indicadores/ConsolidadoOperadoraBlock"
 import { signalPageLoaded } from "@/components/ui/page-loading"
-import { MESES_NUMEROS } from "@/lib/indicadores/constants"
-import type { ConsolidadoResponse } from "@/lib/indicadores/types"
+import {
+  criarFiltrosPadrao,
+  filtrarOperadoras,
+  listarNomesOperadoras,
+  mesesVisiveisPorFiltro,
+  STORAGE_KEY_FILTROS,
+} from "@/lib/indicadores/consolidado-filtros-utils"
+import type { ConsolidadoFiltrosState, ConsolidadoResponse } from "@/lib/indicadores/types"
 
 const fetchNoStore = (url: string) => fetch(url, { cache: "no-store" })
+
+const ANOS_FALLBACK = [2026, 2025, 2024]
+
+function carregarFiltrosPersistidos(): ConsolidadoFiltrosState {
+  if (typeof window === "undefined") return criarFiltrosPadrao()
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_FILTROS)
+    if (!raw) return criarFiltrosPadrao()
+    return { ...criarFiltrosPadrao(), ...JSON.parse(raw) }
+  } catch {
+    return criarFiltrosPadrao()
+  }
+}
 
 export default function IndicadoresConsolidadoPage() {
   const { user } = useAuth() as { user?: { role?: string } }
   const router = useRouter()
   const { toast } = useToast()
 
-  const [anos, setAnos] = useState<number[]>([])
-  const [ano, setAno] = useState<number>(new Date().getFullYear())
+  const [filtros, setFiltros] = useState<ConsolidadoFiltrosState>(criarFiltrosPadrao)
+  const [anos, setAnos] = useState<number[]>(ANOS_FALLBACK)
   const [dados, setDados] = useState<ConsolidadoResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
+
+  useEffect(() => {
+    setFiltros(carregarFiltrosPersistidos())
+  }, [])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    localStorage.setItem(STORAGE_KEY_FILTROS, JSON.stringify(filtros))
+  }, [filtros])
 
   useEffect(() => {
     if (user && user.role !== "admin") {
@@ -39,12 +65,12 @@ export default function IndicadoresConsolidadoPage() {
     const res = await fetchNoStore("/api/indicadores/anos")
     if (!res.ok) throw new Error("Não foi possível carregar os anos disponíveis")
     const json = await res.json()
-    const lista: number[] = json.anos ?? []
+    const lista: number[] = json.anos?.length ? json.anos : ANOS_FALLBACK
     setAnos(lista)
-    if (lista.length > 0 && !lista.includes(ano)) {
-      setAno(lista[0])
+    if (lista.length > 0 && !lista.includes(filtros.ano)) {
+      setFiltros((f) => ({ ...f, ano: lista[0] }))
     }
-  }, [ano])
+  }, [filtros.ano])
 
   const carregarConsolidado = useCallback(
     async (anoSelecionado: number) => {
@@ -73,61 +99,61 @@ export default function IndicadoresConsolidadoPage() {
 
   useEffect(() => {
     if (user?.role !== "admin") return
-    carregarAnos().catch(() => {
-      setAnos([new Date().getFullYear(), 2025, 2024])
-    })
+    carregarAnos().catch(() => setAnos(ANOS_FALLBACK))
   }, [user, carregarAnos])
 
   useEffect(() => {
     if (user?.role !== "admin") return
-    carregarConsolidado(ano)
-  }, [user, ano, carregarConsolidado])
+    carregarConsolidado(filtros.ano)
+  }, [user, filtros.ano, carregarConsolidado])
+
+  const operadorasFiltradas = useMemo(
+    () => (dados ? filtrarOperadoras(dados, filtros) : []),
+    [dados, filtros]
+  )
+
+  const mesesVisiveis = useMemo(() => mesesVisiveisPorFiltro(filtros.mesAte), [filtros.mesAte])
+
+  const nomesOperadoras = useMemo(
+    () => (dados ? listarNomesOperadoras(dados) : []),
+    [dados]
+  )
+
+  const exibirConsolidado =
+    filtros.exibirConsolidadoGeral &&
+    dados?.consolidadoGeral &&
+    operadorasFiltradas.length === dados.operadoras.length &&
+    !filtros.buscaOperadora.trim() &&
+    !filtros.modoPersonalizado
 
   if (user?.role !== "admin") {
     return null
   }
 
-  const mesesVisiveis = MESES_NUMEROS
   const vazio = !loading && !erro && (!dados || dados.operadoras.length === 0)
-  const anosSelect = anos.length > 0 ? anos : [2026, 2025, 2024]
 
   return (
-    <div className="min-h-full bg-[#eef2f6] p-4 md:p-6 space-y-5">
-      <div className="relative">
-        <ConsolidadoHeader ano={ano} />
-        <div className="absolute right-4 top-1/2 flex -translate-y-1/2 items-center gap-2">
-          <Label htmlFor="ano" className="sr-only">
-            Ano
-          </Label>
-          <Select value={String(ano)} onValueChange={(v) => setAno(Number(v))}>
-            <SelectTrigger id="ano" className="h-9 w-[100px] border-white/20 bg-white/10 text-white">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {anosSelect.map((a) => (
-                <SelectItem key={a} value={String(a)}>
-                  {a}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 text-white hover:bg-white/10 hover:text-white"
-            onClick={() => carregarConsolidado(ano)}
-            disabled={loading}
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          </Button>
-        </div>
+    <div className="min-h-full bg-[#dde4ec] p-3 md:p-5 space-y-4">
+      {/* Cabeçalho + filtros integrados (estrutura do Excel) */}
+      <div className="overflow-hidden rounded-lg shadow-md">
+        <ConsolidadoHeader ano={filtros.ano} />
+        <ConsolidadoFiltros
+          filtros={filtros}
+          anosDisponiveis={anos}
+          nomesOperadoras={nomesOperadoras}
+          totalOperadoras={dados?.operadoras.length ?? 0}
+          exibindoOperadoras={operadorasFiltradas.length}
+          loading={loading}
+          onChange={setFiltros}
+          onAtualizar={() => carregarConsolidado(filtros.ano)}
+        />
       </div>
 
       {loading && (
         <div className="space-y-4">
-          <Skeleton className="h-48 w-full rounded-lg" />
-          <Skeleton className="h-48 w-full rounded-lg" />
-          <Skeleton className="h-48 w-full rounded-lg" />
+          <Skeleton className="h-52 w-full rounded-lg" />
+          <Skeleton className="h-52 w-full rounded-lg" />
+          <Skeleton className="h-52 w-full rounded-lg" />
         </div>
       )}
 
@@ -138,7 +164,7 @@ export default function IndicadoresConsolidadoPage() {
             <CardDescription>{erro}</CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => carregarConsolidado(ano)}>Tentar novamente</Button>
+            <Button onClick={() => carregarConsolidado(filtros.ano)}>Tentar novamente</Button>
           </CardContent>
         </Card>
       )}
@@ -148,20 +174,41 @@ export default function IndicadoresConsolidadoPage() {
           <CardHeader>
             <CardTitle>Nenhum dado encontrado</CardTitle>
             <CardDescription>
-              Não há registros nas tabelas de indicadores para o ano {ano}. Verifique se o processo Python
-              já alimentou <code>registro_indicadores_df_ativos</code>, <code>_inativos</code> e{" "}
-              <code>_atendimentos</code>.
+              Não há registros para {filtros.ano}. Verifique se o processo Python já alimentou as tabelas de
+              indicadores.
             </CardDescription>
           </CardHeader>
         </Card>
       )}
 
-      {!loading && !erro && dados && dados.operadoras.length > 0 && (
-        <div className="space-y-5">
-          {dados.operadoras.map((op) => (
-            <ConsolidadoOperadoraBlock key={op.operadora} operadora={op} mesesVisiveis={mesesVisiveis} />
+      {!loading && !erro && dados && operadorasFiltradas.length > 0 && (
+        <div className="space-y-4">
+          {operadorasFiltradas.map((op) => (
+            <ConsolidadoOperadoraBlock
+              key={op.operadora}
+              operadora={op}
+              mesesVisiveis={mesesVisiveis}
+            />
           ))}
+
+          {exibirConsolidado && dados.consolidadoGeral && (
+            <ConsolidadoOperadoraBlock
+              operadora={dados.consolidadoGeral}
+              mesesVisiveis={mesesVisiveis}
+            />
+          )}
         </div>
+      )}
+
+      {!loading && !erro && dados && dados.operadoras.length > 0 && operadorasFiltradas.length === 0 && (
+        <Card className="bg-white">
+          <CardHeader>
+            <CardTitle>Nenhuma operadora no filtro</CardTitle>
+            <CardDescription>
+              Ajuste a busca ou selecione outras operadoras para exibir os indicadores.
+            </CardDescription>
+          </CardHeader>
+        </Card>
       )}
     </div>
   )

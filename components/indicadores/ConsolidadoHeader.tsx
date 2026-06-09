@@ -4,22 +4,22 @@ interface ConsolidadoHeaderProps {
 
 export function ConsolidadoHeader({ ano }: ConsolidadoHeaderProps) {
   return (
-    <div className="rounded-lg overflow-hidden border border-[#2a2a3a] bg-[#1e1e2e] text-white shadow-md">
-      <div className="flex items-center justify-between px-6 py-5">
+    <header className="rounded-t-lg overflow-hidden border border-b-0 border-[#2a2a3a] bg-[#1a1a2e] text-white">
+      <div className="flex flex-col gap-4 px-5 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-white/10 text-sm font-bold tracking-tight">
-            QV
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-white text-[#1a1a2e] text-xs font-black tracking-tighter">
+            qv
           </div>
-          <div>
-            <p className="text-xs uppercase tracking-widest text-white/60">benefícios</p>
-            <p className="text-[10px] text-white/40">a Quatro</p>
+          <div className="leading-tight">
+            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-white/90">benefícios</p>
+            <p className="text-[11px] text-white/50">a Quatro</p>
           </div>
         </div>
-        <div className="text-right">
-          <h2 className="text-3xl font-light tracking-wide">INDICADORES</h2>
-          <p className="text-sm text-white/70 mt-0.5">Consolidado {ano}</p>
+        <div className="sm:text-right">
+          <h1 className="text-2xl font-light tracking-[0.15em] sm:text-3xl">INDICADORES</h1>
+          <p className="mt-0.5 text-sm text-white/60">Consolidado {ano}</p>
         </div>
       </div>
-    </div>
+    </header>
   )
 }

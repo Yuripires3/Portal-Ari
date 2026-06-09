@@ -7,6 +7,7 @@ import {
   parseNumero,
   type ColunasMapeadas,
 } from "./column-mapping"
+import { gerarConsolidadoGeral } from "./consolidado-aggregate"
 import { prioridadeOperadora } from "./operadora-display"
 import type {
   ConsolidadoLinha,
@@ -200,6 +201,7 @@ export async function buscarConsolidado(
     })
     .map(([operadora, porMes]) => ({
       operadora,
+      tipo: "operadora" as const,
       linhas: montarLinhas(porMes),
     }))
 
@@ -207,5 +209,7 @@ export async function buscarConsolidado(
     operadoras.some((op) => op.linhas.some((l) => l.valores[mes] !== null))
   )
 
-  return { ano, operadoras, mesesDisponiveis }
+  const consolidadoGeral = operadoras.length > 0 ? gerarConsolidadoGeral(operadoras) : null
+
+  return { ano, operadoras, consolidadoGeral, mesesDisponiveis }
 }

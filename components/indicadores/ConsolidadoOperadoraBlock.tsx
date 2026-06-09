@@ -1,52 +1,67 @@
 "use client"
 
-import { MESES_LABELS, MESES_NUMEROS } from "@/lib/indicadores/constants"
+import { MESES_LABELS } from "@/lib/indicadores/constants"
 import { resolverDisplayOperadora } from "@/lib/indicadores/operadora-display"
 import type { ConsolidadoOperadora, MesNumero } from "@/lib/indicadores/types"
 import { formatIndicadorValor } from "@/utils/format"
 
 interface ConsolidadoOperadoraBlockProps {
   operadora: ConsolidadoOperadora
-  mesesVisiveis?: MesNumero[]
+  mesesVisiveis: MesNumero[]
 }
 
-export function ConsolidadoOperadoraBlock({
-  operadora,
-  mesesVisiveis = MESES_NUMEROS,
-}: ConsolidadoOperadoraBlockProps) {
+export function ConsolidadoOperadoraBlock({ operadora, mesesVisiveis }: ConsolidadoOperadoraBlockProps) {
+  const isConsolidado = operadora.tipo === "consolidado"
   const display = resolverDisplayOperadora(operadora.operadora)
 
   return (
-    <section className="flex flex-col gap-0 overflow-hidden rounded-lg border border-[#d4dde8] bg-white shadow-sm lg:flex-row">
-      {/* Painel da operadora — equivalente à coluna de logos do Excel */}
+    <section className="flex flex-col overflow-hidden rounded-lg border border-[#c5d0de] bg-white shadow-sm lg:flex-row">
+      {/* Painel lateral — logos verticais do Excel */}
       <div
-        className="flex min-h-[120px] min-w-[180px] flex-col items-center justify-center border-b border-[#d4dde8] px-6 py-8 lg:border-b-0 lg:border-r"
-        style={{ backgroundColor: display.corFundo }}
+        className={`flex shrink-0 flex-col items-center justify-center border-b border-[#d4dde8] px-4 py-6 lg:w-[100px] lg:border-b-0 lg:border-r xl:w-[120px] ${
+          isConsolidado ? "bg-[#e8edf5]" : ""
+        }`}
+        style={!isConsolidado ? { backgroundColor: display.corFundo } : undefined}
       >
-        <div
-          className="mb-3 flex h-14 w-14 items-center justify-center rounded-full text-lg font-bold text-white shadow-sm"
-          style={{ backgroundColor: display.corMarca }}
-        >
-          {display.iniciais}
-        </div>
-        <p
-          className="text-center text-sm font-semibold leading-tight"
-          style={{ color: display.corMarca }}
-        >
-          {display.nomeExibicao}
-        </p>
+        {isConsolidado ? (
+          <>
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded bg-[#184286] text-[10px] font-black text-white">
+              QV
+            </div>
+            <p
+              className="text-center text-sm font-bold uppercase tracking-widest text-[#184286] lg:[writing-mode:vertical-rl] lg:rotate-180"
+              style={{ letterSpacing: "0.12em" }}
+            >
+              CONSOLIDADO
+            </p>
+          </>
+        ) : (
+          <>
+            <div
+              className="mb-3 flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white shadow-sm"
+              style={{ backgroundColor: display.corMarca }}
+            >
+              {display.iniciais}
+            </div>
+            <p
+              className="max-w-[90px] text-center text-[11px] font-bold leading-tight lg:max-w-none lg:[writing-mode:vertical-rl] lg:rotate-180"
+              style={{ color: display.corMarca }}
+            >
+              {display.nomeExibicao}
+            </p>
+          </>
+        )}
       </div>
 
-      {/* Tabela de indicadores — estrutura Jan-Dez do Excel */}
       <div className="min-w-0 flex-1 overflow-x-auto">
-        <table className="w-full min-w-[780px] border-collapse text-[13px]">
+        <table className="w-full min-w-[720px] border-collapse text-[13px]">
           <thead>
-            <tr className="bg-[#5a8fa8] text-white">
-              <th className="sticky left-0 z-10 min-w-[210px] bg-[#5a8fa8] px-3 py-2.5 text-left font-semibold">
+            <tr className="bg-[#4a7f96] text-white">
+              <th className="sticky left-0 z-10 min-w-[200px] bg-[#4a7f96] px-3 py-2 text-left font-semibold">
                 Indicador
               </th>
               {mesesVisiveis.map((mes) => (
-                <th key={mes} className="px-2 py-2.5 text-center font-semibold whitespace-nowrap">
+                <th key={mes} className="min-w-[72px] px-2 py-2 text-center font-semibold whitespace-nowrap">
                   {MESES_LABELS[mes]}
                 </th>
               ))}
@@ -58,7 +73,7 @@ export function ConsolidadoOperadoraBlock({
                 key={linha.key}
                 className={idx % 2 === 0 ? "bg-white" : "bg-[#f7f9fc]"}
               >
-                <td className="sticky left-0 z-10 bg-inherit px-3 py-1.5 font-medium text-[#3d4f63] border-r border-[#e8edf3]">
+                <td className="sticky left-0 z-10 border-r border-[#e8edf3] bg-inherit px-3 py-1.5 font-medium text-[#3d4f63]">
                   {linha.label}
                 </td>
                 {mesesVisiveis.map((mes) => {
@@ -66,7 +81,7 @@ export function ConsolidadoOperadoraBlock({
                   const texto = formatIndicadorValor(valor, linha.formato, {
                     exibirVazioSeZero: linha.exibirVazioSeZero,
                   })
-                  const isDestaque =
+                  const destaque =
                     linha.key === "base_vidas" ||
                     linha.key === "faturamento_emitido" ||
                     linha.key === "pct_cancelamento"
@@ -74,8 +89,8 @@ export function ConsolidadoOperadoraBlock({
                   return (
                     <td
                       key={mes}
-                      className={`px-2 py-1.5 text-right tabular-nums whitespace-nowrap border-r border-[#eef2f6] last:border-r-0 ${
-                        isDestaque ? "font-semibold text-[#1e3a5f]" : "text-[#2d3748]"
+                      className={`border-r border-[#eef2f6] px-2 py-1.5 text-right tabular-nums whitespace-nowrap last:border-r-0 ${
+                        destaque ? "font-semibold text-[#1e3a5f]" : "text-[#2d3748]"
                       }`}
                     >
                       {texto}
