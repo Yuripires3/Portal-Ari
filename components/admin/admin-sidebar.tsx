@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { LayoutDashboard, BarChart3, LogOut, Award, ChevronRight, Settings, BookOpen, Calculator, History, Receipt, Users, AlertTriangle } from "lucide-react"
+import { LayoutDashboard, BarChart3, LogOut, Award, ChevronRight, Settings, BookOpen, Calculator, History, Receipt, Users, TrendingUp, FileBarChart, AlertCircle } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -20,9 +20,9 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { useState } from "react"
 import { useAuth } from "@/components/auth/auth-provider"
 
-const sinistralidadeSubmenu = [
-  { label: "Dashboard", href: "/admin/sinistralidade", icon: LayoutDashboard },
-  { label: "Análise de Beneficiários", href: "/admin/sinistralidade/analise-beneficiarios", icon: Users },
+const indicadoresSubmenu = [
+  { label: "Consolidado", href: "/admin/indicadores/consolidado", icon: FileBarChart },
+  { label: "Inadimplência", href: "/admin/indicadores/inadimplencia", icon: AlertCircle },
 ]
 
 const bonificacoesSubmenu = [
@@ -42,8 +42,8 @@ const configuracoesSubmenu = [
 export function AdminSidebar() {
   const pathname = usePathname()
   const { user, logout } = useAuth() as any
-  const [isSinistralidadeOpen, setIsSinistralidadeOpen] = useState(() => 
-    pathname.startsWith("/admin/sinistralidade")
+  const [isIndicadoresOpen, setIsIndicadoresOpen] = useState(() =>
+    pathname.startsWith("/admin/indicadores")
   )
   const [isBonificacoesOpen, setIsBonificacoesOpen] = useState(() => 
     pathname.startsWith("/admin/bonificacoes") || pathname === "/admin"
@@ -68,20 +68,20 @@ export function AdminSidebar() {
 
       <SidebarContent>
         <SidebarMenu>
-          {/* Sinistralidade com Submenu (Admin only) */}
+          {/* Indicadores com Submenu (Admin only) */}
           {user?.role === "admin" && (
             <SidebarMenuItem>
-              <SidebarMenuButton 
-                isActive={pathname.startsWith("/admin/sinistralidade")}
-                onClick={() => setIsSinistralidadeOpen(!isSinistralidadeOpen)}
+              <SidebarMenuButton
+                isActive={pathname.startsWith("/admin/indicadores")}
+                onClick={() => setIsIndicadoresOpen(!isIndicadoresOpen)}
               >
-                <AlertTriangle className="h-4 w-4" />
-                <span>Sinistralidade</span>
-                <ChevronRight className={`h-4 w-4 ml-auto transition-transform ${isSinistralidadeOpen ? 'rotate-90' : ''}`} />
+                <TrendingUp className="h-4 w-4" />
+                <span>Indicadores</span>
+                <ChevronRight className={`h-4 w-4 ml-auto transition-transform ${isIndicadoresOpen ? "rotate-90" : ""}`} />
               </SidebarMenuButton>
-              {isSinistralidadeOpen && (
+              {isIndicadoresOpen && (
                 <SidebarMenuSub>
-                  {sinistralidadeSubmenu.map((subItem) => {
+                  {indicadoresSubmenu.map((subItem) => {
                     const IconComponent = subItem.icon
                     return (
                       <SidebarMenuSubItem key={subItem.href}>

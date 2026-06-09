@@ -6,14 +6,6 @@ import { getRuntimeJwtSecret } from "@/lib/runtime-auth"
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  if (pathname === "/admin/sinistralidade") {
-    console.log("[PROXY] Acesso sinistralidade", {
-      url: request.url,
-      method: request.method,
-      ua: request.headers.get("user-agent"),
-    })
-  }
-
   if (request.url.includes("?from?get")) {
     console.log("🔥 GET SUSPEITO DETECTADO:", request.url)
   }
