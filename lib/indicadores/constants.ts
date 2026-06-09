@@ -2,12 +2,12 @@ import type { IndicadorDefinicao, MesNumero } from "./types"
 
 /** Ordem e rótulos espelhando as linhas do Excel "Relatório Indicadores". */
 export const INDICADORES_DEFINICOES: IndicadorDefinicao[] = [
-  { key: "meta_orcada", label: "Meta orçada", formato: "moeda" },
+  { key: "meta_orcada", label: "Meta orçada", formato: "moeda", exibirVazioSeZero: true },
   { key: "base_vidas", label: "Base Vidas", formato: "numero", calculado: true },
   { key: "base_dental", label: "Base Dental", formato: "numero" },
   { key: "base_saude", label: "Base Saúde", formato: "numero" },
   { key: "vidas_canceladas", label: "Vidas canceladas", formato: "numero" },
-  { key: "retencao", label: "Retenção", formato: "percentual" },
+  { key: "retencao", label: "Retenção", formato: "numero" },
   { key: "pct_cancelamento", label: "% cancelamento", formato: "percentual", calculado: true },
   { key: "cancel_inadimplencia", label: "Cancel. por Inadimplência", formato: "numero" },
   { key: "cancel_solicitacao_cliente", label: "Cancel. solicitação cliente", formato: "numero" },

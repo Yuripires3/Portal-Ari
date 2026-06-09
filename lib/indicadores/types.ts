@@ -29,12 +29,15 @@ export interface IndicadorDefinicao {
   formato: IndicadorFormato
   /** Indicador derivado por regra de negócio (equivalente às fórmulas do Excel). */
   calculado?: boolean
+  /** Excel exibe "-" quando o valor é zero (ex.: Meta orçada). */
+  exibirVazioSeZero?: boolean
 }
 
 export interface ConsolidadoLinha {
   key: IndicadorKey
   label: string
   formato: IndicadorFormato
+  exibirVazioSeZero?: boolean
   valores: Record<MesNumero, number | null>
 }
 

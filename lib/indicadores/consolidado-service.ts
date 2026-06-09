@@ -7,6 +7,7 @@ import {
   parseNumero,
   type ColunasMapeadas,
 } from "./column-mapping"
+import { prioridadeOperadora } from "./operadora-display"
 import type {
   ConsolidadoLinha,
   ConsolidadoOperadora,
@@ -109,8 +110,7 @@ async function carregarTabela(
 function montarLinhas(
   porMes: Record<MesNumero, Partial<Record<IndicadorKey, number | null>>>
 ): ConsolidadoLinha[] {
-  const mesesComDados = MESES_NUMEROS.filter((m) => Object.keys(porMes[m]).length > 0)
-
+  // Excel sempre exibe as 19 linhas de indicadores, mesmo sem valor no mês.
   return INDICADORES_DEFINICOES.map((def) => {
     const valores = {} as Record<MesNumero, number | null>
 
@@ -125,12 +125,20 @@ function montarLinhas(
       key: def.key,
       label: def.label,
       formato: def.formato,
+      exibirVazioSeZero: def.exibirVazioSeZero,
       valores,
     }
-  }).filter((linha) => {
-    if (mesesComDados.length === 0) return true
-    return mesesComDados.some((m) => linha.valores[m] !== null)
   })
+}
+
+function obterBaseVidasReferencia(
+  porMes: Record<MesNumero, Partial<Record<IndicadorKey, number | null>>>
+): number {
+  for (const mes of MESES_NUMEROS) {
+    const calc = aplicarCalculosIndicadores(porMes[mes])
+    if (calc.base_vidas && calc.base_vidas > 0) return calc.base_vidas
+  }
+  return 0
 }
 
 export async function buscarAnosDisponiveis(connection: Connection): Promise<number[]> {
@@ -184,7 +192,12 @@ export async function buscarConsolidado(
   ])
 
   const operadoras: ConsolidadoOperadora[] = Array.from(acumulado.entries())
-    .sort(([a], [b]) => a.localeCompare(b, "pt-BR"))
+    .sort(([nomeA, dadosA], [nomeB, dadosB]) => {
+      const prioA = prioridadeOperadora(nomeA)
+      const prioB = prioridadeOperadora(nomeB)
+      if (prioA !== prioB) return prioA - prioB
+      return obterBaseVidasReferencia(dadosB) - obterBaseVidasReferencia(dadosA)
+    })
     .map(([operadora, porMes]) => ({
       operadora,
       linhas: montarLinhas(porMes),
